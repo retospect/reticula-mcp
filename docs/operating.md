@@ -348,6 +348,16 @@ A search compares the query with every vector the account may read, as long as t
   docker compose exec -T db psql -U reticula -d reticula -c 'ANALYZE embedding'
   ```
 
+### Change the model
+
+`RETICULA_EMBED_MODEL` in `.env` names another model of `fastembed`. Apply it with `docker compose up -d --wait`. Measured with `sentence-transformers/all-MiniLM-L6-v2` and with `jinaai/jina-embeddings-v2-small-en`, which has another vector size:
+
+- The server downloaded the model and was healthy after 7 seconds. The log names the model: `embedding model sentence-transformers/all-MiniLM-L6-v2 loaded in 2.6s`, then `vector index embedding_hnsw_40541eb5df3b_384 ready for fastembed:sentence-transformers/all-MiniLM-L6-v2`.
+- The server then computes the vectors of all notes under the new model by itself, in the background. All 6 notes of the test instance had theirs 7 seconds after the switch, with no command run. Search works in the meantime.
+- `docker compose exec app reticula-mcp reindex` does the same work in one run and returns when it is done. Run it on a large instance to know when the new model is complete. After a switch to `RETICULA_EMBEDDER=hash` it is needed: the server does not create that index by itself.
+- The vectors and the index of the old model stay in the database, and its files stay in the volume. After a switch back they were used again at once. `docker compose exec app reticula-mcp reindex --drop` removed the vectors and the index of the old model. It does not remove model files from the volume.
+- A name `fastembed` does not know: the server starts and stays healthy, and the log has `embedding model fastembed:no/such-model did not load; search answers from keywords; next try in 30s` with `ValueError: Model no/such-model is not supported in TextEmbedding`. Saving and searching still worked.
+
 ## What the container does
 
 - The server runs as a user without root rights (uid 10001).
