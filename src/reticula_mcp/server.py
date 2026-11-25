@@ -28,7 +28,7 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from reticula_mcp import __version__
+from reticula_mcp import __version__, permissions
 from reticula_mcp.auth import build_auth, throttle
 from reticula_mcp.config import Settings, parse_rate
 from reticula_mcp.content import handlers as content_handlers
@@ -157,7 +157,11 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
                     viewer = viewer_for_token(conn, token)
                     if write:
                         limit_writes(conn, viewer.id)
-                    return handler(conn, viewer, **params)
+                        return handler(conn, viewer, **params)
+                    # A tool that only reads asks once who reads which hubs.
+                    # A tool that writes never does: see permissions.read_call.
+                    with permissions.read_call():
+                        return handler(conn, viewer, **params)
             except ReticulaError as exc:
                 return exc.render()
             except psycopg.errors.QueryCanceled:

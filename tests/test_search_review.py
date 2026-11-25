@@ -13,6 +13,7 @@ import time
 
 import pytest
 
+from reticula_mcp import permissions
 from reticula_mcp.errors import BAD_INPUT, CONFLICT, NOT_FOUND, ReticulaError
 from reticula_mcp.graph import api as graph_api
 from reticula_mcp.graph import handlers as graph
@@ -107,13 +108,20 @@ def test_a_wide_deep_tree_is_read_in_bounded_time(conn, make_account, monkeypatc
     for depth in (1, 2, 4):
         sql.reset()
         started = time.perf_counter()
-        out = handlers.get(conn, z, ref=root, depth=depth)
+        with permissions.read_call():  # as the server runs a tool that reads
+            out = handlers.get(conn, z, ref=root, depth=depth)
         times[depth] = time.perf_counter() - started
-        fetched[depth] = sql.rows
+        # From migration 0204 on a read call asks once for the ids of the hubs
+        # the viewer may read: one statement, one id per hub, however deep the
+        # call goes. It is counted on its own.
+        hub_list = sql.rows_of("readable_hubs(")
+        asks = sum("readable_hubs(" in s for s in sql.statements)
+        assert (asks, hub_list) == (1, made), f"depth {depth}"
+        fetched[depth] = sql.rows - hub_list
         # Rows read stand for the time: the read of the whole tree is what took
         # 20.9 s. A call that stops at two levels reads 229 rows at most (29 at
         # depth 1); a call that goes one level deeper reads more than 1000.
-        assert sql.rows < 600, f"depth {depth} read {sql.rows} rows"
+        assert fetched[depth] < 600, f"depth {depth} read {fetched[depth]} rows"
         assert len(out.splitlines()) <= read.LINE_BUDGET + 5
     print(
         f"\n585 hubs: depth 1 {times[1]:.3f}s, depth 2 {times[2]:.3f}s,"

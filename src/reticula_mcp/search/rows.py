@@ -12,7 +12,12 @@ from typing import Any
 
 from reticula_mcp.accounts import Account
 from reticula_mcp.db.pool import Conn
-from reticula_mcp.permissions import current_nodes_sql, readable_nodes_sql
+from reticula_mcp.permissions import (
+    current_nodes_sql,
+    readable_hub_ids,
+    readable_hub_sql,
+    readable_nodes_sql,
+)
 
 Row = dict[str, Any]
 
@@ -46,12 +51,16 @@ def fetch_rows(
             WHERE m.node_id = n.id AND NOT m.withdrawn
               AND (m.audience = 'hub' OR m.author = %(person)s)
               AND h.kind = 'hub'
-              AND h.id IN ({readable_nodes_sql("%(viewer)s")})
+              AND {readable_hub_sql("h.id")}
             ORDER BY m.id LIMIT 1
         ) hub ON true
         WHERE n.id = ANY(%(ids)s)
         """,
-        {"viewer": viewer.id, "person": viewer.person_id, "ids": list(ids)},
+        {
+            "hubs": readable_hub_ids(conn, viewer),
+            "person": viewer.person_id,
+            "ids": list(ids),
+        },
     ).fetchall()
     return {r["id"]: r for r in rows}
 

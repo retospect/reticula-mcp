@@ -799,8 +799,8 @@ def collect(
 ) -> list[Legs]:
     monkeypatch.setattr(embedder, "max_distance", 2.0)
     monkeypatch.setattr(find, "TRIGRAM_MIN", 0.0)
-    where, params = find._scope(
-        world.account, hub_node_id=None, kind=None, include_superseded=False
+    where, params = find.scope(
+        conn, world.account, hub_node_id=None, kind=None, include_superseded=False
     )
     pool = 1000
     current_share = find.LOOSE_MIN_SHARE

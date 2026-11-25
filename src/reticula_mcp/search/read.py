@@ -32,7 +32,12 @@ from reticula_mcp.db.pool import Conn
 from reticula_mcp.errors import BAD_INPUT, NOT_FOUND, ReticulaError
 from reticula_mcp.graph.access import adders_from_above, readers_above
 from reticula_mcp.graph.paper import ext_key_from_payload
-from reticula_mcp.permissions import current_nodes_sql, readable_nodes_sql
+from reticula_mcp.permissions import (
+    current_nodes_sql,
+    readable_hub_ids,
+    readable_hub_sql,
+    readable_nodes_sql,
+)
 from reticula_mcp.resolve import resolve_ref
 from reticula_mcp.search import render
 from reticula_mcp.search.rows import fetch_rows, visible_subset
@@ -128,10 +133,14 @@ def _withdrawn(conn: Conn, viewer: Account, ref: str) -> Row | None:
                     SELECT 1 FROM membership m
                     WHERE m.node_id = n.id AND NOT m.withdrawn
                       AND m.audience = 'hub' AND m.author = n.author
-                      AND m.hub_node_id IN ({readable_nodes_sql("%(viewer)s")}))))
+                      AND {readable_hub_sql("m.hub_node_id")})))
         LIMIT 2
         """,
-        {"ref": arg, "person": viewer.person_id, "viewer": viewer.id},
+        {
+            "ref": arg,
+            "person": viewer.person_id,
+            "hubs": readable_hub_ids(conn, viewer),
+        },
     ).fetchall()
     return rows[0] if len(rows) == 1 else None
 
@@ -169,18 +178,19 @@ def _byline(conn: Conn, viewer: Account, row: Row) -> str:
     return line + f" · {n} version{'s' if n != 1 else ''}"
 
 
-def _parents(conn: Conn, viewer: Account, node_id: int) -> list[Row]:
-    """Hubs the node is filed in that the viewer can read, oldest filing first."""
+def _parents(conn: Conn, viewer: Account, node_id: int, hubs: list[int]) -> list[Row]:
+    """Hubs the node is filed in that the viewer can read, oldest filing first.
+    ``hubs``: ``readable_hub_ids(conn, viewer)``."""
     return conn.execute(
         f"""
         SELECT h.id, h.title, h.text, h.address
         FROM membership m JOIN node h ON h.id = m.hub_node_id
         WHERE m.node_id = %(node)s AND NOT m.withdrawn AND h.kind = 'hub'
           AND (m.audience = 'hub' OR m.author = %(person)s)
-          AND h.id IN ({readable_nodes_sql("%(viewer)s")})
+          AND {readable_hub_sql("h.id")}
         ORDER BY m.id
         """,
-        {"node": node_id, "person": viewer.person_id, "viewer": viewer.id},
+        {"node": node_id, "person": viewer.person_id, "hubs": hubs},
     ).fetchall()
 
 
@@ -189,12 +199,16 @@ def _paths(conn: Conn, viewer: Account, node_id: int, own: Row | None = None) ->
     (following the first readable parent upwards); ``own`` appends the node
     itself (for a hub's own path)."""
     paths: list[str] = []
-    for parent in _parents(conn, viewer, node_id)[:3]:
+    # asked once for the whole walk: nothing is written while it goes on
+    hubs = readable_hub_ids(conn, viewer)
+    for parent in _parents(conn, viewer, node_id, hubs)[:3]:
         chain = [parent]
         seen = {node_id, parent["id"]}
         while len(chain) < 8:
             ups = [
-                p for p in _parents(conn, viewer, chain[0]["id"]) if p["id"] not in seen
+                p
+                for p in _parents(conn, viewer, chain[0]["id"], hubs)
+                if p["id"] not in seen
             ]
             if not ups:
                 break

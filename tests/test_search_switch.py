@@ -125,8 +125,8 @@ def count_rows(conn) -> None:
 
 def vector_leg(conn, embedder: Embedder, viewer, query: str) -> list[int]:
     """The ids the vector leg returns for ``embedder``, with no catch-up."""
-    where, params = find._scope(
-        viewer, hub_node_id=None, kind=None, include_superseded=False
+    where, params = find.scope(
+        conn, viewer, hub_node_id=None, kind=None, include_superseded=False
     )
     return [i for i, _ in find._semantic(conn, embedder, query, where, params, 50)]
 
@@ -135,8 +135,8 @@ def planned_indexes(conn, embedder: Embedder, viewer, query: str) -> set[str]:
     """Names of the indexes the indexed form of the vector leg would scan, with
     sequential scans off (the tables here are far too small for the planner to
     want an index)."""
-    where, params = find._scope(
-        viewer, hub_node_id=None, kind=None, include_superseded=False
+    where, params = find.scope(
+        conn, viewer, hub_node_id=None, kind=None, include_superseded=False
     )
     args = {
         **params,
@@ -237,8 +237,8 @@ def test_the_vector_leg_never_reads_a_row_of_another_model_of_the_same_dimension
     assert twin["id"] in exact and n["kiln"]["id"] not in exact
 
     index.ensure_vector_index(conn, current)
-    where, params = find._scope(
-        alice, hub_node_id=None, kind=None, include_superseded=False
+    where, params = find.scope(
+        conn, alice, hub_node_id=None, kind=None, include_superseded=False
     )
     args = {
         **params,
