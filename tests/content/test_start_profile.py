@@ -55,7 +55,7 @@ def test_start_lists_own_and_shared_hubs_with_modes(conn, make_account):
     assert f"id {short_id(alpha['address'])}" in alpha_line
     assert " add " in alpha_line
     # two people hold Alpha (owner and bob); the private note is not counted
-    assert "2 people have access, 1 note" in alpha_line
+    assert "only you and the owner have access, 1 note" in alpha_line
     assert "Nothing is saved" not in out
 
     # the other side sees its own hub as owner
