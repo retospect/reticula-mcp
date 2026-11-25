@@ -3,8 +3,11 @@
 #   cp .env.example .env      # then set RETICULA_DB_PASSWORD (and RETICULA_PUBLIC_URL)
 #   docker compose up -d --build
 #
-# The server listens on 127.0.0.1 only. Put a tunnel or reverse proxy that
-# terminates TLS in front of it and set RETICULA_PUBLIC_URL to that address.
+# The server is published on 127.0.0.1 only. Put a tunnel or reverse proxy that
+# terminates TLS in front of it, set RETICULA_PUBLIC_URL to that address and
+# RETICULA_TRUSTED_PROXIES as docs/operating.md describes.
+#
+# To run the working tree instead of a release, use compose.dev.yaml.
 name: reticula
 
 services:
@@ -34,7 +37,10 @@ services:
         condition: service_healthy
     environment:
       RETICULA_DATABASE_URL: postgresql://reticula:${RETICULA_DB_PASSWORD}@db:5432/reticula
-      RETICULA_PUBLIC_URL: ${RETICULA_PUBLIC_URL:-}
+      # The server listens on 0.0.0.0 inside the container, so it cannot guess
+      # the address clients use. Without a public URL that is the published
+      # port on this machine.
+      RETICULA_PUBLIC_URL: ${RETICULA_PUBLIC_URL:-http://127.0.0.1:${RETICULA_PORT:-8787}}
       RETICULA_HOST: 0.0.0.0
       RETICULA_PORT: "8787"
       RETICULA_SIGNUP: ${RETICULA_SIGNUP:-open}
@@ -46,8 +52,14 @@ services:
     ports:
       - "127.0.0.1:${RETICULA_PORT:-8787}:8787"
     volumes:
-      # The embedding model is downloaded once and kept here.
+      # The embedding model is downloaded on the first search and kept here.
       - reticula-models:/home/reticula/.cache
+    healthcheck:
+      test: ["CMD", "reticula-healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
 
 volumes:
   reticula-db:

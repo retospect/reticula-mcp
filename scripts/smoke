@@ -1,0 +1,751 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["mcp>=1.30,<2", "httpx>=0.27"]
+# ///
+"""scripts/smoke: do what a newly connected assistant does, against a running instance.
+
+    scripts/smoke https://reticula.example.org
+    scripts/smoke http://127.0.0.1:8788 --email me@example.com   (SMOKE_PASSWORD set)
+
+One line per step; exit 0 only when every step passed. It signs up a throwaway
+account (or signs in with --email), connects through the real OAuth flow, saves
+a private note, searches, reads and deletes it, then revokes its token. The last
+block lists what stays on the instance. No secret (token, code, password,
+verifier, CSRF value, sign-in handle) is ever printed.
+
+It needs nothing from this repository: copy the file to any machine with uv.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import base64
+import hashlib
+import html
+import os
+import re
+import secrets
+import socket
+import ssl
+import sys
+import time
+import traceback
+from dataclasses import dataclass, field
+from datetime import timedelta
+from typing import Any, NoReturn
+from urllib.parse import parse_qs, urlsplit
+
+import httpx
+from mcp import ClientSession, types
+from mcp.client.streamable_http import streamable_http_client
+
+REDIRECT = "http://127.0.0.1:53682/callback"
+TOOLS = ["start", "profile", "search", "get", "put", "edit", "link", "delete", "share"]
+ADDRESS = re.compile(r"ret:p[a-z2-7]{26}/[0-9a-f-]{36}")
+STEP_WIDTH = 14
+
+
+class Fail(Exception):
+    """A step did not pass; the message is the reason (one line, already safe)."""
+
+
+@dataclass
+class Run:
+    base: str
+    timeout: float
+    debug: bool
+    verify: ssl.SSLContext | bool
+    existing: bool
+    email: str
+    handle: str
+    password: str
+    marker: str
+    secret_values: list[str] = field(default_factory=list)
+    step: str = "setup"
+    started: float = 0.0
+    failure: tuple[str, str] | None = None
+    # What exists on the instance because of this run.
+    account_done: bool = False
+    client_id: str = ""
+    access: str = ""
+    refresh: str = ""
+    revoke_url: str = ""
+    revoked: bool = False
+    note: str = ""
+    note_maybe: bool = False
+    note_deleted: bool = False
+    session_alive: bool = False
+
+    # --- output -------------------------------------------------------------
+
+    def hide(self, value: str) -> str:
+        """Remember a secret so it can never appear in a line; returns it."""
+        if value and value not in self.secret_values:
+            self.secret_values.append(value)
+        return value
+
+    def scrub(self, text: str) -> str:
+        for value in self.secret_values:
+            text = text.replace(value, "[hidden]")
+        return text
+
+    def clean(self, text: str, limit: int = 300) -> str:
+        text = " ".join(self.scrub(text).split())
+        return text if len(text) <= limit else text[: limit - 3] + "..."
+
+    def begin(self, name: str) -> None:
+        self.step = name
+        self.started = time.monotonic()
+
+    def ok(self, fact: str = "", name: str | None = None) -> None:
+        took = time.monotonic() - self.started
+        name = name or self.step
+        fact = self.clean(fact, 150)
+        print(f"ok    {name:<{STEP_WIDTH}}  {fact}  ({took:.1f}s)")
+
+    def fail_line(self, reason: str, name: str | None = None) -> None:
+        print(f"FAIL  {name or self.step:<{STEP_WIDTH}}  {self.clean(reason)}")
+
+    def record(self, exc: BaseException) -> None:
+        """Keep the first failure (step and reason) for the final report."""
+        if self.failure is not None:
+            return
+        leaf = exc
+        while isinstance(leaf, BaseExceptionGroup) and leaf.exceptions:
+            leaf = leaf.exceptions[0]
+        if isinstance(leaf, Fail):
+            reason = str(leaf)
+        else:
+            reason = f"{type(leaf).__name__}: {leaf}"
+        self.failure = (self.step, self.clean(reason))
+        self.fail_line(reason)
+        if self.debug:
+            text = "".join(traceback.format_exception(leaf))
+            print(self.scrub(text), file=sys.stderr)
+
+
+def fail(reason: str) -> NoReturn:
+    raise Fail(reason)
+
+
+# --- small helpers ---------------------------------------------------------------
+
+
+def pkce() -> tuple[str, str]:
+    verifier = secrets.token_urlsafe(48)
+    digest = hashlib.sha256(verifier.encode()).digest()
+    return verifier, base64.urlsafe_b64encode(digest).decode().rstrip("=")
+
+
+def query_of(location: str) -> dict[str, str]:
+    return {k: v[0] for k, v in parse_qs(urlsplit(location).query).items()}
+
+
+def form_field(page: str, name: str) -> str:
+    match = re.search(rf'name="{name}" value="([^"]*)"', page)
+    if not match:
+        fail(f"the sign-in page has no {name} field")
+    return html.unescape(match.group(1))
+
+
+def why(r: httpx.Response) -> str:
+    """HTTP status plus the server's own short reason, without printing a page."""
+    detail = ""
+    ctype = r.headers.get("content-type", "")
+    if "json" in ctype:
+        try:
+            body = r.json()
+        except ValueError:
+            body = None
+        if isinstance(body, dict):
+            parts = [
+                str(body.get(k)) for k in ("error", "error_description") if body.get(k)
+            ]
+            detail = ": ".join(parts)
+    elif "html" in ctype:
+        alert = re.search(r'role="alert">(.*?)</p>', r.text, re.S)
+        title = re.search(r"<title>(.*?)</title>", r.text, re.S)
+        found = alert or title
+        if found:
+            detail = html.unescape(re.sub(r"<[^>]+>", "", found.group(1)))
+    return f"HTTP {r.status_code}" + (f", {detail}" if detail else "")
+
+
+def json_body(r: httpx.Response, what: str) -> dict[str, Any]:
+    try:
+        body = r.json()
+    except ValueError:
+        fail(f"{what} is not JSON ({why(r)})")
+    if not isinstance(body, dict):
+        fail(f"{what} is not a JSON object")
+    return body
+
+
+def is_url(value: Any) -> bool:
+    return isinstance(value, str) and value.startswith(("http://", "https://"))
+
+
+def urls_in(doc: Any, prefix: str = "") -> list[tuple[str, str]]:
+    found: list[tuple[str, str]] = []
+    if isinstance(doc, dict):
+        for key, value in doc.items():
+            found += urls_in(value, f"{prefix}.{key}" if prefix else str(key))
+    elif isinstance(doc, list):
+        for i, value in enumerate(doc):
+            found += urls_in(value, f"{prefix}[{i}]")
+    elif is_url(doc):
+        found.append((prefix, doc))
+    return found
+
+
+def under(url: str, base: str) -> bool:
+    return url == base or url.startswith(base + "/")
+
+
+def install_resolver(entries: list[str]) -> None:
+    """Like curl --resolve: these names resolve to the given address, this process only."""
+    table: dict[str, str] = {}
+    for entry in entries:
+        host, sep, address = entry.partition("=")
+        if not sep or not host or not address:
+            fail(f"--resolve wants HOST=ADDRESS, got {entry!r}")
+        table[host.lower()] = address
+    real = socket.getaddrinfo
+
+    def patched(host: Any, *args: Any, **kw: Any) -> Any:
+        # anyio (the async client) passes the host as bytes.
+        name = host.decode("ascii", "replace") if isinstance(host, bytes) else host
+        if isinstance(name, str) and name.lower() in table:
+            host = table[name.lower()]
+        return real(host, *args, **kw)
+
+    socket.getaddrinfo = patched
+
+
+# --- the steps -------------------------------------------------------------------
+
+
+def step_health(run: Run, api: httpx.Client) -> None:
+    run.begin("health")
+    r = api.get(f"{run.base}/healthz")
+    if r.status_code != 200:
+        fail(why(r) + " from /healthz")
+    body = json_body(r, "/healthz")
+    run.ok(f"version {body.get('version', '?')}")
+
+
+def step_challenge(run: Run, api: httpx.Client) -> str:
+    run.begin("challenge")
+    r = api.post(
+        f"{run.base}/mcp",
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+        headers={"Accept": "application/json, text/event-stream"},
+    )
+    if r.status_code != 401:
+        fail(f"POST /mcp without a token answered HTTP {r.status_code}, expected 401")
+    header = r.headers.get("www-authenticate", "")
+    match = re.search(r'resource_metadata="([^"]+)"', header)
+    if not match:
+        fail("401 has no resource_metadata in WWW-Authenticate")
+    run.ok("401 with resource_metadata")
+    return match.group(1)
+
+
+def step_discovery(run: Run, api: httpx.Client, metadata_url: str) -> dict[str, Any]:
+    run.begin("discovery")
+    base = run.base
+    problems: list[str] = []
+
+    def reach(url: str, field_name: str) -> str:
+        """Fetch from the given URL, or from the same path on the base URL."""
+        if under(url, base):
+            return url
+        problems.append(f"{field_name} is {url}")
+        parts = urlsplit(url)
+        return base + parts.path + (f"?{parts.query}" if parts.query else "")
+
+    r = api.get(reach(metadata_url, "resource_metadata (WWW-Authenticate)"))
+    if r.status_code != 200:
+        fail(f"resource metadata: {why(r)}")
+    resource = json_body(r, "resource metadata")
+    servers = resource.get("authorization_servers")
+    if not isinstance(servers, list) or not servers or not isinstance(servers[0], str):
+        fail("resource metadata has no authorization_servers")
+    issuer_url = reach(servers[0].rstrip("/"), "authorization_servers[0]")
+    r = api.get(f"{issuer_url}/.well-known/oauth-authorization-server")
+    if r.status_code != 200:
+        fail(f"authorization server metadata: {why(r)}")
+    meta = json_body(r, "authorization server metadata")
+
+    if resource.get("resource") != f"{base}/mcp":
+        problems.append(f"resource is {resource.get('resource')}")
+    if meta.get("issuer") != base:
+        problems.append(f"issuer is {meta.get('issuer')}")
+    checked = 0
+    for doc_name, doc in (("resource metadata", resource), ("server metadata", meta)):
+        for path, value in urls_in(doc):
+            checked += 1
+            if not under(value, base) and not (
+                doc_name == "resource metadata" and path == "authorization_servers[0]"
+            ):
+                problems.append(f"{path} is {value}")
+    for name in (
+        "authorization_endpoint",
+        "token_endpoint",
+        "registration_endpoint",
+        "revocation_endpoint",
+    ):
+        if not is_url(meta.get(name)):
+            problems.append(f"{name} is missing")
+    if problems:
+        fail(
+            f"expected URLs under {base}: "
+            + "; ".join(problems[:4])
+            + (f"; {len(problems) - 4} more" if len(problems) > 4 else "")
+            + ". RETICULA_PUBLIC_URL is probably wrong on the server"
+        )
+    run.ok(f"resource and issuer match, {checked} URLs under {base}")
+    return meta
+
+
+def step_register(run: Run, api: httpx.Client, meta: dict[str, Any]) -> None:
+    run.begin("register")
+    r = api.post(
+        meta["registration_endpoint"],
+        json={
+            "client_name": "Reticula smoke test",
+            "redirect_uris": [REDIRECT],
+            "grant_types": ["authorization_code", "refresh_token"],
+            "response_types": ["code"],
+            "token_endpoint_auth_method": "none",
+        },
+    )
+    if r.status_code != 201:
+        fail(why(r))
+    client_id = json_body(r, "registration reply").get("client_id")
+    if not isinstance(client_id, str) or not client_id:
+        fail("201 without client_id")
+    run.client_id = client_id
+    run.ok(f"client {client_id}")
+
+
+def step_authorize(
+    run: Run, browser: httpx.Client, meta: dict[str, Any]
+) -> tuple[httpx.Response, str, str]:
+    """Returns the sign-in page, the PKCE verifier and the state."""
+    run.begin("authorize")
+    verifier, challenge = pkce()
+    run.hide(verifier)
+    state = run.hide(secrets.token_urlsafe(8))
+    r = browser.get(
+        meta["authorization_endpoint"],
+        params={
+            "response_type": "code",
+            "client_id": run.client_id,
+            "redirect_uri": REDIRECT,
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+            "state": state,
+            "resource": f"{run.base}/mcp",
+        },
+    )
+    if r.status_code != 302:
+        fail(why(r))
+    location = r.headers.get("location", "")
+    run.hide(query_of(location).get("req", ""))
+    if is_url(location) and not under(location.split("?")[0], run.base):
+        fail(f"sign-in page is at {location.split('?')[0]}, not under {run.base}")
+    parts = urlsplit(location)
+    target = f"{run.base}{parts.path}?{parts.query}"
+    target += "&mode=signin" if run.existing else "&mode=signup"
+    page = browser.get(target)
+    if page.status_code != 200:
+        fail(f"sign-in page: {why(page)}")
+    fact = "302 to sign-in page, page 200"
+    if run.base.startswith("https://"):
+        cookies = page.headers.get_list("set-cookie")
+        flags = [{p.strip().lower() for p in c.split(";")[1:]} for c in cookies]
+        if not cookies:
+            fail("sign-in page sets no cookie")
+        if not all("secure" in f for f in flags):
+            fail("sign-in page cookie lacks the Secure attribute on https")
+        fact += ", cookie Secure"
+    run.ok(fact)
+    return page, verifier, state
+
+
+def step_sign(run: Run, browser: httpx.Client, page: httpx.Response, state: str) -> str:
+    run.begin("sign-in" if run.existing else "sign-up")
+    form = {
+        "req": run.hide(form_field(page.text, "req")),
+        "csrf": run.hide(form_field(page.text, "csrf")),
+        "mode": "signin" if run.existing else "signup",
+        "email": run.email,
+        "password": run.password,
+    }
+    if not run.existing:
+        form["handle"] = run.handle
+    r = browser.post(f"{run.base}/signin", data=form)
+    if r.status_code != 303:
+        fail(why(r))
+    location = r.headers.get("location", "")
+    if not location.startswith(REDIRECT):
+        fail(
+            f"303 to {urlsplit(location).netloc}{urlsplit(location).path}, expected {REDIRECT}"
+        )
+    q = query_of(location)
+    code = run.hide(q.get("code", ""))
+    if not code:
+        fail("303 without a code")
+    if q.get("state") != state:
+        fail("303 carries a different state")
+    run.account_done = True
+    run.ok(f"303 to the redirect URI, {run.email}")
+    return code
+
+
+def step_token(
+    run: Run, api: httpx.Client, meta: dict[str, Any], code: str, verifier: str
+) -> None:
+    run.begin("token")
+    r = api.post(
+        meta["token_endpoint"],
+        data={
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": REDIRECT,
+            "client_id": run.client_id,
+            "code_verifier": verifier,
+        },
+    )
+    if r.status_code != 200:
+        fail(why(r))
+    body = json_body(r, "token reply")
+    access, refresh = body.get("access_token"), body.get("refresh_token")
+    if not isinstance(access, str) or not isinstance(refresh, str):
+        fail("200 without access_token and refresh_token")
+    run.access, run.refresh = run.hide(access), run.hide(refresh)
+    run.ok(f"access and refresh token, expires_in {body.get('expires_in', '?')}")
+
+
+async def call(
+    run: Run, session: ClientSession, tool: str, allow_error: bool = False, **args: Any
+) -> str:
+    result = await session.call_tool(
+        tool, args, read_timeout_seconds=timedelta(seconds=run.timeout)
+    )
+    text = "\n".join(c.text for c in result.content if isinstance(c, types.TextContent))
+    if not allow_error and (result.isError or text.startswith("[error:")):
+        fail(f"{tool}: {text.splitlines()[0] if text else 'error without text'}")
+    return text
+
+
+async def mcp_steps(run: Run, session: ClientSession) -> None:
+    run.begin("mcp initialize")
+    init = await session.initialize()
+    listed = await session.list_tools()
+    names = {t.name for t in listed.tools}
+    missing = [t for t in TOOLS if t not in names]
+    if missing:
+        fail("tools missing: " + " ".join(missing))
+    info = init.serverInfo
+    run.ok(f"{info.name} {info.version}, {len(names)} tools")
+
+    run.begin("start")
+    reply = await call(run, session, "start")
+    who = re.search(r"You are @([a-z0-9_-]+)", reply)
+    if not who:
+        fail("reply does not contain 'You are @'")
+    if not run.existing and who.group(1) != run.handle:
+        fail(f"you are @{who.group(1)}, expected @{run.handle}")
+    run.ok(f"You are @{who.group(1)}")
+
+    run.begin("put")
+    title = f"Smoke test {run.marker[-12:]}"
+    run.note_maybe = True
+    reply = await call(
+        run,
+        session,
+        "put",
+        text=f"Reticula smoke test note {run.marker}. Private, deleted at the end.",
+        title=title,
+        private=True,
+    )
+    found = ADDRESS.search(reply)
+    if not found:
+        fail("reply has no note address")
+    run.note = found.group(0)
+    run.ok(f"saved {run.note[-8:]}")
+
+    run.begin("search")
+    reply = await call(run, session, "search", query=run.marker)
+    if title not in reply and run.note[-8:] not in reply:
+        fail(f"search for the marker did not find the note: {reply.splitlines()[0]}")
+    run.ok("found the note")
+
+    run.begin("get")
+    reply = await call(run, session, "get", ref=run.note)
+    if run.marker not in reply:
+        fail("reply does not contain the marker")
+    run.ok("marker in the reply")
+
+    run.begin("delete")
+    await call(run, session, "delete", ref=run.note)
+    run.note_deleted = True
+    reply = await call(run, session, "get", allow_error=True, ref=run.note)
+    if run.marker in reply:
+        fail("the marker is still in the reply after delete")
+    run.ok("content erased, marker gone from get")
+
+
+async def cleanup_note(run: Run, session: ClientSession) -> None:
+    run.step = "cleanup"
+    run.started = time.monotonic()
+    try:
+        await call(run, session, "delete", ref=run.note)
+        run.note_deleted = True
+        run.ok("deleted the note", name="cleanup delete")
+    except Exception as exc:
+        run.fail_line(f"{type(exc).__name__}: {exc}", name="cleanup delete")
+
+
+async def mcp_part(run: Run) -> None:
+    """Steps 8-13 in one MCP session (the server is stateless; one is simplest)."""
+    try:
+        async with httpx.AsyncClient(
+            headers={"Authorization": f"Bearer {run.access}"},
+            timeout=httpx.Timeout(run.timeout, connect=30),
+            verify=run.verify,
+        ) as client:
+            async with streamable_http_client(
+                f"{run.base}/mcp", http_client=client
+            ) as (read, write, _):
+                async with ClientSession(
+                    read, write, read_timeout_seconds=timedelta(seconds=run.timeout)
+                ) as session:
+                    try:
+                        await mcp_steps(run, session)
+                    except Exception as exc:
+                        run.record(exc)
+                        if run.note and not run.note_deleted:
+                            await cleanup_note(run, session)
+    except Exception as exc:
+        # Trouble opening or closing the session; a failure above wins.
+        run.record(exc)
+
+
+def step_revoke(run: Run, api: httpx.Client, meta: dict[str, Any]) -> None:
+    run.begin("revoke")
+    r = api.post(
+        run.revoke_url,
+        data={"token": run.refresh, "client_id": run.client_id},
+    )
+    if r.status_code != 200:
+        fail(why(r))
+    run.revoked = True
+    r = api.post(
+        f"{run.base}/mcp",
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+        headers={
+            "Accept": "application/json, text/event-stream",
+            "Authorization": f"Bearer {run.access}",
+        },
+    )
+    if r.status_code != 401:
+        fail(f"old access token still answered HTTP {r.status_code}, expected 401")
+    run.ok("refresh token revoked, old access token gets 401")
+
+
+def cleanup_token(run: Run, api: httpx.Client) -> None:
+    run.step = "cleanup"
+    run.started = time.monotonic()
+    try:
+        r = api.post(
+            run.revoke_url or f"{run.base}/revoke",
+            data={"token": run.refresh, "client_id": run.client_id},
+        )
+        if r.status_code != 200:
+            fail(why(r))
+        run.revoked = True
+        run.ok("revoked the token", name="cleanup revoke")
+    except Exception as exc:
+        run.fail_line(f"{type(exc).__name__}: {exc}", name="cleanup revoke")
+
+
+def left_behind(run: Run) -> None:
+    print("left behind:")
+    if run.existing:
+        print(f"  account  existing account {run.email} was used; none was created")
+    elif run.account_done:
+        print(
+            f"  account  {run.email} (@{run.handle}) stays. No tool deletes accounts;"
+            " an operator can lock it out:"
+        )
+        print(
+            f"           UPDATE account SET status = 'disabled' WHERE email = '{run.email}'"
+        )
+    else:
+        print("  account  none was created")
+    if run.client_id:
+        note = (
+            "it has tokens and a grant, so the 30-day cleanup of unused clients skips it"
+            if run.access
+            else "the 30-day cleanup of unused clients removes it"
+        )
+        print(
+            f"  client   OAuth client {run.client_id} (Reticula smoke test) stays; {note}"
+        )
+    else:
+        print("  client   none was registered")
+    if run.note and run.note_deleted:
+        print(
+            f"  note     {run.note}: content erased; the address, the record hashes,"
+            " author and times stay"
+        )
+    elif run.note:
+        print(
+            f"  note     {run.note} was NOT deleted; it is private to the account"
+            f" and contains {run.marker}"
+        )
+    elif run.note_maybe:
+        print(
+            f"  note     a private note containing {run.marker} may exist;"
+            " its address is unknown"
+        )
+    else:
+        print("  note     none was saved")
+    if not run.access:
+        print("  tokens   none were issued")
+    elif run.revoked:
+        print(
+            "  tokens   access and refresh token revoked (the whole connection);"
+            " their hashes stay as revoked rows"
+        )
+    else:
+        print(
+            "  tokens   access and refresh token NOT revoked; they expire on their own"
+            " (access 1 hour, refresh 30 days) or an operator revokes the connection:"
+        )
+        print(f"           reticula-mcp connections revoke --email {run.email} --id N")
+
+
+# --- main ------------------------------------------------------------------------
+
+
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        prog="smoke",
+        description="Do what a newly connected assistant does, against a running "
+        "Reticula instance, one line per step.",
+    )
+    p.add_argument(
+        "base_url", help="public base URL, e.g. https://reticula.example.org"
+    )
+    p.add_argument(
+        "--resolve",
+        action="append",
+        default=[],
+        metavar="HOST=ADDRESS",
+        help="resolve HOST to ADDRESS for this process (like curl --resolve); repeatable",
+    )
+    tls = p.add_mutually_exclusive_group()
+    tls.add_argument("--cacert", metavar="FILE", help="verify TLS against this CA file")
+    tls.add_argument("--insecure", action="store_true", help="do not verify TLS")
+    p.add_argument(
+        "--email",
+        help="sign in to this existing account (password in $SMOKE_PASSWORD)"
+        " instead of creating one",
+    )
+    p.add_argument(
+        "--timeout",
+        type=float,
+        default=180,
+        metavar="SECONDS",
+        help="limit for each MCP tool call; the first search may download a model"
+        " (default 180)",
+    )
+    p.add_argument("--debug", action="store_true", help="print tracebacks to stderr")
+    return p.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    base = args.base_url.rstrip("/")
+    parts = urlsplit(base)
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        print(f"FAIL  {'setup':<{STEP_WIDTH}}  base URL must be http:// or https://")
+        return 1
+    if parts.query or parts.fragment:
+        print(
+            f"FAIL  {'setup':<{STEP_WIDTH}}  base URL must not have a query or fragment"
+        )
+        return 1
+    tag = secrets.token_hex(6)
+    if args.email:
+        password = os.environ.get("SMOKE_PASSWORD", "")
+        if not password:
+            print(
+                f"FAIL  {'setup':<{STEP_WIDTH}}  --email needs the password in the"
+                " environment variable SMOKE_PASSWORD"
+            )
+            return 1
+        email, handle = args.email, ""
+    else:
+        email, handle = f"smoke-{tag}@example.com", f"smoke-{tag}"
+        password = secrets.token_urlsafe(24)
+    verify: ssl.SSLContext | bool = True
+    try:
+        install_resolver(args.resolve)
+        if args.insecure:
+            verify = False
+        elif args.cacert:
+            verify = ssl.create_default_context(cafile=args.cacert)
+    except (Fail, OSError, ssl.SSLError) as exc:
+        print(f"FAIL  {'setup':<{STEP_WIDTH}}  {exc}")
+        return 1
+    run = Run(
+        base=base,
+        timeout=args.timeout,
+        debug=args.debug,
+        verify=verify,
+        existing=bool(args.email),
+        email=email,
+        handle=handle,
+        password=password,
+        marker=f"smokemarker{tag}",
+    )
+    run.hide(password)
+    run.revoke_url = f"{base}/revoke"
+    exit_code = 0
+    api = httpx.Client(follow_redirects=False, timeout=30, verify=verify)
+    browser = httpx.Client(follow_redirects=False, timeout=30, verify=verify)
+    try:
+        try:
+            step_health(run, api)
+            metadata_url = step_challenge(run, api)
+            meta = step_discovery(run, api, metadata_url)
+            run.revoke_url = meta["revocation_endpoint"]
+            step_register(run, api, meta)
+            page, verifier, state = step_authorize(run, browser, meta)
+            code = step_sign(run, browser, page, state)
+            step_token(run, api, meta, code, verifier)
+            asyncio.run(mcp_part(run))
+            if run.failure is None:
+                step_revoke(run, api, meta)
+        except Exception as exc:
+            run.record(exc)
+        if run.failure is not None:
+            exit_code = 1
+        if run.access and not run.revoked:
+            cleanup_token(run, api)
+    finally:
+        api.close()
+        browser.close()
+    left_behind(run)
+    return exit_code
+
+
+if __name__ == "__main__":
+    sys.exit(main())

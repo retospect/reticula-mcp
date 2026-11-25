@@ -1,0 +1,100 @@
+# A Reticula instance built from the working tree, for trying a change before
+# it is released. Separate project, volumes and port, so it runs beside a real
+# instance on the same machine.
+#
+#   docker compose -f deploy/compose.dev.yaml up -d --build
+#   scripts/smoke http://127.0.0.1:8788
+#   docker compose -f deploy/compose.dev.yaml down -v      # removes its data
+#
+# With a reverse proxy that terminates TLS (self-signed) for a made-up name:
+#
+#   scripts/dev-cert                                       # once
+#   RETICULA_DEV_PUBLIC_URL=https://reticula.test:8443 \
+#   RETICULA_DEV_TRUSTED_PROXIES=172.31.87.2 \
+#     docker compose -f deploy/compose.dev.yaml --profile proxy up -d --build
+#   scripts/smoke https://reticula.test:8443 --resolve 127.0.0.1 --insecure
+#
+# The database password below is a fixed development value. The database is
+# not published on any host port.
+name: reticula-dev
+
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: reticula
+      POSTGRES_PASSWORD: reticula-dev
+      POSTGRES_DB: reticula
+    volumes:
+      - db:/var/lib/postgresql/data
+    networks: [default]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U reticula -d reticula"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  app:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      target: source
+    image: reticula-dev-app
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      RETICULA_DATABASE_URL: postgresql://reticula:reticula-dev@db:5432/reticula
+      # The server listens on 0.0.0.0 inside the container, so it cannot guess
+      # the address clients use. Always say it.
+      RETICULA_PUBLIC_URL: ${RETICULA_DEV_PUBLIC_URL:-http://127.0.0.1:${RETICULA_DEV_PORT:-8788}}
+      RETICULA_HOST: 0.0.0.0
+      RETICULA_PORT: "8787"
+      RETICULA_SIGNUP: ${RETICULA_DEV_SIGNUP:-open}
+      RETICULA_SIGNUP_RATE: ${RETICULA_DEV_SIGNUP_RATE:-5/hour}
+      RETICULA_REGISTER_RATE: ${RETICULA_DEV_REGISTER_RATE:-20/hour}
+      RETICULA_EMBEDDER: ${RETICULA_DEV_EMBEDDER:-auto}
+      RETICULA_TRUSTED_PROXIES: ${RETICULA_DEV_TRUSTED_PROXIES:-}
+    ports:
+      - "127.0.0.1:${RETICULA_DEV_PORT:-8788}:8787"
+    volumes:
+      - models:/home/reticula/.cache
+    networks: [default]
+    healthcheck:
+      test: ["CMD", "reticula-healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
+
+  # TLS in front of the app, the way a tunnel or reverse proxy on the same host
+  # sits in front of a real instance. Fixed address, so RETICULA_TRUSTED_PROXIES
+  # can name it.
+  proxy:
+    profiles: [proxy]
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8443:8443"
+    volumes:
+      - ./dev-proxy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./dev-proxy/certs:/certs:ro
+    networks:
+      default:
+        ipv4_address: ${RETICULA_DEV_NET:-172.31.87}.2
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${RETICULA_DEV_NET:-172.31.87}.0/24
+          gateway: ${RETICULA_DEV_NET:-172.31.87}.1
+
+volumes:
+  db:
+  models:
