@@ -61,6 +61,16 @@ services:
       retries: 3
       start_period: 120s
 
+# A fixed subnet, so the address the server sees for this host is known: a
+# tunnel or reverse proxy running on this machine reaches the published port
+# from the network's gateway, the first address of the subnet (172.31.88.1).
+# That is the value for RETICULA_TRUSTED_PROXIES; see docs/operating.md.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${RETICULA_SUBNET:-172.31.88.0/24}
+
 volumes:
   reticula-db:
   reticula-models:

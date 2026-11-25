@@ -10,9 +10,10 @@
 #
 #   scripts/dev-cert                                       # once
 #   RETICULA_DEV_PUBLIC_URL=https://reticula.test:8443 \
-#   RETICULA_DEV_TRUSTED_PROXIES=172.31.87.2 \
+#   RETICULA_DEV_TRUSTED_PROXIES=172.31.87.10 \
 #     docker compose -f deploy/compose.dev.yaml --profile proxy up -d --build
-#   scripts/smoke https://reticula.test:8443 --resolve 127.0.0.1 --insecure
+#   scripts/smoke https://reticula.test:8443 --resolve reticula.test=127.0.0.1 \
+#     --cacert deploy/dev-proxy/certs/cert.pem
 #
 # The database password below is a fixed development value. The database is
 # not published on any host port.
@@ -80,13 +81,13 @@ services:
       app:
         condition: service_healthy
     ports:
-      - "127.0.0.1:8443:8443"
+      - "127.0.0.1:${RETICULA_DEV_TLS_PORT:-8443}:8443"
     volumes:
       - ./dev-proxy/Caddyfile:/etc/caddy/Caddyfile:ro
       - ./dev-proxy/certs:/certs:ro
     networks:
       default:
-        ipv4_address: ${RETICULA_DEV_NET:-172.31.87}.2
+        ipv4_address: ${RETICULA_DEV_NET:-172.31.87}.10
 
 networks:
   default:
@@ -94,6 +95,9 @@ networks:
       config:
         - subnet: ${RETICULA_DEV_NET:-172.31.87}.0/24
           gateway: ${RETICULA_DEV_NET:-172.31.87}.1
+          # Docker hands out addresses from the upper half only, so the fixed
+          # address of the proxy (.10) is never taken by another container.
+          ip_range: ${RETICULA_DEV_NET:-172.31.87}.128/25
 
 volumes:
   db:
