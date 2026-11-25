@@ -16,7 +16,6 @@ from typing import Any
 from reticula_mcp import accounts
 from reticula_mcp.accounts import Account
 from reticula_mcp.content import bootstrap
-from reticula_mcp.content.debug import debug_hub
 from reticula_mcp.db.pool import Conn
 from reticula_mcp.permissions import readable_nodes_sql
 
@@ -144,9 +143,6 @@ def start(conn: Conn, viewer: Account) -> str:
     if others:
         out.append("More instructions (get one by id):")
         out += [f"- {r['title']}  id {short_id(r['address'])}" for r in others]
-    debug = debug_hub(conn)
-    if debug is not None:
-        out.append(f"Debug hub for problem reports: id {short_id(debug['address'])}")
     if _own_note_count(conn, viewer) == 0 and not any(h["own"] for h in hubs):
         out += [
             "",

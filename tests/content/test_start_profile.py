@@ -61,7 +61,7 @@ def test_start_lists_own_and_shared_hubs_with_modes(conn, make_account):
     assert "- Beta" not in out_alice
 
 
-def test_start_names_other_instructions_and_the_debug_hub(conn, make_account):
+def test_start_names_other_instructions_and_hides_the_debug_hub(conn, make_account):
     me = make_account(handle="reader")
     other = make_account(handle="other")
     ensure_shared_visibility(conn, other, me)  # stand-in while readable_nodes is a stub
@@ -74,7 +74,8 @@ def test_start_names_other_instructions_and_the_debug_hub(conn, make_account):
     debug_hub = bootstrap.find_shipped_node(
         conn, bootstrap.system_account(conn), bootstrap.DEBUG_HUB_SLUG
     )
-    assert f"Debug hub for problem reports: id {short_id(debug_hub['address'])}" in out
+    # debug notes are filed automatically; the hub is not readable, so not shown
+    assert short_id(debug_hub["address"]) not in out
     assert len(out.splitlines()) <= 60
 
 

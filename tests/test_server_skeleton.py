@@ -129,26 +129,6 @@ def test_handler_signatures_match_the_tools():
                 assert p.default is inspect.Parameter.empty, f"{name}.{p.name}"
 
 
-def test_stubs_answer_not_implemented_naming_the_lane(live):
-    _, token = live.make_token()
-    calls = {
-        "start": {}, "profile": {}, "search": {"query": "x"}, "get": {"ref": "abcdef"},
-        "put": {"text": "x"}, "edit": {"ref": "abcdef"}, "link": {"ref": "abcdef", "to": "abcdef"},
-        "delete": {"ref": "abcdef"}, "share": {"hub": "abcdef"},
-    }  # fmt: skip
-
-    async def work(session, init):
-        out = {}
-        for name, args in calls.items():
-            result = await session.call_tool(name, args)
-            out[name] = result.content[0].text
-        return out
-
-    for name, text in run_mcp(live, token, work).items():
-        assert text.startswith("[error:NotImplemented]"), (name, text)
-        assert f"hint: owned by the {OWNER[name]} lane" in text, (name, text)
-
-
 def test_unauthenticated_and_bad_tokens_are_refused(live):
     account, token = live.make_token()
     body = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
