@@ -59,6 +59,74 @@ def closes_cycle(conn: Conn, child_hub_id: int, parent_hub_id: int) -> bool:
     return row is not None
 
 
+def is_hub_admin(conn: Conn, person_id: str, hub_node_id: int) -> bool:
+    """``person_id`` authored the hub or a hub above it."""
+    row = conn.execute(
+        "SELECT is_hub_admin(%s, %s) AS ok", (person_id, hub_node_id)
+    ).fetchone()
+    return bool(row and row["ok"])
+
+
+def removed_by_admin(conn: Conn, node_id: int, hub_node_id: int) -> bool:
+    """An admin of the hub removed this atom from it, and no admin has filed it
+    there again since."""
+    row = conn.execute(
+        "SELECT 1 FROM membership WHERE node_id = %s AND hub_node_id = %s"
+        " AND moderated AND withdrawn LIMIT 1",
+        (node_id, hub_node_id),
+    ).fetchone()
+    return row is not None
+
+
+def check_ancestors(conn: Conn, *, granter: str, hub: Row, grantee: str) -> None:
+    """Invitations below a hub obey the hubs above it: an ancestor that restricts
+    invitations to its admin, or that removed the grantee, cannot be bypassed by
+    inviting through a sub-hub. The ancestor is named only if the granter can
+    read it."""
+    ancestors = conn.execute(
+        "SELECT n.id, n.address, n.author, n.payload,"
+        " EXISTS (SELECT 1 FROM account a, readable_nodes(a.id) r"
+        "         WHERE a.person_id = %s AND r.node_id = n.id) AS readable,"
+        " EXISTS (SELECT 1 FROM hub_grant g WHERE g.hub_node_id = n.id"
+        "         AND g.grantee = %s AND g.mode = 'none'"
+        "         AND g.granted_by = n.author) AS removed"
+        " FROM hub_ancestors(%s) a JOIN node n ON n.id = a.hub_id ORDER BY n.id",
+        (granter, grantee, hub["id"]),
+    ).fetchall()
+    for anc in ancestors:
+        if anc["author"] == granter:
+            continue
+        name = f" ({anc['address']})" if anc["readable"] else ""
+        if (anc["payload"] or {}).get("invite") == "admins":
+            raise ReticulaError(
+                FORBIDDEN,
+                f"a hub above this one{name} only lets its admin invite people",
+                hint="ask that hub's admin",
+            )
+        if anc["removed"]:
+            raise ReticulaError(
+                FORBIDDEN,
+                f"that person was removed from a hub above this one{name} by its admin"
+                if anc["readable"]
+                else "that person cannot be invited to this hub",
+            )
+
+
+def hubs_to_detach(conn: Conn, hub_node_id: int, person_id: str) -> list[Row]:
+    """Statements by which hubs owned by ``person_id`` hang under ``hub_node_id``
+    or any hub below it: ``{"node_id", "hub_node_id"}`` rows."""
+    return conn.execute(
+        "SELECT DISTINCT m.node_id, m.hub_node_id FROM membership m"
+        " JOIN node c ON c.id = m.node_id"
+        " WHERE NOT m.withdrawn AND c.kind = 'hub' AND c.author = %(person)s"
+        " AND m.author = %(person)s AND c.tombstoned_at IS NULL"
+        " AND (m.hub_node_id = %(hub)s OR m.hub_node_id IN"
+        "      (SELECT hub_id FROM hub_descendants(%(hub)s)))"
+        " ORDER BY m.node_id, m.hub_node_id",
+        {"person": person_id, "hub": hub_node_id},
+    ).fetchall()
+
+
 def authorize_grant(
     conn: Conn,
     *,
@@ -91,6 +159,8 @@ def authorize_grant(
         raise ReticulaError(
             FORBIDDEN, "the hub's admin always has full access and cannot be changed"
         )
+    if mode != "none" and granter != grantee:
+        check_ancestors(conn, granter=granter, hub=hub, grantee=grantee)
     if granter == admin:
         return
     if granter == grantee:
