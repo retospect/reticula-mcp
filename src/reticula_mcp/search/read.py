@@ -48,6 +48,7 @@ MEMBERS_SHOWN = 20  # notes per page of a hub, first page and every next page
 SUB_MEMBERS_SHOWN = 5  # notes shown for a sub-hub expanded inside a larger answer
 SUBHUBS_SHOWN = 30
 LINKS_SHOWN = 30
+SECOND_STEP_READ = 1_000  # link rows read for depth 2 on a note, before who may read
 MAX_DEPTH = 2  # the hub, and its sub-hubs opened; deeper is another call
 HUB_BUDGET = 60  # hubs one call opens, the one asked for included
 TEXT_SLICE = 8_000  # characters of a note's text per answer
@@ -100,7 +101,9 @@ def read_ref(
         return _render_hub(
             conn, viewer, row, history=history, depth=depth, asked=asked, offset=offset
         )
-    return _render_note(conn, viewer, row, history=history, offset=offset)
+    return _render_note(
+        conn, viewer, row, history=history, offset=offset, depth=depth, asked=asked
+    )
 
 
 # --------------------------------------------------------------------- withdrawn
@@ -231,6 +234,8 @@ class _Chain:
     disputable: list[str]
     # the viewer's own notes that this one, written by someone else, hides
     hides_own: list[str]
+    # the notes shown on a link line, in that order (for depth 2)
+    linked: list[int]
 
 
 # Every supersession pair with ``p.hides``: does the newer atom hide the
@@ -343,9 +348,11 @@ def _chain_lines(conn: Conn, viewer: Account, node: Row) -> _Chain:
     for r in new:
         if not r["hides"]:
             lines.append(f"corrected by {whom(r['id'])}: {show(r['id'])}")
+    linked: list[int] = []
     for r in out:
         if r["can_read"] and r["dst_id"] in rows:
             target = show(r["dst_id"])
+            linked.append(r["dst_id"])
         elif r["dst_id"] is None or own:
             target = f"{_address_as_written(r['dst_address'])} (opaque)"
         else:
@@ -354,6 +361,7 @@ def _chain_lines(conn: Conn, viewer: Account, node: Row) -> _Chain:
     for r in inc:
         if r["id"] in rows:
             lines.append(f"link {render.rel_word(r['rel'])} <- {show(r['id'])}")
+            linked.append(r["id"])
     if more:
         lines.append("(more links not shown)")
     disputable: list[str] = []
@@ -370,7 +378,76 @@ def _chain_lines(conn: Conn, viewer: Account, node: Row) -> _Chain:
             for i in olds
             if rows[i]["author"] == viewer.person_id
         ]
-    return _Chain(lines, disputable, hides_own)
+    return _Chain(lines, disputable, hides_own, list(dict.fromkeys(linked)))
+
+
+def _second_step_lines(
+    conn: Conn, viewer: Account, node: Row, linked: list[int]
+) -> list[str]:
+    """depth 2 on a note: the typed links of the notes it links to and is linked
+    from, in both directions, as ``get`` of each of them lists them. One line
+    per note reached, the first way it is reached; not the note itself and not
+    the notes already shown on a link line. Only notes the viewer may read,
+    checked before anything of them is read. A linked address with no node
+    here is left out: the step goes through notes."""
+    if not linked:
+        return []
+    found = conn.execute(
+        """
+        SELECT x.via, x.rel, x.dir, x.far FROM (
+            SELECT l.src_node_id AS via, l.rel, 'out' AS dir, d.id AS far
+            FROM link l JOIN node d ON d.address = l.dst_address
+            WHERE l.src_node_id = ANY(%(via)s)
+            UNION
+            SELECT nb.id AS via, l.rel, 'in' AS dir, l.src_node_id AS far
+            FROM node nb
+            JOIN link l ON l.dst_node_id = nb.id OR l.dst_address = nb.address
+            WHERE nb.id = ANY(%(via)s) AND l.src_node_id <> nb.id
+        ) x
+        WHERE x.far <> %(node)s AND x.far <> ALL(%(via)s)
+        ORDER BY array_position(%(via)s, x.via), x.rel, x.dir DESC, x.far
+        LIMIT %(cap)s
+        """,
+        {"via": linked, "node": node["id"], "cap": SECOND_STEP_READ},
+    ).fetchall()
+    readable = visible_subset(conn, viewer, sorted({r["far"] for r in found}))
+    reached: list[Row] = []
+    seen: set[int] = set()
+    for r in found:
+        if r["far"] in readable and r["far"] not in seen:
+            seen.add(r["far"])
+            reached.append(r)
+    shown = reached[:LINKS_SHOWN]
+    rows = fetch_rows(
+        conn,
+        viewer,
+        sorted({r["far"] for r in shown} | {r["via"] for r in shown}),
+        text_chars=200,
+    )
+    shown = [r for r in shown if r["far"] in rows and r["via"] in rows]
+    if not shown:
+        return []
+    lines = ["two link steps away:"]
+    for r in shown:
+        far = rows[r["far"]]
+        arrow = "->" if r["dir"] == "out" else "<-"
+        lines.append(
+            f"- {render.short_ref(rows[r['via']]['address'])} link"
+            f" {render.rel_word(r['rel'])} {arrow} {render.short_ref(far['address'])}"
+            f" {render.kind_word(far['kind'])} {_title(far)}"
+        )
+    rest = reached[LINKS_SHOWN:]
+    if rest or len(found) >= SECOND_STEP_READ:
+        vias = list(dict.fromkeys(r["via"] for r in rest)) or [shown[-1]["via"]]
+        refs = fetch_rows(conn, viewer, vias, text_chars=0)
+        calls = ", ".join(
+            f"get(ref={render.short_ref(refs[v]['address'])!r})"
+            for v in vias
+            if v in refs
+        )
+        count = f"{len(rest)}" if len(found) < SECOND_STEP_READ else f"{len(rest)} or"
+        lines.append(f"and {count} more: {calls}")
+    return lines
 
 
 def _history_lines(conn: Conn, address: str) -> list[str]:
@@ -533,7 +610,14 @@ def _paper_notes(
 
 
 def _render_note(
-    conn: Conn, viewer: Account, row: Row, *, history: bool, offset: int
+    conn: Conn,
+    viewer: Account,
+    row: Row,
+    *,
+    history: bool,
+    offset: int,
+    depth: int = 1,
+    asked: int | None = None,
 ) -> str:
     ref = render.short_ref(row["address"])
     # The note's own header shows its whole title, up to the longest a write
@@ -560,6 +644,13 @@ def _render_note(
         lines.append(f"in: {filed}")
     chain = _chain_lines(conn, viewer, row)
     lines.extend(chain.lines)
+    if depth >= 2:
+        lines.extend(_second_step_lines(conn, viewer, row, chain.linked))
+    if asked is not None and asked > MAX_DEPTH:
+        lines.append(
+            f"depth {min(asked, 10**6)} is more than one call reads: this is depth"
+            f" {MAX_DEPTH} (two link steps); read a linked note with get(ref=<its id>)"
+        )
     if row.get("tags"):
         lines.append("tags: " + " ".join(render.quote(t, 30) for t in row["tags"][:12]))
     if history:

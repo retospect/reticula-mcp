@@ -14,7 +14,7 @@ from reticula_mcp.accounts import (
 from reticula_mcp.db.pool import Conn
 from reticula_mcp.errors import BAD_INPUT, CONFLICT, NOT_FOUND, ReticulaError
 from reticula_mcp.format.address import ADDRESS_SCHEME
-from reticula_mcp.permissions import readable_nodes_sql
+from reticula_mcp.permissions import readable_among_sql
 
 MIN_SUFFIX = 6
 _SUFFIX_RE = re.compile(r"^[0-9a-f-]+$")
@@ -44,9 +44,9 @@ def resolve_ref(
         except ValueError as exc:
             raise ReticulaError(BAD_INPUT, f"malformed address {ref!r}") from exc
         row = conn.execute(
-            "SELECT n.* FROM node n WHERE n.address = %s"
-            f" AND n.id IN ({readable_nodes_sql('%s')})",
-            (ref, viewer.id),
+            "SELECT n.* FROM node n WHERE n.address = %(ref)s AND n.id IN"
+            f" ({readable_among_sql('SELECT a.id FROM node a WHERE a.address = %(ref)s')})",
+            {"ref": ref, "viewer": viewer.id},
         ).fetchone()
         if row is None and allow_tombstoned:
             row = conn.execute(
@@ -65,9 +65,12 @@ def resolve_ref(
         )
     rows = conn.execute(
         "SELECT n.* FROM node n"
-        f" WHERE n.id IN ({readable_nodes_sql('%s')})"
-        " AND right(n.address, %s) = %s ORDER BY n.id LIMIT 6",
-        (viewer.id, len(suffix), suffix),
+        " WHERE n.id IN ("
+        + readable_among_sql(
+            "SELECT a.id FROM node a WHERE right(a.address, %(n)s) = %(suffix)s"
+        )
+        + ") AND right(n.address, %(n)s) = %(suffix)s ORDER BY n.id LIMIT 6",
+        {"viewer": viewer.id, "n": len(suffix), "suffix": suffix},
     ).fetchall()
     if not rows:
         raise ReticulaError(NOT_FOUND, f"no readable note ends in {suffix!r}")
