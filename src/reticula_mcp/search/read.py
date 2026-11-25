@@ -88,10 +88,10 @@ def read_ref(
     *,
     history: bool,
     depth: int,
-    part: str | None = None,
 ) -> str:
     asked = int(depth)
     depth = max(1, min(asked, MAX_DEPTH))
+    ref, part = groups.split_letters(ref)
     base, offset = _split_offset(ref)
     try:
         node = resolve_ref(conn, viewer, base)
@@ -1004,17 +1004,17 @@ def _grouped(conn: Conn, viewer: Account, hub: Row) -> list[str] | None:
 def _render_part(
     conn: Conn, viewer: Account, row: Row, part: str, *, history: bool, offset: int
 ) -> str:
-    """``get(ref=<hub>, part="AB")``: one lettered group of a big hub."""
+    """``get(ref="<hub>:AB")``: one lettered group of a big hub."""
     if row["kind"] != "hub":
         raise ReticulaError(
             BAD_INPUT,
-            f"part is for a hub; {render.short_ref(row['address'])} is a {row['kind']}",
+            f"letters after the id are for a hub; {render.short_ref(row['address'])}"
+            f" is a {row['kind']}",
         )
     if offset or history:
         raise ReticulaError(
             BAD_INPUT,
-            "part lists a group of the current notes: not with a page in ref"
-            " or history=true",
+            "a group lists the current notes: not with a page or history=true",
         )
     ref = render.short_ref(row["address"])
     notes, _total = groups.load(conn, viewer, row["id"])

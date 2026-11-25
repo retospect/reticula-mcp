@@ -65,7 +65,7 @@ def listed(out: str) -> set[str]:
 
 def walk(conn: Conn, viewer: Account, hub: str, part: str = "") -> list[str]:
     """Every short ref reached through the letters, one entry per path."""
-    out = get(conn, viewer, ref=hub, part=part) if part else get(conn, viewer, ref=hub)
+    out = get_part(conn, viewer, hub, part) if part else get(conn, viewer, ref=hub)
     letters = group_lines(out)
     if not letters:
         return sorted(listed(out))
@@ -73,6 +73,11 @@ def walk(conn: Conn, viewer: Account, hub: str, part: str = "") -> list[str]:
     for letter in letters:
         reached += walk(conn, viewer, hub, letter)
     return reached
+
+
+def get_part(conn: Conn, viewer: Account, hub: str, letters: str, **kw: object) -> str:
+    """A lettered group of a hub: its id, a colon and the letters."""
+    return get(conn, viewer, ref=f"{hub}:{letters}", **kw)
 
 
 @pytest.fixture
@@ -101,10 +106,10 @@ def test_more_than_26_notes_show_groups_and_every_note_has_one_path(
     lines = group_lines(out)
     assert sorted(lines) == ["A", "B", "C", "D", "E"]
     assert sorted(n for _, n in lines.values()) == [8] * 5
-    assert f'next: get(ref="{short_ref(hub)}", part="A") lists a group' in out
+    assert f'next: get(ref="{short_ref(hub)}:A") lists a group' in out
     newest = f'the newest notes first: search(query="", hub="{short_ref(hub)}")'
     assert newest in out
-    assert newest not in get(conn, ana, ref=hub, part="A")
+    assert newest not in get_part(conn, ana, hub, "A")
     assert "members (newest first" not in out
     reached = walk(conn, ana, hub)
     assert sorted(reached) == sorted(short_ref(n) for n in notes)
@@ -120,14 +125,14 @@ def test_the_same_notes_give_the_same_letters(conn: Conn, ana: Account) -> None:
     hub = mk_hub(conn, ana, "Big")
     fill(conn, ana, hub, 40)
     assert get(conn, ana, ref=hub) == get(conn, ana, ref=hub)
-    assert get(conn, ana, ref=hub, part="C") == get(conn, ana, ref=hub, part="c")
+    assert get_part(conn, ana, hub, "C") == get_part(conn, ana, hub, "c")
 
 
 def test_a_group_repeats_its_line_and_lists_its_notes(conn: Conn, ana: Account) -> None:
     hub = mk_hub(conn, ana, "Big")
     fill(conn, ana, hub, 40)
     label, size = group_lines(get(conn, ana, ref=hub))["B"]
-    out = get(conn, ana, ref=hub, part="B")
+    out = get_part(conn, ana, hub, "B")
     assert (
         f"group B of 5: {label} ({size} notes; keep a note's id, not its letters)"
         in out
@@ -142,15 +147,34 @@ def test_a_letter_that_does_not_exist_names_those_that_do(
     hub = mk_hub(conn, ana, "Big")
     fill(conn, ana, hub, 40)
     with pytest.raises(ReticulaError) as err:
-        get(conn, ana, ref=hub, part="F")
+        get_part(conn, ana, hub, "F")
     assert err.value.code == "BadInput"
     assert "no group F: this hub has the groups A to E" in err.value.message
     with pytest.raises(ReticulaError) as err:
-        get(conn, ana, ref=hub, part="AB")
+        get_part(conn, ana, hub, "AB")
     assert "group A is not split" in err.value.message
+    # what follows the colon is a group only when it is one to four letters;
+    # anything else is a malformed ref
     with pytest.raises(ReticulaError) as err:
-        get(conn, ana, ref=hub, part="1")
+        get_part(conn, ana, hub, "1")
     assert err.value.code == "BadInput"
+
+
+def test_the_letters_ride_on_the_ref_and_an_address_is_not_split() -> None:
+    assert groups.split_letters("9ab6128c:AB") == ("9ab6128c", "AB")
+    assert groups.split_letters(" 9ab6128c:c ") == ("9ab6128c", "c")
+    address = "ret:pabcdefghijklmnopqrstuvwxyz/01a21305-2c41-7708-9880-0ce02035ca55"
+    assert groups.split_letters(address) == (address, None)
+    assert groups.split_letters(f"{address}:A") == (address, "A")
+    assert groups.split_letters("9ab6128c:ABCDE") == ("9ab6128c:ABCDE", None)
+    assert groups.split_letters("9ab6128c+20") == ("9ab6128c+20", None)
+
+
+def test_several_hubs_and_groups_in_one_get(conn: Conn, ana: Account) -> None:
+    hub = mk_hub(conn, ana, "Big")
+    fill(conn, ana, hub, 40)
+    out = get(conn, ana, ref=f"{short_ref(hub)}:A {short_ref(hub)}:B")
+    assert "--- 1 of 2:" in out and "group A of 5:" in out and "group B of 5:" in out
 
 
 def test_part_on_a_small_hub_or_a_note_is_refused(conn: Conn, ana: Account) -> None:
@@ -158,12 +182,12 @@ def test_part_on_a_small_hub_or_a_note_is_refused(conn: Conn, ana: Account) -> N
     notes = fill(conn, ana, hub, 3)
     for ref in (hub, notes[0]):
         with pytest.raises(ReticulaError) as err:
-            get(conn, ana, ref=ref, part="A")
+            get_part(conn, ana, ref, "A")
         assert err.value.code == "BadInput"
     big = mk_hub(conn, ana, "Big")
     fill(conn, ana, big, 30)
     with pytest.raises(ReticulaError):
-        get(conn, ana, ref=big, part="A", history=True)
+        get_part(conn, ana, big, "A", history=True)
 
 
 def test_what_the_viewer_may_not_read_is_not_reached_counted_or_labelled(
@@ -190,7 +214,7 @@ def test_what_the_viewer_may_not_read_is_not_reached_counted_or_labelled(
     reached = walk(conn, ana, hub)
     assert sorted(reached) == sorted(short_ref(n) for n in seen)
     for letter in group_lines(out):
-        part = get(conn, ana, ref=hub, part=letter)
+        part = get_part(conn, ana, hub, letter)
         assert "zyzzyva" not in part and "quokka" not in part
     # cid reads the private sub-hub: other notes, other groups
     assert "42 notes in 6 groups by their words," in get(conn, cid, ref=hub)
@@ -236,7 +260,7 @@ def test_stored_vectors_are_used_when_nearly_every_note_has_one(
     direction = {short_ref(a): i % 4 for i, a in enumerate(notes)}
     pure = 0
     for letter in group_lines(out):
-        members = listed(get(conn, ana, ref=hub, part=letter))
+        members = listed(get_part(conn, ana, hub, letter))
         pure += len({direction[m] for m in members}) == 1
     assert pure == 4
 
@@ -264,7 +288,7 @@ def test_two_listings_agree_and_every_letter_opens_its_group(
     lines = group_lines(first)
     assert len(lines) == 8
     for letter, (label, size) in lines.items():
-        part = get(conn, ana, ref=hub, part=letter)
+        part = get_part(conn, ana, hub, letter)
         assert f"group {letter} of 8: {label} ({size} notes;" in part
 
 
@@ -286,7 +310,7 @@ def test_vectors_arriving_do_not_move_the_groups_until_all_are_there(
         assert f"groups by their words ({40 - done} not indexed yet;" in out
         seen.append(group_lines(out))
         for letter, (label, size) in group_lines(out).items():
-            part = get(conn, ana, ref=hub, part=letter)
+            part = get_part(conn, ana, hub, letter)
             assert f"group {letter} of 5: {label} ({size} notes;" in part
     assert all(s == seen[0] for s in seen)
     add_vector(conn, notes[39], 39)

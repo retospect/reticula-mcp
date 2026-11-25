@@ -450,7 +450,7 @@ def _label_text(group: Group) -> str:
 def _group_lines(group: Group, ref: str) -> list[str]:
     out = [f"{c.path}  {_label_text(c)}  ({len(c.ids)})" for c in group.children]
     first = group.children[0].path
-    out.append(f'next: get(ref="{ref}", part="{first}") lists a group')
+    out.append(f'next: get(ref="{ref}:{first}") lists a group')
     if not group.path:
         out.append(f'the newest notes first: search(query="", hub="{ref}")')
     return out
@@ -483,16 +483,29 @@ def overview(group: Group, ref: str, total: int, notes: Sequence[Note]) -> list[
     return lines + _group_lines(group, ref)
 
 
+_LETTERS_RE = re.compile(r"^(.+):([A-Za-z]{1,4})$")
+
+
+def split_letters(ref: str) -> tuple[str, str | None]:
+    """``"9ab6128c:AB"`` -> ``("9ab6128c", "AB")``: a ref and the letters of a
+    group after it; ``(ref, None)`` without. An address has colons too
+    (``ret:p.../...``), but never one followed by one to four letters only."""
+    found = _LETTERS_RE.match(ref.strip())
+    if found is None:
+        return ref, None
+    return found.group(1), found.group(2)
+
+
 def find_part(group: Group, part: str) -> Group:
     """The group at ``part``, or BadInput that names the letters there are."""
     letters = part.strip().upper()
     if not letters or not letters.isascii() or not letters.isalpha():
-        raise ReticulaError(BAD_INPUT, f"part is letters from A: {part[:20]!r}")
+        raise ReticulaError(BAD_INPUT, f"a group is letters from A: {part[:20]!r}")
     if not group.children:
         raise ReticulaError(
             BAD_INPUT,
             f"this hub has {len(group.ids)} notes and is not in groups",
-            hint="read it without part",
+            hint="read it without the letters",
         )
     at = group
     for n, letter in enumerate(letters):
@@ -503,7 +516,7 @@ def find_part(group: Group, part: str) -> Group:
                 raise ReticulaError(
                     BAD_INPUT,
                     f"group {at.path} is not split: it lists its {len(at.ids)} notes",
-                    hint=f'part="{at.path}"',
+                    hint=f'ref="<hub id>:{at.path}"',
                 )
             where = f"group {at.path}" if at.path else "this hub"
             raise ReticulaError(
