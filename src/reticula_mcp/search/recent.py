@@ -60,6 +60,7 @@ names them.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
@@ -154,10 +155,18 @@ class _Reach:
     opened: dict[int, datetime]
     #: hub that a share opened -> (when, the person who shared it)
     shared: dict[int, tuple[datetime, str]]
+    #: those of ``shared`` that the system account shared
+    by_system: frozenset[int] = frozenset()
 
 
 def _granted_since(
-    conn: Conn, viewer: Account, hub_address: str, grant: Row
+    conn: Conn,
+    viewer: Account,
+    hub_address: str,
+    *,
+    first: datetime,
+    last: datetime,
+    record_id: int,
 ) -> datetime:
     """Since when the viewer has held this grant without a break.
 
@@ -167,13 +176,13 @@ def _granted_since(
     applied (``set_grant`` checks before it signs). A record from elsewhere
     that was refused could make this earlier than it was; then older notes of
     the hub are listed one by one, each of which the viewer can read."""
-    held: datetime = grant["updated_at"]
-    if grant["created_at"] == grant["updated_at"]:
+    held = last
+    if first == last:
         return held
     older = conn.execute(
         "SELECT id FROM record WHERE type = 'grant' AND hub_id = %s AND id < %s"
         " ORDER BY id DESC",
-        (fmt.hub_id_from_address(hub_address), grant["record_id"]),
+        (fmt.hub_id_from_address(hub_address), record_id),
     ).fetchall()
     for row in older:
         rec = records.get_record(conn, row["id"])
@@ -191,92 +200,186 @@ def _granted_since(
     return held
 
 
-def _reach(conn: Conn, viewer: Account) -> _Reach:
-    """Since when the viewer can read each hub they can read."""
-    hubs = conn.execute(
-        "SELECT n.id, n.author, n.address FROM node n WHERE n.kind = 'hub'"
-        f" AND n.id IN ({readable_nodes_sql('%(viewer)s')})",
-        {"viewer": viewer.id},
-    ).fetchall()
+def _reach(conn: Conn, viewer: Account, hubs: Sequence[Row] | None = None) -> _Reach:
+    """Since when the viewer can read each hub they can read. ``hubs``: those
+    hubs (``id``, ``author``, ``address``), when the caller has read them."""
+    if hubs is None:
+        hubs = conn.execute(
+            "SELECT n.id, n.author, n.address FROM node n WHERE n.id IN ("
+            + _readable_among("SELECT h.id FROM node h WHERE h.kind = 'hub'")
+            + ")",
+            {"viewer": viewer.id},
+            prepare=False,
+        ).fetchall()
     ids = [h["id"] for h in hubs]
     opened = {h["id"]: ALWAYS for h in hubs if h["author"] == viewer.person_id}
     if not ids:
         return _Reach({}, {})
     address = {h["id"]: h["address"] for h in hubs}
+    # The two ways into a hub that is not the viewer's own, in one statement:
+    # a grant to the viewer (``above`` is null), or the hub is filed under
+    # another of these hubs (``above``) by its own author.
+    ways = conn.execute(
+        """
+        SELECT g.hub_node_id AS hub, NULL::bigint AS above, g.created_at AS at,
+               g.updated_at AS changed, g.granted_by, g.record_id,
+               EXISTS (SELECT 1 FROM account a
+                       WHERE a.person_id = g.granted_by AND a.status = 'system'
+               ) AS by_system
+        FROM hub_grant g
+        WHERE g.grantee = %(person)s AND g.mode IN ('read', 'add')
+          AND g.hub_node_id = ANY(%(hubs)s)
+        UNION ALL
+        SELECT m.node_id, m.hub_node_id,
+               CASE WHEN r.created_at <= c.created_at + %(same)s
+                    THEN c.created_at ELSE r.created_at END,
+               NULL::timestamptz, NULL::text, NULL::bigint, false
+        FROM membership m
+        JOIN node c ON c.id = m.node_id
+        JOIN record r ON r.id = m.record_id
+        WHERE m.node_id = ANY(%(hubs)s) AND m.hub_node_id = ANY(%(hubs)s)
+          AND NOT m.withdrawn AND m.audience = 'hub' AND m.author = c.author
+        """,
+        {"person": viewer.person_id, "hubs": ids, "same": SAME_WRITE},
+    ).fetchall()
     granted: dict[int, tuple[datetime, str]] = {}
-    for grant in conn.execute(
-        "SELECT g.hub_node_id AS hub, g.created_at, g.updated_at, g.granted_by,"
-        " g.record_id FROM hub_grant g WHERE g.grantee = %(person)s"
-        " AND g.mode IN ('read', 'add') AND g.hub_node_id = ANY(%(hubs)s)",
-        {"person": viewer.person_id, "hubs": ids},
-    ).fetchall():
+    system: set[int] = set()
+    for grant in (w for w in ways if w["above"] is None):
         hub = grant["hub"]
         if hub in opened:
             continue
-        at = _granted_since(conn, viewer, address[hub], grant)
+        at = _granted_since(
+            conn,
+            viewer,
+            address[hub],
+            first=grant["at"],
+            last=grant["changed"],
+            record_id=grant["record_id"],
+        )
         granted[hub] = (at, grant["granted_by"])
         opened[hub] = at
+        if grant["by_system"]:
+            system.add(hub)
     # A hub filed under a hub the viewer reads is theirs to read from the later
     # of the two moments; of several ways in, the earliest counts.
-    edges = conn.execute(
-        "SELECT m.node_id AS child, m.hub_node_id AS parent,"
-        " CASE WHEN r.created_at <= c.created_at + %(same)s THEN c.created_at"
-        "      ELSE r.created_at END AS at"
-        " FROM membership m JOIN node c ON c.id = m.node_id"
-        " JOIN record r ON r.id = m.record_id"
-        " WHERE m.node_id = ANY(%(hubs)s) AND m.hub_node_id = ANY(%(hubs)s)"
-        " AND NOT m.withdrawn AND m.audience = 'hub' AND m.author = c.author",
-        {"hubs": ids, "same": SAME_WRITE},
-    ).fetchall()
+    edges = [w for w in ways if w["above"] is not None]
     moved = True
     while moved:
         moved = False
         for edge in edges:
-            above = opened.get(edge["parent"])
+            above = opened.get(edge["above"])
             if above is None:
                 continue
             at = max(above, edge["at"])
-            if at < opened.get(edge["child"], _NEVER):
-                opened[edge["child"]] = at
+            if at < opened.get(edge["hub"], _NEVER):
+                opened[edge["hub"]] = at
                 moved = True
     shared = {hub: (at, by) for hub, (at, by) in granted.items() if opened[hub] == at}
-    return _Reach(opened, shared)
+    return _Reach(opened, shared, frozenset(system & set(shared)))
 
 
-def _system_people(conn: Conn) -> list[str]:
-    rows = conn.execute(
-        "SELECT person_id FROM account WHERE status = 'system'"
-    ).fetchall()
-    return [r["person_id"] for r in rows]
+def _readable_among(ids_sql: str) -> str:
+    """The node ids among those ``ids_sql`` selects that the viewer can read.
+
+    ``readable_nodes`` is asked for these ids alone. Its query is a union, so
+    the condition on ``node_id`` goes into each part and only those rows are
+    read; unrestricted, it reads every note of the account (35 ms at 30,000).
+    The ids are handed over as an array so that they are known before the
+    function's query runs."""
+    return (
+        f"SELECT v.node_id AS id FROM ({readable_nodes_sql('%(viewer)s')}) v"
+        f" WHERE v.node_id = ANY (ARRAY({ids_sql}))"
+    )
 
 
-def _events_sql(where: str, *, in_hub: bool, limited: bool, only: bool) -> str:
-    """One row per note in scope with its newest event that may be told.
+def _best_sql(
+    *,
+    in_hub: bool = False,
+    only: bool = False,
+    others: bool = False,
+    history: bool,
+) -> str:
+    """``WITH ... best``: one row per note in scope with its newest event that
+    may be told. The statements below select from ``best``.
 
     ``cand``: what has a version or a filing since the moment, on the whole
-    instance (with ``only``: the ids handed in, the matches of a search);
-    ``scope`` keeps of it what the viewer may read (``where``).
+    instance (with ``only``: the ids handed in, the matches of a search; with
+    ``others``: not the viewer's own notes, for a count of other people's). The
+    filings are found from their records, through an array, so that the index
+    on ``membership (record_id)`` is used for each and the table is not read.
+    ``sup`` (not with ``history``): the notes that supersede a candidate.
+    ``vis``: the candidates, and those newer notes, that the viewer can read
+    (``readable_nodes``). ``hidden``: the candidates a readable newer note
+    hides; the rule of ``current_nodes``, with the same two functions, for
+    the candidates alone. ``scope``: the readable candidates that are left, of
+    the kind asked for, no debug notes unless asked for by kind (as
+    ``find._scope`` has it), and nothing the system account wrote unless a
+    kind is asked for. ``base`` is since when the viewer reads the note where
+    that does not depend on a filing: always for their own, for a hub since it
+    opened to them.
     ``filing``: the author's own filings in hubs the viewer reads, each with
-    the moment that hub opened to the viewer. ``reach``: since when the viewer
-    can read the note. ``best``: the newest event not before that; for a hub
-    the event that opened it (shared, or filed under a hub the viewer reads)
-    comes before a later edit, because it stands for all the hub held.
+    the moment that hub opened to the viewer. ``ev``: every event of every
+    note in scope; a filing is in it also when it is no event to tell
+    (``told``), because the note is readable from the first moment (``via``)
+    at which a filing of it and the reach of that hub have both happened.
+    ``seen``: each event with since when the viewer reads the note
+    (``opened``) and the hub of that first filing (``home``). ``best``: the
+    newest event not before ``opened``; for a hub the event that opened it
+    (shared, or filed under a hub the viewer reads) comes before a later
+    edit, because it stands for all the hub held.
+
+    From ``scope`` on, nothing is a join of two of these results except with
+    ``hubs`` and ``shared``, whose sizes the planner knows: it takes the others
+    for a handful of rows whatever they hold, and a join of two of them is
+    then planned as a loop over all pairs (22 ms instead of 5 for 350 notes).
     """
     hub = (
         f" AND (n.id = %(hub)s OR n.id IN ({find._subtree('%(viewer)s')}))"
         if in_hub
         else ""
     )
+    theirs = " AND {0}.author <> %(person)s" if others else ""
     cand = (
         "SELECT o.id FROM unnest(%(only)s::bigint[]) AS o(id)"
         if only
-        else """
-            SELECT n.id FROM node n WHERE n.updated_at >= %(since)s
+        else f"""
+            SELECT n.id FROM node n
+            WHERE n.updated_at >= %(since)s{theirs.format("n")}
             UNION
-            SELECT m.node_id FROM record r JOIN membership m ON m.record_id = r.id
-            WHERE r.type = 'member' AND r.created_at >= %(since)s AND NOT m.withdrawn
+            SELECT m.node_id FROM membership m
+            WHERE m.record_id = ANY (ARRAY(
+                    SELECT r.id FROM record r
+                    WHERE r.type = 'member' AND r.created_at >= %(since)s))
+              AND NOT m.withdrawn{theirs.format("m")}
             UNION
             SELECT s.id FROM shared s"""
+    )
+    sup = (
+        ""
+        if history
+        else """
+        sup AS MATERIALIZED (
+            SELECT su.old_node_id AS old, su.new_node_id AS new
+            FROM supersedes su
+            WHERE su.old_node_id = ANY (ARRAY(SELECT c.id FROM cand c))
+        ),"""
+    )
+    asked = "SELECT c.id FROM cand c" + (
+        "" if history else " UNION ALL SELECT s.new FROM sup s"
+    )
+    hidden = (
+        ""
+        if history
+        else """
+        hidden AS MATERIALIZED (
+            SELECT DISTINCT s.old AS id
+            FROM sup s JOIN vis w ON w.id = s.new
+            CROSS JOIN LATERAL supersession_hides(s.old, s.new) p
+            WHERE p.hides
+        ),"""
+    )
+    not_hidden = (
+        "" if history else " AND NOT EXISTS (SELECT 1 FROM hidden h WHERE h.id = n.id)"
     )
     return f"""
         WITH hubs AS MATERIALIZED (
@@ -290,16 +393,31 @@ def _events_sql(where: str, *, in_hub: bool, limited: bool, only: bool) -> str:
                  AS s(id, at)
         ),
         cand AS MATERIALIZED ({cand}
-        ),
+        ),{sup}
+        vis AS MATERIALIZED (
+            {_readable_among(asked)}
+        ),{hidden}
         scope AS MATERIALIZED (
-            SELECT n.id, n.kind, n.author, n.created_at, n.updated_at
-            FROM node n
-            WHERE n.id IN (SELECT c.id FROM cand c) AND {where}{hub}
+            SELECT n.id, n.kind, n.author, n.created_at, n.updated_at,
+                   n.author <> %(person)s AS other,
+                   n.author = %(person)s OR n.kind = 'hub' AS fixed,
+                   CASE WHEN n.author = %(person)s THEN '-infinity'::timestamptz
+                        WHEN n.kind = 'hub' THEN h.opened
+                   END AS base
+            FROM node n LEFT JOIN hubs h ON h.hub_id = n.id
+            WHERE n.id IN (SELECT c.id FROM cand c)
+              AND n.id IN (SELECT v.id FROM vis v)
+              AND n.tombstoned_at IS NULL
+              AND (%(kind)s::text IS NULL OR n.kind = %(kind)s::text)
+              AND (n.kind <> 'debug' OR %(kind)s::text = 'debug')
               AND (%(kind)s::text IS NOT NULL
-                   OR n.author <> ALL (%(system)s::text[]))
+                   OR NOT EXISTS (SELECT 1 FROM account a
+                                  WHERE a.person_id = n.author
+                                    AND a.status = 'system')){not_hidden}{hub}
         ),
         filing AS MATERIALIZED (
-            SELECT s.id, m.hub_node_id AS hub, h.opened,
+            SELECT s.id, s.kind, s.other, s.fixed, s.base, s.created_at AS written,
+                   m.hub_node_id AS hub, h.opened,
                    CASE WHEN r.created_at <= s.created_at + %(same)s
                         THEN s.created_at ELSE r.created_at END AS at
             FROM scope s
@@ -308,44 +426,77 @@ def _events_sql(where: str, *, in_hub: bool, limited: bool, only: bool) -> str:
             JOIN hubs h ON h.hub_id = m.hub_node_id
             JOIN record r ON r.id = m.record_id
         ),
-        reach AS MATERIALIZED (
-            SELECT s.id, CASE
-                WHEN s.author = %(person)s THEN '-infinity'::timestamptz
-                WHEN s.kind = 'hub'
-                    THEN (SELECT h.opened FROM hubs h WHERE h.hub_id = s.id)
-                ELSE (SELECT min(greatest(f.at, f.opened))
-                      FROM filing f WHERE f.id = s.id)
-            END AS opened
-            FROM scope s
-        ),
         ev AS (
-            SELECT s.id, s.created_at AS at, 'written' AS what, NULL::bigint AS hub
+            SELECT s.id, s.kind, s.other, s.fixed, s.base, s.created_at AS at,
+                   'written' AS what, NULL::bigint AS hub,
+                   NULL::timestamptz AS via, true AS told
             FROM scope s
             UNION ALL
-            SELECT s.id, s.updated_at, 'edited', NULL
+            SELECT s.id, s.kind, s.other, s.fixed, s.base, s.updated_at,
+                   'edited', NULL, NULL, true
             FROM scope s WHERE s.updated_at > s.created_at
             UNION ALL
-            SELECT f.id, f.at, 'filed', f.hub
-            FROM filing f JOIN scope s ON s.id = f.id
-            WHERE f.at > s.created_at AND f.at >= f.opened
+            SELECT f.id, f.kind, f.other, f.fixed, f.base, f.at,
+                   'filed', f.hub, greatest(f.at, f.opened),
+                   f.at > f.written AND f.at >= f.opened
+            FROM filing f
             UNION ALL
-            SELECT sh.id, sh.at, 'shared', NULL FROM shared sh
+            SELECT s.id, s.kind, s.other, s.fixed, s.base, sh.at,
+                   'shared', NULL, NULL, true
+            FROM shared sh JOIN scope s ON s.id = sh.id
+        ),
+        seen AS (
+            SELECT e.id, e.kind, e.other, e.at, e.what, e.hub, e.told,
+                   CASE WHEN e.fixed THEN e.base
+                        ELSE first_value(e.via) OVER w END AS opened,
+                   first_value(e.hub) OVER w AS home
+            FROM ev e
+            WINDOW w AS (PARTITION BY e.id ORDER BY e.via, e.hub)
         ),
         best AS (
-            SELECT DISTINCT ON (e.id) e.id, e.at, e.what, e.hub,
-                   s.author <> %(person)s AS other
-            FROM ev e JOIN scope s ON s.id = e.id JOIN reach r ON r.id = e.id
-            WHERE e.at >= %(since)s AND e.at >= r.opened
-            ORDER BY e.id,
-                     (s.kind = 'hub' AND e.what IN ('filed', 'shared')
-                      AND e.at = r.opened) DESC,
-                     e.at DESC, e.what
+            SELECT DISTINCT ON (x.id) x.id, x.at, x.what, x.hub, x.kind, x.other,
+                   x.home
+            FROM seen x
+            WHERE x.told AND x.at >= %(since)s AND x.at >= x.opened
+            ORDER BY x.id,
+                     (x.kind = 'hub' AND x.what IN ('filed', 'shared')
+                      AND x.at = x.opened) DESC,
+                     x.at DESC, x.what
         )
+    """
+
+
+def _events_sql(*, in_hub: bool, limited: bool, only: bool, history: bool) -> str:
+    """The events, newest first, each with the number of all of them."""
+    return f"""{_best_sql(in_hub=in_hub, only=only, history=history)}
         SELECT b.id, b.at, b.what, b.hub, b.other, count(*) OVER () AS total
         FROM best b
         ORDER BY b.at DESC, b.id DESC
         {"LIMIT %(limit)s" if limited else ""}
     """
+
+
+def _params(
+    viewer: Account, reach: _Reach, *, since: datetime, kind: str | None = None
+) -> dict[str, Any]:
+    """The parameters of ``_best_sql``. A hub the system account shared is an
+    event only when a kind is asked for, as with what it wrote."""
+    shared = {
+        hub: at
+        for hub, (at, _) in reach.shared.items()
+        if at >= since and (kind or hub not in reach.by_system)
+    }
+    return {
+        "viewer": viewer.id,
+        "person": viewer.person_id,
+        "kind": kind,
+        "since": since,
+        "same": SAME_WRITE,
+        "hub_ids": list(reach.opened),
+        "hub_opened": [None if at == ALWAYS else at for at in reach.opened.values()],
+        "shared_ids": list(shared),
+        "shared_at": list(shared.values()),
+    }
 
 
 def events(
@@ -363,28 +514,7 @@ def events(
     the first ``limit`` of them (all when None) and how many there are. With
     ``only``, those of these ids that are in scope and have such an event."""
     reach = _reach(conn, viewer)
-    # find._scope: the visibility rule, the kind, and no debug notes unless
-    # asked for. The hub is added here, because the hub itself is listed too
-    # (a hub shared last week stands for what it held).
-    where, params = find._scope(
-        viewer, hub_node_id=None, kind=kind, include_superseded=include_superseded
-    )
-    system = [] if kind else _system_people(conn)
-    shared = {
-        hub: at
-        for hub, (at, by) in reach.shared.items()
-        if at >= since and by not in system
-    }
-    params = {
-        **params,
-        "since": since,
-        "same": SAME_WRITE,
-        "system": system,
-        "hub_ids": list(reach.opened),
-        "hub_opened": [None if at == ALWAYS else at for at in reach.opened.values()],
-        "shared_ids": list(shared),
-        "shared_at": list(shared.values()),
-    }
+    params = _params(viewer, reach, since=since, kind=kind)
     if hub_node_id is not None:
         params["hub"] = hub_node_id
     if limit is not None:
@@ -393,12 +523,13 @@ def events(
         params["only"] = only
     rows = conn.execute(
         _events_sql(
-            where,
             in_hub=hub_node_id is not None,
             limited=limit is not None,
             only=only is not None,
+            history=include_superseded,
         ),
         params,
+        prepare=False,  # planned for these values each time
     ).fetchall()
     found = [
         Event(
@@ -455,7 +586,7 @@ def _corrections(
         return {}
     old_ids = sorted({p["old_node_id"] for p in pairs})
     readable = visible_subset(conn, viewer, old_ids)
-    old_rows = fetch_rows(conn, viewer, sorted(readable), text_chars=render.LABEL + 100)
+    old_rows = _named(conn, sorted(readable))
     what = {e.node_id: e.what for e in shown}
     out: dict[int, list[str]] = {}
     for pair in pairs:
@@ -473,6 +604,21 @@ def _corrections(
     return out
 
 
+def _named(conn: Conn, ids: list[int]) -> dict[int, Row]:
+    """Address, title and start of the text of notes ALREADY known readable:
+    what a line says of another note (the one corrected, the hub filed in).
+    ``fetch_rows`` also finds the hub each is filed in, which nothing here
+    prints, by asking for every note the viewer can read."""
+    if not ids:
+        return {}
+    rows = conn.execute(
+        "SELECT n.id, n.address, n.kind, n.title, left(n.text, %s) AS text"
+        " FROM node n WHERE n.id = ANY(%s)",
+        (render.LABEL + 100, ids),
+    ).fetchall()
+    return {r["id"]: r for r in rows}
+
+
 def _handles(conn: Conn, people: list[str]) -> dict[str, str]:
     if not people:
         return {}
@@ -486,7 +632,13 @@ def _handles(conn: Conn, people: list[str]) -> dict[str, str]:
 
 
 def _lines(
-    conn: Conn, viewer: Account, shown: list[Event], since: datetime, fetched: int
+    conn: Conn,
+    viewer: Account,
+    shown: list[Event],
+    since: datetime,
+    fetched: int,
+    *,
+    history: bool,
 ) -> list[str]:
     """One line per event, in that order, and under it the start of the note's
     text. The line is the one every listing prints (``render.row_line``), then
@@ -494,10 +646,11 @@ def _lines(
     ``(you)`` stands there when that is the viewer."""
     ids = [e.node_id for e in shown]
     rows = fetch_rows(conn, viewer, ids, text_chars=fetched)
-    current = visible_subset(conn, viewer, ids, current=True)
-    filed_in = fetch_rows(
-        conn, viewer, sorted({e.hub_id for e in shown if e.hub_id is not None})
-    )
+    # Without history every event is of a current note already; with it, the
+    # superseded ones are marked (this asks for every note the viewer reads).
+    current = visible_subset(conn, viewer, ids, current=True) if history else set(ids)
+    # the hubs of filings: ids out of the hubs the viewer reads (_best_sql)
+    filed_in = _named(conn, sorted({e.hub_id for e in shown if e.hub_id is not None}))
     corrects = _corrections(conn, viewer, shown, rows, since)
     handles = _handles(conn, sorted({e.by for e in shown if e.by is not None}))
     hubs = [i for i in ids if i in rows and rows[i]["kind"] == "hub"]
@@ -635,7 +788,16 @@ def answer(
         lines = [
             f"{head}: {len(shown)} results, best match first, {_others(shown)} {data}"
         ]
-        lines.extend(_lines(conn, viewer, shown, moment, handlers.TEXT_FETCHED))
+        lines.extend(
+            _lines(
+                conn,
+                viewer,
+                shown,
+                moment,
+                handlers.TEXT_FETCHED,
+                history=include_superseded,
+            )
+        )
         if cut:
             lines.append(cut)
         if keywords_only:
@@ -660,7 +822,16 @@ def answer(
     lines = [
         f"new {scope}: {len(shown)} of {total}, newest first, {_others(shown)} {data}"
     ]
-    lines.extend(_lines(conn, viewer, shown, moment, handlers.TEXT_FETCHED))
+    lines.extend(
+        _lines(
+            conn,
+            viewer,
+            shown,
+            moment,
+            handlers.TEXT_FETCHED,
+            history=include_superseded,
+        )
+    )
     if total > len(shown):
         ways = ["add words to the query"]
         if limit < handlers.MAX_LIMIT:

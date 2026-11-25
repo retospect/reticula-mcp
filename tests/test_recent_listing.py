@@ -25,7 +25,7 @@ from reticula_mcp.search import recent as since_module
 from reticula_mcp.search import render
 from reticula_mcp.search.handlers import search
 from reticula_mcp.search.recent import parse_since
-from tests.graph_support import mk_hub, mk_note, share
+from tests.graph_support import current, mk_hub, mk_note, share
 from tests.search_support import use_hash_embedder
 from tests.test_recent_support import (
     Clock,
@@ -668,6 +668,53 @@ def test_include_superseded_shows_the_old_note_marked_superseded(
     assert shown_and_total(both) == (2, 2)
     assert "superseded" in line_of(both, old)
     assert "superseded" not in line_of(both, new)
+
+
+def test_a_superseded_note_is_left_out_as_the_default_view_leaves_it_out(
+    conn: Conn, make_account: Callable[..., Account], clock: Clock
+) -> None:
+    """The listing asks about the changed notes alone and applies the rule of
+    ``current_nodes`` to them itself (``_best_sql`` in search/recent.py). Each
+    way a newer note hides an older one or does not gives the same answer in
+    both: the same author, a common hub, a common hub with the author's
+    objection, no common hub, and a newer note the viewer cannot read."""
+    ana, bea = people(conn, make_account)
+    hub = shared_hub(conn, clock, bea, ana)
+    with clock.ago(days=20):
+        desk = mk_hub(conn, ana, "Desk")
+    cases = ("same author", "common hub", "objected", "other hub", "unreadable")
+    with clock.ago(days=3):
+        old = {
+            case: mk_note(conn, bea, f"{case}, as first written", hub=hub, title=case)
+            for case in cases
+        }
+    with clock.ago(days=1):
+        new = {
+            "same author": mk_note(
+                conn, bea, "Written again", hub=hub, supersedes=[old["same author"]]
+            ),
+            "common hub": mk_note(
+                conn, ana, "Put right", hub=hub, supersedes=[old["common hub"]]
+            ),
+            "objected": mk_note(
+                conn, ana, "Put right too", hub=hub, supersedes=[old["objected"]]
+            ),
+            "other hub": mk_note(
+                conn, ana, "Put right at home", hub=desk, supersedes=[old["other hub"]]
+            ),
+            "unreadable": mk_note(
+                conn, bea, "Kept back", private=True, supersedes=[old["unreadable"]]
+            ),
+        }
+        graph.link(conn, bea, ref=old["objected"], to=new["objected"], rel="disputes")
+    out = recent(conn, ana, limit=50)
+    got = set(listed(out))
+    still_current = current(conn, ana)
+    notes = [*old.values(), *new.values()]
+    assert got == {short(a) for a in notes if a in still_current}, out
+    assert not got & {short(old["same author"]), short(old["common hub"])}
+    assert {short(old[c]) for c in ("objected", "other hub", "unreadable")} <= got
+    assert short(new["unreadable"]) not in got
 
 
 # ------------------------------------------------------------- hub and kind
