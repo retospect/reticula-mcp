@@ -215,11 +215,13 @@ def link(
             api.remove_membership(conn, viewer, node["id"], hub["id"])
             return f"removed {node['address']} from hub {hub['address']}"
         _require_can_add(conn, viewer, hub)
-        if node["author"] != viewer.person_id:
+        own = node["author"] == viewer.person_id
+        if not own and node["kind"] == "hub":
             raise ReticulaError(
                 FORBIDDEN,
-                "you can only file your own notes and hubs",
-                hint="put your own note in that hub instead",
+                "you can only file your own hubs under a hub",
+                hint="a hub's filing decides who inherits access to what lies"
+                " beneath it, so only its author can change it",
             )
         before = conn.execute(
             "SELECT 1 FROM membership WHERE node_id = %s AND hub_node_id = %s"
@@ -228,7 +230,15 @@ def link(
         ).fetchone()
         api.add_membership(conn, viewer, node["id"], hub["id"])
         verb = "already filed" if before else "filed"
-        return f"{verb} {node['address']} under hub {hub['address']}"
+        out = f"{verb} {node['address']} under hub {hub['address']}"
+        if own:
+            return out
+        return (
+            f"{out} as your statement, to organise it.\n"
+            "Hub members who cannot already read this note will not see it: only"
+            " its author can share it into the hub.\n"
+            "next: ask the author to link it to the hub themselves"
+        )
     target = resolve_ref(conn, viewer, to)
     if node["author"] != viewer.person_id:
         raise ReticulaError(

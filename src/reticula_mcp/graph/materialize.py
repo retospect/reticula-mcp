@@ -11,11 +11,11 @@ record is applied (the log order), so a replay reproduces exactly what the
 original writes produced and a record ingested from elsewhere cannot widen
 anyone's access:
 
-* a membership counts only when filed by the atom's own author who could add
-  to the hub at that moment; an atom or hub reachable through a hub is only
-  ever one its author chose to file there;
-* a withdrawal is honoured from the statement's author and from the hub's
-  admin;
+* a membership statement is stored when its author could add to the hub at that
+  moment (and, for a hub, is the hub's author); it confers access only when
+  filed by the atom's own author (see ``readable_nodes``);
+* a withdrawal is honoured from the statement's author, the hub's admin and the
+  atom's author;
 * a grant is applied only when :func:`access.authorize_grant` allows it.
 """
 
@@ -211,19 +211,27 @@ def _apply_member(conn: Conn, rec: records.Record, payload: Row) -> None:
     existing = conn.execute(
         "SELECT id FROM membership WHERE address = %s", (rec.address,)
     ).fetchone()
+    # The hub's admin and the atom's author may withdraw every statement about
+    # the atom in that hub; anyone else only their own.
+    privileged = rec.author in (hub["author"], atom["author"])
     if withdrawn:
-        if existing is None and rec.author != hub["author"]:
+        if existing is None and not privileged:
             return  # a stranger's withdrawal of someone else's filing: ignored
-        if rec.author == hub["author"]:
-            # the hub's admin removes the atom from the hub, whoever filed it
+        if privileged and existing is None:
+            # a withdrawal under a new address is a moderation act: it clears
+            # every statement about the atom in that hub (a version of one's
+            # own statement withdraws only that statement)
             conn.execute(
                 "UPDATE membership SET withdrawn = true WHERE node_id = %s"
                 " AND hub_node_id = %s AND NOT withdrawn",
                 (atom["id"], hub["id"]),
             )
     else:
-        if rec.author != atom["author"]:
-            return  # you can only file your own atoms and hubs
+        # Anyone who can add to the hub may file an atom there (organising only:
+        # readable_nodes honours the atom author's own statements alone), but a
+        # hub's filing drives grant inheritance, so only its author files it.
+        if rec.author != atom["author"] and atom["kind"] == "hub":
+            return
         if not access.can_add_person(conn, rec.author, hub["id"]):
             return
     conn.execute(

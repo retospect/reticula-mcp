@@ -27,7 +27,7 @@ from reticula_mcp.errors import (
 from reticula_mcp.graph import access
 from reticula_mcp.graph.materialize import apply_record
 from reticula_mcp.graph.paper import normalize_ext_id
-from reticula_mcp.permissions import readable_nodes_sql
+from reticula_mcp.permissions import can_read, readable_nodes_sql
 from reticula_mcp.resolve import resolve_ref
 
 Row = dict[str, Any]
@@ -395,10 +395,13 @@ def _member_payload(atom: Row, hub: Row, withdrawn: bool) -> dict[str, Any]:
 
 
 def add_membership(conn: Conn, actor: Account, node_id: int, hub_node_id: int) -> None:
-    """File one of your own atoms or hubs under a hub you can add to.
+    """File an atom under a hub you can add to, as a signed statement of yours.
 
-    Idempotent. Refuses a filing that would close a cycle in the hub
-    hierarchy (the hierarchy is locked while that is checked).
+    The atom's author may file their own atoms and hubs. Anyone else may file
+    an atom (never a hub) they can read: the statement organises but confers no
+    access, because ``readable_nodes`` honours only statements by the atom's own
+    author. Idempotent per actor. Refuses a hub filing that would close a cycle
+    in the hub hierarchy (the hierarchy is locked while that is checked).
     """
     kind = conn.execute("SELECT kind FROM node WHERE id = %s", (node_id,)).fetchone()
     if kind is None:
@@ -408,11 +411,15 @@ def add_membership(conn: Conn, actor: Account, node_id: int, hub_node_id: int) -
     node = _lock_live_node(conn, node_id)
     hub = _live_hub(conn, hub_node_id)
     if node["author"] != actor.person_id:
-        raise ReticulaError(
-            FORBIDDEN,
-            "you can only file your own notes and hubs",
-            hint="write your own note in that hub instead",
-        )
+        if node["kind"] == "hub":
+            raise ReticulaError(
+                FORBIDDEN,
+                "you can only file your own hubs under a hub",
+                hint="a hub's filing decides who inherits access to what lies"
+                " beneath it, so only its author can change it",
+            )
+        if not can_read(conn, actor, node["id"]):
+            raise ReticulaError(NOT_FOUND, "no such note")
     if not access.can_add_person(conn, actor.person_id, hub["id"]):
         raise ReticulaError(FORBIDDEN, "you cannot add to that hub")
     if node["kind"] == "hub" and access.closes_cycle(conn, node["id"], hub["id"]):
@@ -453,7 +460,11 @@ def add_membership(conn: Conn, actor: Account, node_id: int, hub_node_id: int) -
 def remove_membership(
     conn: Conn, actor: Account, node_id: int, hub_node_id: int
 ) -> None:
-    """Withdraw an atom from a hub: the statement's author, or the hub's admin."""
+    """Withdraw an atom from a hub.
+
+    Allowed to the author of a statement (for their own), to the hub's admin and
+    to the atom's author (for every statement about the atom in that hub).
+    """
     node = node_row(conn, node_id)
     hub = conn.execute(
         "SELECT * FROM node WHERE id = %s AND kind = 'hub'", (hub_node_id,)
@@ -468,27 +479,37 @@ def remove_membership(
     if not rows:
         raise ReticulaError(NOT_FOUND, "that note is not filed under that hub")
     mine = [r for r in rows if r["author"] == actor.person_id]
-    if mine:
-        for row in mine:
-            head = records.head(conn, row["address"])
-            assert head is not None
-            rec = _append(
-                conn,
-                actor,
-                type="member",
-                address=row["address"],
-                payload=_member_payload(node, hub, True),
-                parents=[head.version_hash],
-                hub_id=_hub_id(hub),
-                audience="hub",
-            )
-            apply_record(conn, rec)
-        return
-    if hub["author"] != actor.person_id:
+    privileged = actor.person_id in (hub["author"], node["author"])
+    if not mine and not privileged:
         raise ReticulaError(
             FORBIDDEN,
-            "only the person who filed it or the hub's admin can remove it",
+            "only the person who filed it, the hub's admin or the note's author"
+            " can remove it",
         )
+    for row in mine:
+        head = records.head(conn, row["address"])
+        assert head is not None
+        rec = _append(
+            conn,
+            actor,
+            type="member",
+            address=row["address"],
+            payload=_member_payload(node, hub, True),
+            parents=[head.version_hash],
+            hub_id=_hub_id(hub),
+            audience="hub",
+        )
+        apply_record(conn, rec)
+    if not privileged:
+        return
+    # the hub's admin and the note's author also clear everyone else's statements
+    left = conn.execute(
+        "SELECT 1 FROM membership WHERE node_id = %s AND hub_node_id = %s"
+        " AND NOT withdrawn LIMIT 1",
+        (node_id, hub_node_id),
+    ).fetchone()
+    if left is None:
+        return
     rec = _append(
         conn,
         actor,
