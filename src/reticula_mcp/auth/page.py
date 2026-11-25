@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import ipaddress
 from html import escape
 from urllib.parse import quote, urlsplit
 
@@ -41,6 +42,8 @@ color:#fff;background:var(--acc);border:0;border-radius:.5rem;cursor:pointer}
 .err{color:var(--err);border:1px solid var(--err);border-radius:.5rem;\
 padding:.6rem .8rem;margin:1rem 0}
 code{font-size:.9em;word-break:break-all}
+.warn{border:2px solid var(--err);border-radius:.5rem;padding:.7rem .9rem;margin:1rem 0}
+.warn strong{color:var(--err)}
 """
 
 _STYLE_HASH = base64.b64encode(hashlib.sha256(STYLE.encode()).digest()).decode()
@@ -121,6 +124,7 @@ def sign_in_page(
     client_name: str,
     redirect_uri: str,
     signups_open: bool,
+    known_hosts: tuple[str, ...] = (),
     error: str | None = None,
     email: str = "",
     handle_value: str = "",
@@ -128,7 +132,6 @@ def sign_in_page(
 ) -> HTMLResponse:
     signup = mode == "signup"
     q = quote(handle, safe="")
-    host = urlsplit(redirect_uri).netloc
     tabs = (
         f'<nav aria-label="Mode">'
         f'<a href="/signin?req={q}&amp;mode=signin"'
@@ -171,13 +174,48 @@ def sign_in_page(
             f'<button type="submit">{"Create account and connect" if signup else "Sign in and connect"}</button>'
             "</form>"
         )
+    who, warning = _receiver(redirect_uri, known_hosts)
     body = (
         "<h1>Reticula</h1>"
-        f"<p><strong>{escape(client_name)}</strong> wants to connect to your Reticula "
-        "account.</p>"
+        f"<p>After you sign in, {who} gets access to your notes.</p>"
+        f'<p class="mut">It calls itself \u201c{escape(client_name)}\u201d (that name '
+        "is chosen by the application, not checked by this server).</p>"
+        f"{warning}"
+        '<p class="mut">You should only see this page right after you add this '
+        "server to your assistant.</p>"
         f"{tabs}{banner}{form}"
-        f'<p class="mut">Continuing connects {escape(client_name)} to the account you '
-        f"use here, and sends you back to <code>{escape(host)}</code>. You can "
-        "revoke the connection later.</p>"
+        '<p class="mut">You can revoke the connection later.</p>'
     )
     return respond(_shell("Connect to Reticula", body), status)
+
+
+def _receiver(redirect_uri: str, known_hosts: tuple[str, ...]) -> tuple[str, str]:
+    """Who gets access (HTML) and a warning block when it is an unfamiliar host.
+
+    The redirect URI is where the code goes, so its host is the one fact about
+    the receiver that a registering client cannot misstate.
+    """
+    parts = urlsplit(redirect_uri)
+    host = (parts.hostname or "").lower()
+    if _is_loopback(host):
+        port = f" (port {parts.port})" if parts.port else ""
+        return f"<strong>an application on this computer</strong>{port}", ""
+    who = f"<strong>{escape(host)}</strong>"
+    if host in known_hosts:
+        return who, ""
+    warning = (
+        '<div class="warn" role="alert"><p><strong>Unfamiliar address.</strong> '
+        f"This server does not know {escape(host)}. Continue only if you yourself "
+        "started this connection from your assistant a moment ago, and never "
+        "because of a link someone sent you.</p></div>"
+    )
+    return who, warning
+
+
+def _is_loopback(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False

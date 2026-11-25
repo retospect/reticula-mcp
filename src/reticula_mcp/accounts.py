@@ -27,7 +27,7 @@ from reticula_mcp.errors import BAD_INPUT, CONFLICT, NOT_FOUND, ReticulaError
 SYSTEM_HANDLE = "reticula"
 SYSTEM_EMAIL = "system@reticula.invalid"
 UNUSABLE_PASSWORD = "!"
-MIN_PASSWORD_LENGTH = 8
+MIN_PASSWORD_LENGTH = 10
 MAX_PASSWORD_LENGTH = 1024
 
 HANDLE_RE = re.compile(r"^[a-z0-9_-]{3,32}$")
@@ -494,6 +494,8 @@ def lookup_token(conn: Conn, token: str) -> tuple[Account, TokenInfo] | None:
         "UPDATE oauth_token SET last_used_at = now()"
         " WHERE token_hash = %s AND kind = 'access' AND revoked_at IS NULL"
         " AND (expires_at IS NULL OR expires_at > now())"
+        " AND (grant_id IS NULL OR EXISTS (SELECT 1 FROM oauth_grant g"
+        "      WHERE g.grant_id = oauth_token.grant_id AND g.revoked_at IS NULL))"
         " RETURNING id, account_id, kind, client_id, scopes, resource, grant_id,"
         " label, expires_at",
         (hash_token(token),),

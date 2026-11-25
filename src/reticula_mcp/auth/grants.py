@@ -164,15 +164,64 @@ def revoke_connection(conn: Conn, account_id: int, connection_id: int) -> Connec
     return Connection(**_conn_row(row))
 
 
-def purge_stale(conn: Conn) -> None:
-    """Housekeeping: drop expired parked requests, old codes, unused clients (30 days)."""
-    conn.execute("DELETE FROM oauth_pending WHERE expires_at < now()")
+@dataclass(frozen=True)
+class OperatorToken:
+    id: int
+    label: str | None
+    created_at: datetime
+    last_used_at: datetime | None
+    expires_at: datetime | None
+    revoked_at: datetime | None
+
+
+def list_operator_tokens(conn: Conn, account_id: int) -> list[OperatorToken]:
+    """Tokens minted with ``reticula-mcp token``: access tokens with no client/grant."""
+    rows = conn.execute(
+        "SELECT id, label, created_at, last_used_at, expires_at, revoked_at"
+        " FROM oauth_token WHERE account_id = %s AND kind = 'access'"
+        " AND client_id IS NULL AND grant_id IS NULL ORDER BY id",
+        (account_id,),
+    ).fetchall()
+    return [OperatorToken(**r) for r in rows]
+
+
+def revoke_operator_token(conn: Conn, account_id: int, token_id: int) -> OperatorToken:
+    row = conn.execute(
+        "SELECT id, label, created_at, last_used_at, expires_at, revoked_at"
+        " FROM oauth_token WHERE id = %s AND account_id = %s AND kind = 'access'"
+        " AND client_id IS NULL AND grant_id IS NULL",
+        (token_id, account_id),
+    ).fetchone()
+    if row is None:
+        raise ReticulaError(
+            NOT_FOUND,
+            f"no operator token {token_id} on that account",
+            hint="`reticula-mcp connections list --email ...` shows the ids",
+        )
     conn.execute(
-        "DELETE FROM oauth_code WHERE expires_at < now() - %s::interval",
-        (timedelta(days=1),),
+        "UPDATE oauth_token SET revoked_at = now() WHERE id = %s AND revoked_at IS NULL",
+        (token_id,),
+    )
+    return OperatorToken(**row)
+
+
+def purge_stale(conn: Conn) -> None:
+    """Housekeeping: drop expired parked requests, spent codes and tokens, unused clients.
+
+    Consumed refresh tokens are kept until they would have expired anyway (a
+    replay of one must still be recognised and kill its grant); only then, plus
+    three days, do they go. Operator tokens never expire and are never purged.
+    """
+    grace = timedelta(days=3)
+    conn.execute("DELETE FROM oauth_pending WHERE expires_at < now()")
+    conn.execute("DELETE FROM oauth_code WHERE expires_at < now() - %s", (grace,))
+    conn.execute(
+        "DELETE FROM oauth_token WHERE expires_at IS NOT NULL"
+        " AND expires_at < now() - %s AND client_id IS NOT NULL",
+        (grace,),
     )
     conn.execute(
-        "DELETE FROM oauth_client c WHERE c.created_at < now() - %s::interval"
+        "DELETE FROM oauth_client c WHERE c.created_at < now() - %s"
         " AND NOT EXISTS (SELECT 1 FROM oauth_token t WHERE t.client_id = c.client_id)"
         " AND NOT EXISTS (SELECT 1 FROM oauth_grant g WHERE g.client_id = c.client_id)"
         " AND NOT EXISTS (SELECT 1 FROM oauth_code k WHERE k.client_id = c.client_id)"
