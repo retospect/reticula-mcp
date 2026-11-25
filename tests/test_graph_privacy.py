@@ -71,7 +71,8 @@ def test_new_account_cannot_learn_other_handles_or_the_account_count(
     full = handlers.share(conn, system, hub=hub["address"])
     for name in (*names, "newcomer"):
         assert f"@{name} read" in full
-    assert "4 people" in line_for(content.start(conn, system), hub["address"][-8:])
+    owner_line = line_for(content.start(conn, system), hub["address"][-8:])
+    assert "shared with @" in owner_line and "@newcomer" in owner_line
 
 
 def test_reader_of_a_personal_hub_does_not_see_the_other_readers(conn, make_account):
@@ -90,7 +91,9 @@ def test_reader_of_a_personal_hub_does_not_see_the_other_readers(conn, make_acco
     # the admin sees everyone and the count
     full = handlers.share(conn, alice, hub=hub)
     assert f"@{bob.handle} read" in full and f"@{carol.handle} read" in full
-    assert "3 people" in line_for(content.start(conn, alice), "Diary")
+    assert f"shared with @{bob.handle}, @{carol.handle}," in line_for(
+        content.start(conn, alice), "Diary"
+    )
     # a reader cannot probe handles either
     assert err(
         handlers.share, conn, bob, hub=hub, person=f"@{carol.handle}", mode="none"
@@ -107,7 +110,11 @@ def test_members_of_a_group_hub_who_can_add_see_everyone(conn, make_account):
         full = handlers.share(conn, viewer, hub=hub)
         for other in (alice, bob, carol, dan):
             assert f"@{other.handle}" in full
-        assert "4 people" in line_for(content.start(conn, viewer), "Team")
+        team = line_for(content.start(conn, viewer), "Team")
+        if viewer is alice:
+            assert f"shared with @{bob.handle}, @{carol.handle}, @{dan.handle}," in team
+        else:
+            assert "4 people have access" in team
         assert "only to people who can add" not in full
     # the read-only member sees only themself and the owner
     limited = handlers.share(conn, dan, hub=hub)

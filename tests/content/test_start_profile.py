@@ -48,14 +48,14 @@ def test_start_lists_own_and_shared_hubs_with_modes(conn, make_account):
     assert "Your hubs (1):" in out
     beta_line = next(line for line in out.splitlines() if line.startswith('- "Beta"'))
     assert f"id {short_id(beta['address'])}" in beta_line
-    assert "owner" in beta_line and "1 person, 1 note" in beta_line
+    assert "owner" in beta_line and "shared with nobody, 1 note" in beta_line
     alpha_line = next(
         line for line in out.splitlines() if line.startswith('- @alice "Alpha"')
     )
     assert f"id {short_id(alpha['address'])}" in alpha_line
     assert " add " in alpha_line
     # two people hold Alpha (owner and bob); the private note is not counted
-    assert "2 people, 1 note" in alpha_line
+    assert "2 people have access, 1 note" in alpha_line
     assert "Nothing is saved" not in out
 
     # the other side sees its own hub as owner

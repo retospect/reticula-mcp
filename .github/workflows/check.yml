@@ -38,3 +38,30 @@ jobs:
           uv run python scripts/gen_vectors.py
           git diff --exit-code tests/vectors
       - run: uv build
+      - name: The wheel is complete and its command runs
+        run: scripts/check-wheel
+
+  # The container image, built from the checkout, with the database beside it:
+  # the server starts, runs as its own user, and an assistant's whole path
+  # works (discovery, sign-up, token, the tools over MCP).
+  image:
+    runs-on: ubuntu-latest
+    env:
+      # Keyword search only, so the job does not depend on a model download.
+      RETICULA_DEV_EMBEDDER: hash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: The production compose files are valid
+        run: >-
+          RETICULA_DB_PASSWORD=check RETICULA_VERSION=0.0.0
+          docker compose -f deploy/compose.yaml -f deploy/compose.source.yaml config --quiet
+      - name: Build the image and start the stack
+        run: docker compose -f deploy/compose.dev.yaml up -d --build --wait
+      - name: The server does not run as root
+        run: test "$(docker compose -f deploy/compose.dev.yaml exec -T app id -u)" = 10001
+      - name: Smoke test
+        run: scripts/smoke http://127.0.0.1:8788
+      - name: Container logs
+        if: always()
+        run: docker compose -f deploy/compose.dev.yaml logs --no-color --tail 200

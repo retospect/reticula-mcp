@@ -54,7 +54,7 @@ services:
     ports:
       - "127.0.0.1:${RETICULA_PORT:-8787}:8787"
     volumes:
-      # The embedding model is downloaded on the first search and kept here.
+      # The embedding model is downloaded at the first start and kept here.
       - reticula-models:/home/reticula/.cache
     healthcheck:
       test: ["CMD", "reticula-healthcheck"]
