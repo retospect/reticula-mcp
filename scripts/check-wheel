@@ -1,0 +1,120 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
+"""Check the wheel that `uv build` left in dist/ before it is published.
+
+    uv build && scripts/check-wheel
+
+It checks that the version is the same in pyproject.toml, in the package and in
+the wheel, that the wheel holds every file of src/reticula_mcp (migrations and
+instruction files included), that it declares the dependencies and the
+`reticula-mcp` command, and that the command runs after the wheel is installed
+into a new, empty environment. One line per check; exit status 1 on a failure.
+"""
+
+from __future__ import annotations
+
+import re
+import subprocess
+import sys
+import tempfile
+import tomllib
+import zipfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+PACKAGE = "reticula_mcp"
+
+
+def ok(step: str, detail: str) -> None:
+    print(f"ok    {step:<12}  {detail}")
+
+
+def fail(step: str, detail: str) -> None:
+    print(f"FAIL  {step:<12}  {detail}")
+    sys.exit(1)
+
+
+def main() -> None:
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text("utf-8"))["project"]
+    version = project["version"]
+    init = (ROOT / "src" / PACKAGE / "__init__.py").read_text("utf-8")
+    found = re.search(r'^__version__ = "([^"]+)"', init, re.M)
+    if not found or found.group(1) != version:
+        fail(
+            "version",
+            f"pyproject.toml says {version}, {PACKAGE}/__init__.py says"
+            f" {found.group(1) if found else 'nothing'}",
+        )
+    ok("version", f"{version} in pyproject.toml and in the package")
+
+    wheel = ROOT / "dist" / f"{PACKAGE}-{version}-py3-none-any.whl"
+    if not wheel.is_file():
+        fail("wheel", f"{wheel.relative_to(ROOT)} is missing; run `uv build` first")
+    with zipfile.ZipFile(wheel) as archive:
+        names = set(archive.namelist())
+        info = f"{PACKAGE}-{version}.dist-info"
+        metadata = archive.read(f"{info}/METADATA").decode("utf-8")
+        entry_points = archive.read(f"{info}/entry_points.txt").decode("utf-8")
+
+    source = ROOT / "src"
+    tree = {
+        path.relative_to(source).as_posix()
+        for path in (source / PACKAGE).rglob("*")
+        if path.is_file() and "__pycache__" not in path.parts
+    }
+    packed = {name for name in names if name.startswith(f"{PACKAGE}/")}
+    if tree != packed:
+        missing = ", ".join(sorted(tree - packed)) or "none"
+        extra = ", ".join(sorted(packed - tree)) or "none"
+        fail("files", f"missing from the wheel: {missing}; not in the tree: {extra}")
+    migrations = sum(1 for name in packed if name.endswith(".sql"))
+    other = sum(1 for name in packed if not name.endswith((".py", ".sql")))
+    ok(
+        "files",
+        f"{len(packed)} files, the same as in src/{PACKAGE}:"
+        f" {migrations} migrations, {other} other data files",
+    )
+
+    if f"Version: {version}" not in metadata.splitlines():
+        fail("metadata", f"the wheel does not say Version: {version}")
+    declared = re.findall(r"^Requires-Dist: ([A-Za-z0-9_.-]+)", metadata, re.M)
+    wanted = [
+        re.match(r"[A-Za-z0-9_.-]+", dep).group(0)  # type: ignore[union-attr]
+        for dep in project["dependencies"]
+    ]
+    absent = [name for name in wanted if name not in declared]
+    if absent:
+        fail("metadata", f"dependencies not declared: {', '.join(absent)}")
+    ok("metadata", f"version {version}, {len(wanted)} dependencies declared")
+
+    for name, target in project["scripts"].items():
+        if f"{name} = {target}" not in entry_points:
+            fail("command", f"the wheel does not declare {name} = {target}")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        env = Path(tmp) / "env"
+        for command in (
+            ["uv", "venv", "--quiet", str(env)],
+            ["uv", "pip", "install", "--quiet", "--python", str(env), str(wheel)],
+        ):
+            done = subprocess.run(command, capture_output=True, text=True, cwd=tmp)
+            if done.returncode != 0:
+                fail("install", done.stderr.strip().splitlines()[-1])
+        # Run from the empty directory, so the checkout cannot be imported.
+        done = subprocess.run(
+            [str(env / "bin" / "reticula-mcp"), "--version"],
+            capture_output=True,
+            text=True,
+            cwd=tmp,
+        )
+        said = (done.stdout + done.stderr).strip()
+        if done.returncode != 0 or said != version:
+            fail("command", f"`reticula-mcp --version` said {said!r}")
+    ok("command", f"installed into an empty environment, --version says {said}")
+
+
+if __name__ == "__main__":
+    main()
