@@ -13,7 +13,7 @@ The commands are written for the Docker Compose files in [`deploy/`](../deploy) 
    cd reticula-mcp/deploy
    ```
 
-   For release 0.1.1 the option is `--branch v0.1.1`. The releases are listed on [PyPI](https://pypi.org/project/reticula-mcp/#history). `git` prints a warning that the tag is not a commit and a note about a detached HEAD. Both are expected.
+   For release 0.2.0 the option is `--branch v0.2.0`. The releases are listed on [PyPI](https://pypi.org/project/reticula-mcp/#history). `git` prints a warning that the tag is not a commit and a note about a detached HEAD. Both are expected.
 
    The files under `deploy/` at a tag belong to that release, and so does this guide. Read it at the same tag: the main branch can describe things a release does not have yet.
 
@@ -26,7 +26,7 @@ The commands are written for the Docker Compose files in [`deploy/`](../deploy) 
    Set two values in `.env`:
 
    - `RETICULA_DB_PASSWORD`: generate one with `openssl rand -hex 24`.
-   - `RETICULA_VERSION`: the release you cloned, without the `v`. For the tag `v0.1.1` it is `0.1.1`.
+   - `RETICULA_VERSION`: the release you cloned, without the `v`. For the tag `v0.2.0` it is `0.2.0`.
 
    Leave `RETICULA_PUBLIC_URL` and `RETICULA_TRUSTED_PROXIES` empty for now.
 
@@ -56,7 +56,7 @@ The commands are written for the Docker Compose files in [`deploy/`](../deploy) 
    curl -s -w '\n%{http_code}\n' http://127.0.0.1:8787/healthz
    ```
 
-   The answer is `{"status":"ok","version":"0.1.1"}`, with the installed version, and `200` on the next line. When the database does not answer, it is `{"status":"unavailable","version":"0.1.1"}` and `503`. `docker compose ps` shows the same result as `healthy` or `unhealthy`.
+   The answer is `{"status":"ok","version":"0.2.0"}`, with the installed version, and `200` on the next line. When the database does not answer, it is `{"status":"unavailable","version":"0.2.0"}` and `503`. `docker compose ps` shows the same result as `healthy` or `unhealthy`.
 
 5. Run the smoke test. It needs [uv](https://docs.astral.sh/uv/).
 
@@ -408,6 +408,8 @@ app-1  | applied 0301_title_words.sql
 
 - `0203_shared_rules` defines three SQL functions and changes no table.
 - `0301_title_words` adds one index on the note table, over the words of each title. No column is added and no row is changed. The index is built at that start, before the server answers. On a test database with 30,041 notes the build took 36 to 83 milliseconds.
+
+0.2.0 adds no migration to those of 0.1.1. A switch from 0.1.1 to 0.2.0 applies none, and 0.1.1 started again on the same database finds no migration it does not know, so the check described under "Go back to the older version" does not refuse. That is read from the migration files of the two releases, which are the same 14. It has not been run yet.
 
 The drill went from 0.1.0 to 0.1.1, both installed from PyPI. Building the image of 0.1.1 took 22 seconds with no step taken from Docker's build cache. With the image built, the command of step 3 took 7 to 8 seconds. The server was away for one to two seconds: `/healthz` was asked every 0.1 seconds during the switches, and the longest time without an answer was 1.1 and 1.5 seconds in the two switches that applied both migrations, and 1.4 seconds in one that had nothing to apply.
 
