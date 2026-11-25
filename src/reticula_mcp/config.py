@@ -44,6 +44,8 @@ class Settings:
     register_rate: str = "20/hour"  # OAuth client registrations per IP
     # Peers whose X-Forwarded-For is believed (IPs or CIDRs); empty = trust nobody.
     trusted_proxies: tuple[str, ...] = ()
+    # Hosts an assistant's connector returns to that the sign-in page does not warn about.
+    known_clients: tuple[str, ...] = ("claude.ai", "claude.com")
     embed_model: str | None = None  # model name for the fastembed embedder
     # Stateless streamable HTTP: no server-side MCP sessions, so a restart or a
     # second worker never strands a connected assistant.
@@ -69,6 +71,13 @@ class Settings:
             trusted_proxies=tuple(
                 part.strip()
                 for part in (get("TRUSTED_PROXIES") or "").split(",")
+                if part.strip()
+            ),
+            known_clients=tuple(
+                part.strip().lower()
+                for part in (get("KNOWN_CLIENTS", "claude.ai,claude.com") or "").split(
+                    ","
+                )
                 if part.strip()
             ),
             embed_model=get("EMBED_MODEL"),

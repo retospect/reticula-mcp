@@ -111,6 +111,11 @@ Coordinator decisions (25 Nov 2026):
 * Identity records carry `audience: "public"`.
 * `node.author_account_id` is set from the `account` table by person ID, also on rebuild.
 * `create_account` raising `Conflict` for a known e-mail is accepted in "create account" mode (sign-ups are rate-limited); the sign-in mode must not reveal whether an e-mail exists.
+* Filing: anyone who can read a note and can add to a hub may file it there (their own signed statement). Only a statement by the note's own author lets hub members read it; a statement by anyone else organises and confers nothing. Filing a hub under a hub stays author-only, because it decides grant inheritance.
+* Who sees a hub's access list: the hub's admin and people with `add` access see every entry. A viewer with only `read` access sees the owner and their own entry, and no count of the others (`get`, `share`, `start`, `profile`). Reason: every account reads the shipped instructions hub, so the full list would be a list of all accounts.
+* `put(kind="debug")` with no hub files itself into the system account's debug hub. Ordinary accounts cannot read that hub.
+* The sign-in page states the host that receives access as its main line and warns for hosts outside `RETICULA_KNOWN_CLIENTS` (loopback never warns). Client registration is open, so the client's self-given name proves nothing.
+* A grant's `revoked_at` is authoritative: no token of a revoked grant is accepted, whatever the token row says.
 * A lane that needs a new dependency adds it to `pyproject.toml`, runs `uv lock` in its worktree, and says so in its report; the coordinator re-locks at merge.
 
 Other facts: `records.sign_and_append` enforces local-write rules (own address, first version has no parents, parents exist and share the address, nothing after a tombstone, identity signed by `root`, everything else by `k1`); `records.append_signed(conn, envelope, signature)` is the lower-level ingest path (also the federation entry later) and stores bytes verbatim. `records.head` = newest row by log id.
