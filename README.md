@@ -1,6 +1,8 @@
 # Reticula MCP
 
-Reticula MCP is a server that gives an AI assistant a long-term memory it can share. The assistant saves small notes through MCP tools (MCP, the Model Context Protocol, is how an assistant calls tools on a server). Notes are filed under hubs, and a hub can be shared with other people who have an account on the same server. Every note has a permanent global address and an Ed25519 signature from the moment it is written. The server is written in Python and stores everything in PostgreSQL with pgvector.
+Reticula MCP gives your AI assistants one long-term memory that belongs to you. An assistant saves small notes through MCP tools (MCP, the Model Context Protocol, is how an assistant calls tools on a server) and finds them again by keywords and by meaning. The notes are kept on a server you run or choose, not inside the assistant. Claude Code, claude.ai, the Claude apps and any other MCP client that can sign in read the same notes, so you can change the model or the service and keep what it knew.
+
+Notes can be grouped under hubs, and a hub can be shared with other people who have an account on the same server. Every note has a permanent global address and an Ed25519 signature from the moment it is written, so that servers can later exchange notes without rewriting them. That exchange (federation) is not built yet. The server is written in Python and stores everything in PostgreSQL with pgvector.
 
 Reticula MCP is not related to the Reticulum mesh network and does not run on it.
 

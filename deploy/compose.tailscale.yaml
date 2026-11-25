@@ -1,0 +1,54 @@
+# A Tailscale node of its own for this instance, in a container beside the
+# server. For a machine whose port 443 is already taken: the node has its own
+# name, <TS_HOSTNAME>.<tailnet>.ts.net, and its own port 443, on which Tailscale
+# Funnel serves the instance to the internet. Nothing is published on the host.
+#
+# Used together with compose.yaml. In .env:
+#
+#   COMPOSE_FILE=compose.yaml:compose.tailscale.yaml
+#   TS_HOSTNAME=notes
+#   TS_AUTHKEY=
+#
+# With TS_AUTHKEY empty the node asks for a sign-in: the link is in
+# `docker compose logs tailscale`. docs/operating.md, "Tailscale Funnel from a
+# container", has the steps, the admin-console part and the values for
+# RETICULA_PUBLIC_URL and RETICULA_TRUSTED_PROXIES.
+
+services:
+  tailscale:
+    image: tailscale/tailscale:v1.104.7
+    restart: unless-stopped
+    environment:
+      # The name of the node in the tailnet, and the first label of its public
+      # name. Machine names of a tailnet with HTTPS certificates are public.
+      TS_HOSTNAME: ${TS_HOSTNAME:?set TS_HOSTNAME in .env}
+      # Optional. Used for the first sign-in only (TS_AUTH_ONCE).
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
+      TS_AUTH_ONCE: "true"
+      # Optional, for example --advertise-tags=tag:server.
+      TS_EXTRA_ARGS: ${TS_EXTRA_ARGS:-}
+      # How long a start may take before the container gives up and starts
+      # again. The default is 60 seconds, and each start prints a new sign-in
+      # link, so without a key there would be one minute per link.
+      TS_BOOT_TIMEOUT: 15m
+      # The node's identity. Without the volume every new container would be a
+      # new node with a new name.
+      TS_STATE_DIR: /var/lib/tailscale
+      # Userspace networking: no NET_ADMIN, no /dev/net/tun.
+      TS_USERSPACE: "true"
+      # Funnel on 443, proxied to http://app:8787 over the compose network.
+      TS_SERVE_CONFIG: /config/serve.json
+    volumes:
+      - reticula-tailscale:/var/lib/tailscale
+      # The directory, not the file: the container watches it for changes.
+      - ./tailscale:/config:ro
+    networks:
+      default:
+        # A fixed address, because the server has to be told which peer's
+        # X-Forwarded-For it may believe: this is the value for
+        # RETICULA_TRUSTED_PROXIES. If RETICULA_SUBNET is set, set
+        # RETICULA_TAILSCALE_ADDRESS to an address high in that subnet.
+        ipv4_address: ${RETICULA_TAILSCALE_ADDRESS:-172.31.88.250}
+
+volumes:
+  reticula-tailscale:
