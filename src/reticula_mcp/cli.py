@@ -51,7 +51,14 @@ def _serve(settings: Settings, auto_migrate: bool) -> int:
             f"{len(todo)} migration(s) pending (e.g. {todo[0].path.name})",
             hint="run `reticula-mcp migrate` or start with `serve --migrate`",
         )
-    uvicorn.run(build_app(settings), host=settings.host, port=settings.port)
+    # proxy_headers off: uvicorn would otherwise believe X-Forwarded-For from any
+    # loopback peer. Whose header is believed is RETICULA_TRUSTED_PROXIES' job.
+    uvicorn.run(
+        build_app(settings),
+        host=settings.host,
+        port=settings.port,
+        proxy_headers=False,
+    )
     return 0
 
 
