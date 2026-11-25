@@ -1,0 +1,797 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["mcp>=1.30,<2", "httpx>=0.27"]
+# ///
+"""scripts/oauth-client-check: connect the way a client built on the MCP Python SDK does.
+
+    scripts/oauth-client-check https://reticula.example.com
+    scripts/oauth-client-check http://127.0.0.1:8788 --email me@example.com   (SMOKE_PASSWORD set)
+
+scripts/smoke walks the sign-in flow with requests written for this server. Here
+the OAuth client of the `mcp` package (mcp.client.auth.OAuthClientProvider, with
+its defaults) walks it: it finds the server's metadata, registers itself, asks
+for the sign-in page, trades the code for a token, calls `start`, and renews the
+token once it has expired. This script does only what a person with a browser
+would do, which is to fill in the sign-in page. It reads along and prints one
+line per step; exit 0 only when every step passed.
+
+For the renewal the client is told that its access token has expired: the expiry
+it keeps is set to the past. Nothing is changed on the server. The last step
+sends the first refresh token a second time. The server must refuse it and
+revoke the connection, which also ends every token of this run.
+
+It signs up a throwaway account (or signs in with --email). The last block lists
+what stays on the instance. No secret (token, code, password, verifier, CSRF
+value, sign-in handle) is ever printed.
+
+It needs nothing from this repository: copy the file to any machine with uv.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import html
+import importlib.metadata
+import json
+import logging
+import os
+import re
+import secrets
+import socket
+import ssl
+import sys
+import time
+import traceback
+from dataclasses import dataclass, field
+from datetime import timedelta
+from typing import Any, NoReturn
+from urllib.parse import parse_qs, parse_qsl, urlsplit
+
+import httpx
+from mcp import ClientSession, types
+from mcp.client.auth import OAuthClientProvider, TokenStorage
+from mcp.client.streamable_http import streamable_http_client
+from mcp.shared.auth import OAuthClientInformationFull, OAuthClientMetadata, OAuthToken
+
+REDIRECT = "http://127.0.0.1:53682/callback"
+CLIENT_NAME = "MCP Python SDK client check"
+STEP_WIDTH = 14
+TOOLS_LIST = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+
+
+class Fail(Exception):
+    """A step did not pass; the message is the reason (one line, already safe)."""
+
+
+@dataclass
+class Run:
+    base: str
+    timeout: float
+    debug: bool
+    verify: ssl.SSLContext | bool
+    existing: bool
+    email: str
+    handle: str
+    password: str
+    secret_values: list[str] = field(default_factory=list)
+    step: str = "setup"
+    started: float = 0.0
+    failure: tuple[str, str] | None = None
+    # What exists on the instance because of this run.
+    account_done: bool = False
+    client_id: str = ""
+    access: str = ""  # the newest pair
+    refresh: str = ""
+    first_refresh: str = ""
+    token_url: str = ""
+    revoke_url: str = ""
+    revoked: bool = False
+
+    # --- output -------------------------------------------------------------
+
+    def hide(self, value: str) -> str:
+        """Remember a secret so it can never appear in a line; returns it."""
+        if value and value not in self.secret_values:
+            self.secret_values.append(value)
+        return value
+
+    def scrub(self, text: str) -> str:
+        for value in self.secret_values:
+            text = text.replace(value, "[hidden]")
+        return text
+
+    def clean(self, text: str, limit: int = 300) -> str:
+        text = " ".join(self.scrub(text).split())
+        return text if len(text) <= limit else text[: limit - 3] + "..."
+
+    def begin(self, name: str) -> None:
+        self.step = name
+        self.started = time.monotonic()
+
+    def ok(self, fact: str = "") -> None:
+        took = time.monotonic() - self.started
+        fact = self.clean(fact, 150)
+        print(f"ok    {self.step:<{STEP_WIDTH}}  {fact}  ({took:.1f}s)")
+
+    def fail_line(self, reason: str, name: str | None = None) -> None:
+        print(f"FAIL  {name or self.step:<{STEP_WIDTH}}  {self.clean(reason)}")
+
+    def record(self, exc: BaseException) -> None:
+        """Keep the first failure (step and reason) for the final report."""
+        if self.failure is not None:
+            return
+        leaf = exc
+        while isinstance(leaf, BaseExceptionGroup) and leaf.exceptions:
+            leaf = leaf.exceptions[0]
+        if isinstance(leaf, Fail):
+            reason = str(leaf)
+        else:
+            reason = f"{type(leaf).__name__}: {leaf}"
+        self.failure = (self.step, self.clean(reason))
+        self.fail_line(reason)
+        if self.debug:
+            text = "".join(traceback.format_exception(leaf))
+            print(self.scrub(text), file=sys.stderr)
+
+
+def fail(reason: str) -> NoReturn:
+    raise Fail(reason)
+
+
+# --- small helpers ---------------------------------------------------------------
+
+
+def query_of(location: str) -> dict[str, str]:
+    return {k: v[0] for k, v in parse_qs(urlsplit(location).query).items()}
+
+
+def form_field(page: str, name: str) -> str:
+    for tag in re.findall(r"<input[^>]*>", page):
+        attrs = dict(re.findall(r'([\w-]+)="([^"]*)"', tag))
+        if attrs.get("name") == name:
+            return html.unescape(attrs.get("value", ""))
+    fail(f"the sign-in page has no {name} field")
+
+
+def why(r: httpx.Response) -> str:
+    """HTTP status plus the server's own short reason, without printing a page."""
+    detail = ""
+    ctype = r.headers.get("content-type", "")
+    if "json" in ctype:
+        try:
+            body = r.json()
+        except ValueError:
+            body = None
+        if isinstance(body, dict):
+            parts = [
+                str(body.get(k)) for k in ("error", "error_description") if body.get(k)
+            ]
+            detail = ": ".join(parts)
+    elif "html" in ctype:
+        alert = re.search(r'role="alert">(.*?)</p>', r.text, re.S)
+        title = re.search(r"<title>(.*?)</title>", r.text, re.S)
+        found = alert or title
+        if found:
+            detail = html.unescape(re.sub(r"<[^>]+>", "", found.group(1)))
+    return f"HTTP {r.status_code}" + (f", {detail}" if detail else "")
+
+
+def json_body(r: httpx.Response, what: str) -> dict[str, Any]:
+    try:
+        body = r.json()
+    except ValueError:
+        fail(f"{what} is not JSON ({why(r)})")
+    if not isinstance(body, dict):
+        fail(f"{what} is not a JSON object")
+    return body
+
+
+def is_url(value: Any) -> bool:
+    return isinstance(value, str) and value.startswith(("http://", "https://"))
+
+
+def under(url: str, base: str) -> bool:
+    return url == base or url.startswith(base + "/")
+
+
+def install_resolver(entries: list[str]) -> None:
+    """Like curl --resolve: these names resolve to the given address, this process only."""
+    table: dict[str, str] = {}
+    for entry in entries:
+        host, sep, address = entry.partition("=")
+        if not sep or not host or not address:
+            fail(f"--resolve wants HOST=ADDRESS, got {entry!r}")
+        table[host.lower()] = address
+    real = socket.getaddrinfo
+
+    def patched(host: Any, *args: Any, **kw: Any) -> Any:
+        # anyio (the async client) passes the host as bytes.
+        name = host.decode("ascii", "replace") if isinstance(host, bytes) else host
+        if isinstance(name, str) and name.lower() in table:
+            host = table[name.lower()]
+        return real(host, *args, **kw)
+
+    socket.getaddrinfo = patched
+
+
+# --- what this script adds to the SDK's client -----------------------------------
+
+
+class Memory(TokenStorage):
+    """The client's token storage; a real client keeps this on disk."""
+
+    def __init__(self) -> None:
+        self.tokens: OAuthToken | None = None
+        self.client: OAuthClientInformationFull | None = None
+
+    async def get_tokens(self) -> OAuthToken | None:
+        return self.tokens
+
+    async def set_tokens(self, tokens: OAuthToken) -> None:
+        self.tokens = tokens
+
+    async def get_client_info(self) -> OAuthClientInformationFull | None:
+        return self.client
+
+    async def set_client_info(self, client_info: OAuthClientInformationFull) -> None:
+        self.client = client_info
+
+
+class Watch:
+    """Reads along while the SDK's client talks to the server; prints its steps.
+
+    These are httpx event hooks on the client's own connection. A failure is
+    recorded here, where the step is known, and then raised to end the flow.
+    """
+
+    def __init__(self, run: Run) -> None:
+        self.run = run
+        self.mcp_path = urlsplit(run.base).path + "/mcp"
+        self.register_url = f"{run.base}/register"
+        self.discovery: list[tuple[str, int]] = []
+        self.metadata_found = False
+        self.refreshes = 0
+        self.bearer = ""
+
+    @staticmethod
+    def address(request: httpx.Request) -> str:
+        return str(request.url.copy_with(query=None))
+
+    @staticmethod
+    def form(request: httpx.Request) -> dict[str, str]:
+        return dict(parse_qsl(request.content.decode()))
+
+    async def on_request(self, request: httpx.Request) -> None:
+        run = self.run
+        if request.url.path == self.mcp_path:
+            self.bearer = request.headers.get("authorization", "").removeprefix(
+                "Bearer "
+            )
+        elif "/.well-known/" in request.url.path:
+            if not self.discovery:
+                run.begin("discovery")
+        elif self.address(request) == self.register_url:
+            self.need_metadata()
+            run.begin("register")
+        elif self.address(request) == run.token_url:
+            if self.form(request).get("grant_type") == "authorization_code":
+                run.begin("token")
+
+    def need_metadata(self) -> None:
+        """The client goes on with built-in addresses when it found no metadata."""
+        if self.metadata_found:
+            return
+        answers = ", ".join(str(status) for _, status in self.discovery)
+        exc = Fail(
+            "the client found no authorization server metadata; its"
+            f" {len(self.discovery)} discovery requests answered: {answers or 'none'}"
+        )
+        self.run.record(exc)
+        raise exc
+
+    async def on_response(self, response: httpx.Response) -> None:
+        request = response.request
+        try:
+            if request.url.path == self.mcp_path:
+                self.mcp_answer(request, response)
+            elif "/.well-known/" in request.url.path:
+                await self.discovery_answer(request, response)
+            elif self.address(request) == self.register_url:
+                await self.register_answer(request, response)
+            elif self.address(request) == self.run.token_url:
+                await self.token_answer(request, response)
+        except Exception as exc:
+            self.run.record(exc)
+            raise
+
+    def mcp_answer(self, request: httpx.Request, response: httpx.Response) -> None:
+        run, status = self.run, response.status_code
+        if request.method != "POST":
+            return
+        if "authorization" in request.headers:
+            if status in (401, 403):
+                fail(f"POST /mcp with the token answered HTTP {status}")
+            return
+        if run.access:
+            fail("the client has a token and called /mcp without it")
+        if status != 401:
+            fail(f"POST /mcp without a token answered HTTP {status}, expected 401")
+        header = response.headers.get("www-authenticate", "")
+        if 'resource_metadata="' not in header:
+            fail("401 has no resource_metadata in WWW-Authenticate")
+        run.ok("401 with resource_metadata")
+
+    async def discovery_answer(
+        self, request: httpx.Request, response: httpx.Response
+    ) -> None:
+        run, path = self.run, request.url.path
+        self.discovery.append((path, response.status_code))
+        is_server = "oauth-authorization-server" in path or "openid-config" in path
+        if response.status_code != 200 or not is_server:
+            return
+        await response.aread()
+        meta = json_body(response, "authorization server metadata")
+        for name in ("token_endpoint", "registration_endpoint"):
+            if not is_url(meta.get(name)):
+                fail(f"authorization server metadata has no {name}")
+        run.token_url = meta["token_endpoint"]
+        self.register_url = meta["registration_endpoint"]
+        if is_url(meta.get("revocation_endpoint")):
+            run.revoke_url = meta["revocation_endpoint"]
+        self.metadata_found = True
+        missed = [f"{p} answered {s}" for p, s in self.discovery if s != 200]
+        fact = f"{len(self.discovery)} requests, "
+        fact += (
+            "; ".join(missed) if missed else "each answered 200 at the first address"
+        )
+        run.ok(fact)
+
+    async def register_answer(
+        self, request: httpx.Request, response: httpx.Response
+    ) -> None:
+        run = self.run
+        await response.aread()
+        if response.status_code != 201:
+            fail(why(response))
+        body = json_body(response, "registration reply")
+        client_id = body.get("client_id")
+        if not isinstance(client_id, str) or not client_id:
+            fail("201 without client_id")
+        run.client_id = client_id
+        try:
+            sent = json.loads(request.content)
+        except ValueError:
+            sent = {}
+        asked = sent.get("token_endpoint_auth_method")
+        run.ok(
+            f"client {client_id}; the client "
+            + (f"asked for auth method {asked}" if asked else "named no auth method")
+            + f", the server set {body.get('token_endpoint_auth_method', 'nothing')}"
+        )
+
+    async def token_answer(
+        self, request: httpx.Request, response: httpx.Response
+    ) -> None:
+        run = self.run
+        form = self.form(request)
+        grant = form.get("grant_type", "")
+        for name in ("code", "code_verifier", "refresh_token"):
+            run.hide(form.get(name, ""))
+        await response.aread()
+        if response.status_code != 200:
+            fail(why(response))
+        body = json_body(response, "token reply")
+        access, refresh = body.get("access_token"), body.get("refresh_token")
+        if not isinstance(access, str) or not isinstance(refresh, str):
+            fail("200 without access_token and refresh_token")
+        run.hide(access)
+        run.hide(refresh)
+        if grant == "refresh_token":
+            self.refreshes += 1
+            if access == run.access or refresh == run.refresh:
+                fail("the refresh grant answered with a token the client had")
+            run.access, run.refresh = access, refresh
+            run.ok("refresh grant answered 200, new access and refresh token")
+            run.begin("start again")
+            return
+        run.access, run.refresh, run.first_refresh = access, refresh, refresh
+        fact = f"access and refresh token, expires_in {body.get('expires_in', '?')}"
+        if form.get("resource"):
+            fact += "; the client named the resource"
+        run.ok(fact)
+        run.begin("mcp initialize")
+
+
+class Browser:
+    """What a person does with the address the client opens: here, by script."""
+
+    def __init__(self, run: Run, watch: Watch) -> None:
+        self.run = run
+        self.watch = watch
+        self.http = httpx.AsyncClient(
+            follow_redirects=False, timeout=30, verify=run.verify
+        )
+        self.opened = 0
+        self.result: tuple[str, str | None] = ("", None)
+
+    async def open(self, url: str) -> None:
+        """The SDK's redirect handler: it hands over the address to open."""
+        try:
+            self.opened += 1
+            if self.opened > 1:
+                fail("the client opened the sign-in page a second time")
+            self.watch.need_metadata()
+            if not self.run.client_id:
+                fail("the client did not register before it asked for the sign-in page")
+            state = self.run.hide(query_of(url).get("state", ""))
+            page = await self.authorize(url)
+            self.result = (await self.sign(page, state), state or None)
+        except Exception as exc:
+            self.run.record(exc)
+            raise
+
+    async def callback(self) -> tuple[str, str | None]:
+        """The SDK's callback handler: the code and state the redirect carried."""
+        return self.result
+
+    async def authorize(self, url: str) -> httpx.Response:
+        run = self.run
+        run.begin("authorize")
+        q = query_of(url)
+        sent = [
+            name
+            for name, there in (
+                ("PKCE S256", q.get("code_challenge_method") == "S256"),
+                ("state", bool(q.get("state"))),
+                ("resource", q.get("resource") == f"{run.base}/mcp"),
+            )
+            if there
+        ]
+        r = await self.http.get(url)
+        if r.status_code != 302:
+            fail(why(r))
+        location = r.headers.get("location", "")
+        run.hide(query_of(location).get("req", ""))
+        target = str(httpx.URL(url).join(location))
+        if not under(target.split("?")[0], run.base):
+            fail(f"sign-in page is at {target.split('?')[0]}, not under {run.base}")
+        target += "&mode=signin" if run.existing else "&mode=signup"
+        page = await self.http.get(target)
+        if page.status_code != 200:
+            fail(f"sign-in page: {why(page)}")
+        fact = f"client sent {', '.join(sent) or 'none of PKCE, state, resource'}"
+        fact += "; 302 to sign-in page, page 200"
+        if run.base.startswith("https://"):
+            cookies = page.headers.get_list("set-cookie")
+            flags = [{p.strip().lower() for p in c.split(";")[1:]} for c in cookies]
+            if not cookies:
+                fail("sign-in page sets no cookie")
+            if not all("secure" in f for f in flags):
+                fail("sign-in page cookie lacks the Secure attribute on https")
+            fact += ", cookie Secure"
+        run.ok(fact)
+        return page
+
+    async def sign(self, page: httpx.Response, state: str) -> str:
+        run = self.run
+        run.begin("sign-in" if run.existing else "sign-up")
+        form = {
+            "req": run.hide(form_field(page.text, "req")),
+            "csrf": run.hide(form_field(page.text, "csrf")),
+            "mode": "signin" if run.existing else "signup",
+            "email": run.email,
+            "password": run.password,
+        }
+        if not run.existing:
+            form["handle"] = run.handle
+        r = await self.http.post(f"{run.base}/signin", data=form)
+        if r.status_code != 303:
+            fail(why(r))
+        location = r.headers.get("location", "")
+        if not location.startswith(REDIRECT):
+            parts = urlsplit(location)
+            fail(f"303 to {parts.netloc}{parts.path}, expected {REDIRECT}")
+        q = query_of(location)
+        code = run.hide(q.get("code", ""))
+        if not code:
+            fail("303 without a code")
+        if q.get("state", "") != state:
+            fail("303 carries a different state")
+        run.account_done = True
+        run.ok(f"303 to the redirect URI, {run.email}")
+        return code
+
+
+# --- the steps -------------------------------------------------------------------
+
+
+def step_health(run: Run, api: httpx.Client) -> None:
+    run.begin("health")
+    r = api.get(f"{run.base}/healthz")
+    if r.status_code != 200:
+        fail(why(r) + " from /healthz")
+    body = json_body(r, "/healthz")
+    run.ok(
+        f"version {body.get('version', '?')}; client is mcp"
+        f" {importlib.metadata.version('mcp')} with httpx {httpx.__version__}"
+    )
+
+
+async def connect(run: Run, client: httpx.AsyncClient, again: bool = False) -> str:
+    """One MCP session over the SDK's client; returns the handle `start` names."""
+    limit = timedelta(seconds=run.timeout)
+    async with streamable_http_client(f"{run.base}/mcp", http_client=client) as (
+        read,
+        write,
+        _,
+    ):
+        async with ClientSession(read, write, read_timeout_seconds=limit) as session:
+            init = await session.initialize()
+            listed = await session.list_tools()
+            names = {t.name for t in listed.tools}
+            if "start" not in names:
+                fail("the server lists no start tool")
+            if not again:
+                if not run.access:
+                    fail("the client connected without asking for a token")
+                info = init.serverInfo
+                run.ok(
+                    f"{info.name} {info.version}, protocol {init.protocolVersion},"
+                    f" {len(names)} tools"
+                )
+                run.begin("start")
+            result = await session.call_tool("start", {}, read_timeout_seconds=limit)
+            text = "\n".join(
+                c.text for c in result.content if isinstance(c, types.TextContent)
+            )
+            if result.isError or text.startswith("[error:"):
+                fail(f"start: {text.splitlines()[0] if text else 'error without text'}")
+            # The wording of the reply may change between versions; the handle is in it.
+            who = re.search(r"@([a-z0-9_-]{3,32})", text)
+            if not who:
+                fail("reply names no @handle")
+            if not run.existing and who.group(1) != run.handle:
+                fail(f"reply names @{who.group(1)}, expected @{run.handle}")
+            return who.group(1)
+
+
+async def sdk_part(run: Run) -> None:
+    """Everything the SDK's client does: first connection, then a renewed token."""
+    watch = Watch(run)
+    browser = Browser(run, watch)
+    provider = OAuthClientProvider(
+        server_url=f"{run.base}/mcp",
+        client_metadata=OAuthClientMetadata.model_validate(
+            {"client_name": CLIENT_NAME, "redirect_uris": [REDIRECT]}
+        ),
+        storage=Memory(),
+        redirect_handler=browser.open,
+        callback_handler=browser.callback,
+    )
+    try:
+        async with httpx.AsyncClient(
+            auth=provider,
+            timeout=httpx.Timeout(run.timeout, connect=30),
+            verify=run.verify,
+            event_hooks={
+                "request": [watch.on_request],
+                "response": [watch.on_response],
+            },
+        ) as client:
+            run.begin("challenge")
+            handle = await connect(run, client)
+            run.ok(f"account @{handle}")
+
+            run.begin("refresh")
+            before = run.access
+            if not hasattr(provider.context, "token_expiry_time"):
+                fail("this mcp package keeps the token's expiry somewhere else")
+            # An hour has passed, as far as the client can tell.
+            provider.context.token_expiry_time = time.time() - 60
+            handle = await connect(run, client, again=True)
+            if watch.refreshes != 1:
+                fail(f"the client sent {watch.refreshes} refresh requests, expected 1")
+            if watch.bearer != run.access or run.access == before:
+                fail("the client did not call with the new access token")
+            run.ok(f"account @{handle} with the new access token")
+    except Exception as exc:
+        run.record(exc)
+    finally:
+        await browser.http.aclose()
+
+
+def step_replay(run: Run, api: httpx.Client) -> None:
+    run.begin("replay")
+    r = api.post(
+        run.token_url,
+        data={
+            "grant_type": "refresh_token",
+            "refresh_token": run.first_refresh,
+            "client_id": run.client_id,
+        },
+    )
+    if r.status_code != 400:
+        fail(f"the used refresh token answered HTTP {r.status_code}, expected 400")
+    error = json_body(r, "token reply").get("error")
+    if error != "invalid_grant":
+        fail(f"the used refresh token answered {error}, expected invalid_grant")
+    r = api.post(
+        f"{run.base}/mcp",
+        json=TOOLS_LIST,
+        headers={
+            "Accept": "application/json, text/event-stream",
+            "Authorization": f"Bearer {run.access}",
+        },
+    )
+    if r.status_code != 401:
+        fail(
+            f"after the replay the newest access token still answered HTTP"
+            f" {r.status_code}, expected 401"
+        )
+    run.revoked = True
+    run.ok("used refresh token refused, connection revoked, newest token gets 401")
+
+
+def cleanup_token(run: Run, api: httpx.Client) -> None:
+    run.begin("cleanup revoke")
+    try:
+        r = api.post(
+            run.revoke_url, data={"token": run.refresh, "client_id": run.client_id}
+        )
+        if r.status_code != 200:
+            fail(why(r))
+        run.revoked = True
+        run.ok("revoked the connection")
+    except Exception as exc:
+        run.fail_line(f"{type(exc).__name__}: {exc}")
+
+
+def left_behind(run: Run) -> None:
+    print("left behind:")
+    if run.existing:
+        print(f"  account  existing account {run.email} was used; none was created")
+    elif run.account_done:
+        print(
+            f"  account  {run.email} (@{run.handle}) stays. No tool deletes accounts;"
+            " an operator can lock it out:"
+        )
+        print(
+            f"           UPDATE account SET status = 'disabled' WHERE email = '{run.email}'"
+        )
+    else:
+        print("  account  none was created")
+    if run.client_id:
+        note = (
+            "it has tokens and a grant, so the 30-day cleanup of unused clients skips it"
+            if run.access
+            else "the 30-day cleanup of unused clients removes it"
+        )
+        print(f"  client   OAuth client {run.client_id} ({CLIENT_NAME}) stays; {note}")
+    else:
+        print("  client   none was registered")
+    if not run.access:
+        print("  tokens   none were issued")
+    elif run.revoked:
+        print(
+            "  tokens   every access and refresh token revoked (the whole connection);"
+            " their hashes stay as revoked rows"
+        )
+    else:
+        print(
+            "  tokens   access and refresh token NOT revoked; they expire on their own"
+            " (access 1 hour, refresh 30 days) or an operator revokes the connection:"
+        )
+        print(f"           reticula-mcp connections revoke --email {run.email} --id N")
+
+
+# --- main ------------------------------------------------------------------------
+
+
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        prog="oauth-client-check",
+        description="Connect to a running Reticula instance with the OAuth client of"
+        " the MCP Python SDK, one line per step.",
+    )
+    p.add_argument(
+        "base_url", help="public base URL, e.g. https://reticula.example.com"
+    )
+    p.add_argument(
+        "--resolve",
+        action="append",
+        default=[],
+        metavar="HOST=ADDRESS",
+        help="resolve HOST to ADDRESS for this process (like curl --resolve); repeatable",
+    )
+    tls = p.add_mutually_exclusive_group()
+    tls.add_argument("--cacert", metavar="FILE", help="verify TLS against this CA file")
+    tls.add_argument("--insecure", action="store_true", help="do not verify TLS")
+    p.add_argument(
+        "--email",
+        help="sign in to this existing account (password in $SMOKE_PASSWORD)"
+        " instead of creating one",
+    )
+    p.add_argument(
+        "--timeout",
+        type=float,
+        default=60,
+        metavar="SECONDS",
+        help="limit for each MCP request (default 60)",
+    )
+    p.add_argument("--debug", action="store_true", help="print tracebacks to stderr")
+    return p.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    base = args.base_url.rstrip("/")
+    parts = urlsplit(base)
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        print(f"FAIL  {'setup':<{STEP_WIDTH}}  base URL must be http:// or https://")
+        return 1
+    if parts.query or parts.fragment:
+        print(
+            f"FAIL  {'setup':<{STEP_WIDTH}}  base URL must not have a query or fragment"
+        )
+        return 1
+    tag = secrets.token_hex(6)
+    if args.email:
+        password = os.environ.get("SMOKE_PASSWORD", "")
+        if not password:
+            print(
+                f"FAIL  {'setup':<{STEP_WIDTH}}  --email needs the password in the"
+                " environment variable SMOKE_PASSWORD"
+            )
+            return 1
+        email, handle = args.email, ""
+    else:
+        email, handle = f"sdk-{tag}@example.com", f"sdk-{tag}"
+        password = secrets.token_urlsafe(24)
+    verify: ssl.SSLContext | bool = True
+    try:
+        install_resolver(args.resolve)
+        if args.insecure:
+            verify = False
+        elif args.cacert:
+            verify = ssl.create_default_context(cafile=args.cacert)
+    except (Fail, OSError, ssl.SSLError) as exc:
+        print(f"FAIL  {'setup':<{STEP_WIDTH}}  {exc}")
+        return 1
+    # The SDK logs a failed request with its traceback; the FAIL line says it here.
+    sdk_log = logging.getLogger("mcp")
+    sdk_log.addHandler(logging.NullHandler())
+    sdk_log.propagate = False
+    run = Run(
+        base=base,
+        timeout=args.timeout,
+        debug=args.debug,
+        verify=verify,
+        existing=bool(args.email),
+        email=email,
+        handle=handle,
+        password=password,
+        token_url=f"{base}/token",
+        revoke_url=f"{base}/revoke",
+    )
+    run.hide(password)
+    api = httpx.Client(follow_redirects=False, timeout=30, verify=verify)
+    try:
+        try:
+            step_health(run, api)
+            asyncio.run(sdk_part(run))
+            if run.failure is None:
+                step_replay(run, api)
+        except Exception as exc:
+            run.record(exc)
+        if run.access and not run.revoked:
+            cleanup_token(run, api)
+    finally:
+        api.close()
+    left_behind(run)
+    return 1 if run.failure is not None else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

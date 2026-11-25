@@ -68,6 +68,8 @@ The commands are written for the Docker Compose files in [`deploy/`](../deploy) 
 
    Each run leaves one account named `smoke-<id>@example.com`, one registered client and one erased note. The last lines of the output list them. Each run also counts as one sign-up from your address, so with the default limit the sixth run within an hour fails at `sign-up` with status 429. To sign in to an account from an earlier run instead, pass `--email` and put its password in `SMOKE_PASSWORD`.
 
+   A second script, `../scripts/oauth-client-check`, takes the same arguments and lets the OAuth client of the MCP Python SDK sign in, call `start` and renew its token; it prints 12 lines that must start with `ok`, and it leaves an account named `sdk-<id>@example.com` and counts as a sign-up too.
+
 6. Decide how assistants reach the server before you connect the first one. An assistant that runs on this machine can use `http://127.0.0.1:8787/mcp` as it is. For every other assistant, do the next section first: a later change of the public address disconnects every assistant that signed in.
 
 7. Connect an assistant and create the first account. The steps are in the README, under [Connecting an assistant](../README.md#connecting-an-assistant). To create an account from the command line instead, see [Accounts, tokens and connections](#accounts-tokens-and-connections).
