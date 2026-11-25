@@ -1,10 +1,6 @@
 """Rough edges of ``search`` and ``get``: odd limits, odd queries, exact titles and
 tags, ``hub=`` and ``kind=`` scoping (search side), and depth, paging, long texts
 and long histories (read side).
-
-Tests marked ``xfail(strict=True)`` pin wanted behaviour that the code in
-``find.py`` / ``handlers.py`` does not have yet; the reason names the cause. They
-turn into failures (XPASS) the moment the fix lands, so the marker must go then.
 """
 
 from __future__ import annotations
@@ -148,10 +144,6 @@ def test_a_limit_above_fifty_returns_at_most_fifty(conn, make_account, limit):
     assert len(result_lines(search(conn, alice, "plover", limit=limit))) == 50
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="handlers.search clamps the limit silently; it never says it capped it",
-)
 @pytest.mark.parametrize("limit", [51, 10_000])
 def test_a_limit_above_fifty_says_it_was_capped(conn, make_account, limit):
     alice = make_account(handle="alice")
@@ -169,11 +161,6 @@ def test_an_empty_query_is_bad_input(conn, make_account, query):
     assert error_of(lambda: search(conn, alice, query)).code == "BadInput"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="a NUL in the query reaches psycopg, which raises DataError (not a"
-    " ReticulaError, so the server answers [error:Internal])",
-)
 def test_a_nul_in_the_query_is_removed(conn, make_account):
     alice = make_account(handle="alice")
     make_atom(conn, alice, "abcdef marks the spot", title="abcdef")
@@ -181,11 +168,6 @@ def test_a_nul_in_the_query_is_removed(conn, make_account):
     assert titles(out)[:1] == ["abcdef"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="control characters stay in the query: they split the word for the"
-    " keyword search and show as \\u0001 in the answer's first line",
-)
 @pytest.mark.parametrize("query", ["abc\x01\x07def", "abc\x1bdef\x7f"])
 def test_control_characters_are_removed_from_the_query(conn, make_account, query):
     alice = make_account(handle="alice")
@@ -295,11 +277,6 @@ def test_a_query_of_only_operators_matches_nothing(conn, make_account, query):
     assert result_lines(search(conn, alice, query, limit=50)) == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="find._lexical: websearch_to_tsquery('-zebra') is !zebra, which matches"
-    " every note without zebra; it has no positive term to require",
-)
 def test_a_query_of_only_a_negation_does_not_match_everything_else(conn, make_account):
     alice = make_account(handle="alice")
     crowd(conn, alice, 3, "zebra")
@@ -347,11 +324,6 @@ def _festival(conn: Conn, who: Account) -> Node:
     return exact
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="find.hybrid_search has no exact-title leg: reciprocal rank fusion lets"
-    " twenty near misses that repeat the words outrank the note with that title",
-)
 @pytest.mark.parametrize(
     "query",
     ["Harvest festival plan", "  HARVEST Festival PLAN ", "harvest festival plan"],
@@ -382,11 +354,6 @@ def _tagged(conn: Conn, who: Account) -> list[Node]:
     return nodes
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="node.tags is not searched at all: no leg looks at it, so a note that"
-    " only carries the tag is not found",
-)
 @pytest.mark.parametrize("query", ["okapi", "#okapi", "OKAPI", " #Okapi "])
 def test_a_query_equal_to_a_tag_returns_the_tagged_notes_first(
     conn, make_account, query
@@ -532,11 +499,6 @@ def test_an_empty_kind_means_every_kind(conn, make_account):
     assert len(titles(search(conn, alice, "giraffe", kind="  "))) == 3
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="handlers.search strips the kind but does not lower-case it, and"
-    " find._scope compares n.kind = 'Note' exactly",
-)
 @pytest.mark.parametrize("kind", [" Note ", "NOTE", "Note"])
 def test_kind_ignores_case_and_surrounding_whitespace(conn, make_account, kind):
     alice = make_account(handle="alice")
@@ -544,11 +506,6 @@ def test_kind_ignores_case_and_surrounding_whitespace(conn, make_account, kind):
     assert titles(search(conn, alice, "giraffe", kind=kind)) == ["giraffe N"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="an unknown kind is passed to SQL and silently matches nothing; nothing"
-    " checks it against the kinds that exist",
-)
 @pytest.mark.parametrize("kind", ["banana", "notes"])
 def test_an_unknown_kind_is_bad_input_naming_the_kinds_that_exist(
     conn, make_account, kind
@@ -986,7 +943,9 @@ def test_search_keeps_a_note_with_a_huge_one_line_text_on_one_line(conn, make_ac
         if ln.startswith(f"- {render.short_ref(note['address'])} ")
     ]
     assert len(rows) == 1 and len(rows[0]) < 250
-    assert len(out.splitlines()) == 3  # header, the row, the next line
+    # header, the row, the excerpt that goes on after the label, the next line
+    assert len(out.splitlines()) == 4 and all(len(ln) < 250 for ln in out.splitlines())
+    assert out.splitlines()[2].startswith('  text: "…xxxx')
 
 
 def test_search_keeps_a_note_with_a_5000_character_title_on_one_line(
@@ -1003,7 +962,10 @@ def test_search_keeps_a_note_with_a_5000_character_title_on_one_line(
         if ln.startswith(f"- {render.short_ref(note['address'])} ")
     ]
     assert len(rows) == 1 and len(rows[0]) < 250
-    assert len(out.splitlines()) == 3
+    assert out.splitlines()[2:] == [
+        '  text: "short text"',
+        "next: get(ref) reads one in full (ref = the short id at the line start)",
+    ]
     # get shows it cut too: the head line stays one short line
     assert len(get(conn, alice, note["address"]).splitlines()[0]) < 250
 
