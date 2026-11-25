@@ -290,13 +290,50 @@ At the default log level the server writes one line per request: the peer addres
 
 4. Check `/healthz` and run the smoke test.
 
-The server container applies pending migrations when it starts and logs one line per file, for example `applied 0101_oauth_indexes.sql`. In the drill the command took 26 seconds. Tokens issued before the upgrade worked after it, and notes written before it read back unchanged.
+The server container applies pending migrations when it starts and logs one line per file, for example `applied 0203_shared_rules.sql`. The drill went from 0.1.0 to a build of 0.1.1 from source, which adds that one migration. The command took 28 seconds when it had to build the image, and 8 to 9 seconds on later switches, when Docker still had the layers of the image. The server was away for about a second: `/healthz` was asked every 0.1 seconds during a switch that applied migration 0203, and the longest time without an answer was 1.1 seconds.
 
-Migrations only move forward and each file runs in its own transaction. A migration file that has already been applied is never edited; changes arrive as new files. If the server reports that an applied file has changed, you are running mismatched code and database: do not continue. To go back to the old version, restore the dump from step 1 as described under Restore, with the old `RETICULA_VERSION`.
+Tokens issued before the upgrade worked after it: the access and refresh tokens of a sign-in, and a token minted with `reticula-mcp token`. An account signed in with the password it had before. Notes written before the upgrade read back unchanged: 112 recorded replies of `start`, `profile`, `search`, `get` and `share` were the same before and after.
+
+Migrations only move forward and each file runs in its own transaction. A migration file that has already been applied is never edited; changes arrive as new files. If the server reports that an applied file has changed, you are running mismatched code and database: do not continue.
 
 The version-zero note format may still change. Read the release notes before you upgrade across a format change.
 
 If the search index needs rebuilding after an upgrade, run `docker compose exec app reticula-mcp reindex`. The index holds only derived data, so rebuilding it changes no notes.
+
+### Go back to the older version
+
+The supported way back is the restore: restore the dump from step 1 as described under Restore, with the old `RETICULA_VERSION`. Everything written after that dump is lost.
+
+The old `RETICULA_VERSION` alone, without a restore, puts the older version on a database that the newer one has migrated. The older version does not know what those migrations changed. From 0.1.1 on the server refuses to start there. `docker compose up -d --build --wait` then ends, in the drill after 4 to 20 seconds, with
+
+```
+container reticula-app-1 is unhealthy
+```
+
+and `docker compose logs app` shows two lines for every attempt to start:
+
+```
+app-1  | [error:BadInput] the database has migrations this version does not have (0203_shared_rules): a newer version has used it
+app-1  | hint: start that newer version again, or restore a dump taken before the upgrade. To run this version on the newer schema anyway, set RETICULA_ALLOW_NEWER_SCHEMA=1 (docs/operating.md, Upgrade)
+```
+
+The name in brackets is the migration this version has no file for. These lines are from the drill, where a build without the file of migration 0203 stood in for the older version. The server refuses before it applies anything; the migration ledger was the same afterwards. Docker starts the container again and again, with a pause that grows each time: 9 attempts in the first 31 seconds, the last one 13 seconds after the one before. Each attempt adds the same two lines to the log. Between the attempts `docker compose ps` shows the status `Restarting (1)`. The port does not answer.
+
+There are three ways out:
+
+- Start the newer version again: set its `RETICULA_VERSION` and repeat step 3.
+- Restore the dump, as above.
+- Set `RETICULA_ALLOW_NEWER_SCHEMA=1` in `.env` and repeat step 3.
+
+With `RETICULA_ALLOW_NEWER_SCHEMA=1` the older version starts on the newer schema and checks nothing further. Its log has one more line:
+
+```
+app-1  | warning: the database has migrations this version does not have (0203_shared_rules): a newer version has used it; running on the newer schema because RETICULA_ALLOW_NEWER_SCHEMA is set
+```
+
+That is safe only when the release notes of the newer version say that its migrations change no table. Otherwise the older version reads and writes tables in a form it does not know. Take the variable out of `.env` again once the newer version runs. While it is set, nothing is refused.
+
+0.1.0 has no such check: it starts on a newer schema and says nothing. Migration 0203 is the only one that 0.1.1 adds. It defines three SQL functions and changes no table. In the drill 0.1.0 ran on the database that the 0.1.1 build had migrated. It gave the same 112 replies as that build on the same data, its smoke test passed, notes written under the 0.1.1 build read back, and tokens issued under it worked. That is a measurement for this pair of versions, not a promise for any other.
 
 ## Back up
 
@@ -312,7 +349,7 @@ The embedding model is not in the dump. It is downloaded again when needed.
 
 ## Restore
 
-Restore into an empty database. The steps below replace the data of an existing stack. On a new machine, start at step 2 with the same `.env`.
+Restore into an empty database. The steps below replace the data of an existing stack. Everything written after the dump was taken is lost. On a new machine, start at step 2 with the same `.env`.
 
 The volume name in step 1 starts with the project name, which the compose file fixes to `reticula`. For a copy that was started under another project name, the volume is `<name>_reticula-db`, and every command below needs the same `-p <name>` or `COMPOSE_PROJECT_NAME`. Without it the commands act on the stack called `reticula`.
 
@@ -335,7 +372,7 @@ The volume name in step 1 starts with the project name, which the compose file f
    docker compose exec -T db pg_restore -U reticula --no-owner --exit-on-error --dbname reticula < reticula-20261125.dump
    ```
 
-4. Start the server. If the dump is older than the installed version, the server brings the schema up to date.
+4. Start the server. If the dump is older than the installed version, the server brings the schema up to date. If the dump is from a newer version, the server refuses to start, as described under "Go back to the older version".
 
    ```
    docker compose up -d --build --wait
@@ -344,6 +381,8 @@ The volume name in step 1 starts with the project name, which the compose file f
 5. Check `/healthz` and run the smoke test.
 
 In the drill the restored instance had the same number of rows in every table as the original. `docker compose exec app reticula-mcp rebuild` printed the same counts on both. Notes read back, shared and private. Accounts keep their person IDs, keys and tokens, so connected assistants keep working, as long as `RETICULA_PUBLIC_URL` is the same as before. With a different public URL, tokens issued at sign-in got status 401 and tokens minted with `reticula-mcp token` still worked.
+
+The same steps took an instance back after an upgrade. A dump taken under 0.1.0 was restored after the upgrade to a build of 0.1.1, with `RETICULA_VERSION=0.1.0`: steps 1 to 3 took 7 seconds and step 4 another 7. Every table had the row counts from before the upgrade, 112 recorded replies were the same as before it, and the notes written after the dump were gone. Started on that database again, the 0.1.1 build applied its migration as in the first upgrade.
 
 ## Accounts, tokens and connections
 
