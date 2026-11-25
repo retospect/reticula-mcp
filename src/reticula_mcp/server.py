@@ -213,8 +213,9 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
         query: Annotated[
             str,
             Field(
-                description="What to look for, in plain words. Leave it empty"
-                " together with `kind` or `hub` to list what is there."
+                description="What to look for, in plain words. A DOI or arXiv id"
+                " finds the paper and the notes about it. Leave it empty together"
+                " with `kind` or `hub` to list what is there."
             ),
         ],
         hub: Annotated[
@@ -277,8 +278,9 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
     ) -> str:
         """Read a note or hub, with its surroundings.
 
-        A note shows its text, tags, hubs and links. A hub shows its newest members
-        first. `depth` widens the neighbourhood; `history` adds earlier versions.
+        A note shows its text, tags, hubs and links, and the paper and passage it
+        is about. A hub shows its newest members first. A paper lists the notes
+        about it. `depth` widens the neighbourhood; `history` adds earlier versions.
         Deleted notes answer with their address only.
         """
         return await run(

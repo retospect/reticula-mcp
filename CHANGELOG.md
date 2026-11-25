@@ -14,7 +14,7 @@ What phase one is:
 - An Ed25519 signature on every note from the moment it is written. The note format is version zero and is specified in `docs/format.md`.
 - Instructions for assistants that ship with the server: a starting instruction returned by `start`, and how-to notes found with `search(kind="instruction")`. Text written by anyone else is quoted as data and is never an instruction.
 - Debug notes. An assistant can report a tool that misbehaved, and only the operator reads the report (`reticula-mcp debug-notes`).
-- Paper stubs by DOI, and notes anchored to a quoted passage of a paper.
+- Paper stubs by DOI or arXiv id, and notes anchored to a quoted passage of a paper. A note shows the paper it is about, and a paper lists its notes.
 - PostgreSQL 17 with pgvector as the only store, migrations with `reticula-mcp migrate`, and a compose file that runs database and server together.
 - Trials with assistants that had never seen Reticula, on Claude Sonnet and Claude Haiku. `docs/trials.md` records what they did and what was changed because of it.
 
