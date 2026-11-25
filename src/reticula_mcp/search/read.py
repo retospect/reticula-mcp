@@ -209,6 +209,8 @@ class _Chain:
     # other people's notes that hide this one from search and hub lists, when
     # the viewer is the author of this one: short refs
     disputable: list[str]
+    # the viewer's own notes that this one, written by someone else, hides
+    hides_own: list[str]
 
 
 # The rule of ``current_nodes`` (migration 0202) for one pair: does the newer
@@ -369,7 +371,14 @@ def _chain_lines(conn: Conn, viewer: Account, node: Row) -> _Chain:
             for i in news
             if rows[i]["author"] != viewer.person_id
         ]
-    return _Chain(lines, disputable)
+    hides_own: list[str] = []
+    if not own:
+        hides_own = [
+            render.short_ref(rows[i]["address"])
+            for i in olds
+            if rows[i]["author"] == viewer.person_id
+        ]
+    return _Chain(lines, disputable, hides_own)
 
 
 def _history_lines(conn: Conn, address: str) -> list[str]:
@@ -476,6 +485,13 @@ def _render_note(
         # unless its author says they do not accept it
         lines.append(
             f"next: link(ref={ref!r}, to={theirs!r}, rel='disputes') keeps yours shown"
+        )
+    for mine in chain.hides_own[:3]:
+        # the same step, offered where the author of the hidden note arrives:
+        # search finds this note, not theirs
+        lines.append(
+            f"next: link(ref={mine!r}, to={ref!r}, rel='disputes') shows your note"
+            " again beside this one, if you do not accept the correction"
         )
     if row["author"] == viewer.person_id:
         lines.append(

@@ -4,6 +4,7 @@
 * A query that is a paper's identifier finds the paper first.
 * A search without words, given a kind or a hub, lists what is there (the way
   to see every hub one can read).
+* A word that names what is kept here ("kiln notes") is not required of a note.
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ import json
 import pytest
 
 from reticula_mcp.errors import BAD_INPUT, ReticulaError
-from reticula_mcp.search import handlers, render
+from reticula_mcp.search import find, handlers, render
 from tests.graph_support import can_read, mk_hub, mk_note, share
 from tests.search_support import use_hash_embedder
 
@@ -359,3 +360,123 @@ def test_an_empty_listing_and_a_wrong_kind_say_so(conn, make_account):
     with pytest.raises(ReticulaError) as caught:
         handlers.search(conn, z, query="", kind="hubs")
     assert caught.value.code == BAD_INPUT and "hub" in (caught.value.hint or "")
+
+
+# ------------------------------------------- words that name what is kept here
+
+
+def keyword_matches(conn, viewer, query: str) -> list[str]:
+    """The addresses the keyword leg alone returns for ``query``, best first."""
+    where, params = find._scope(
+        viewer, hub_node_id=None, kind=None, include_superseded=False
+    )
+    ids = [i for i, _ in find._lexical(conn, query, where, params, 50)]
+    found = conn.execute(
+        "SELECT id, address FROM node WHERE id = ANY(%s)", (ids,)
+    ).fetchall()
+    by_id = {r["id"]: r["address"] for r in found}
+    return [by_id[i] for i in ids]
+
+
+@pytest.fixture
+def kiln(conn, make_account):
+    """The case from the trial: a hub and three notes about a kiln. Two of the
+    four happen to contain the word "note"; so does a note about something
+    else."""
+    z = make_account()
+    hub = mk_note(
+        conn, z, "Notes on running the kiln.", kind="hub", title="Kiln", preset="group"
+    )
+    bisque = mk_note(
+        conn, z, "Cone 04, slow ramp.", hub=hub, title="Kiln bisque firing"
+    )
+    glaze = mk_note(
+        conn, z, "Cone 6, ten minute hold.", hub=hub, title="Kiln glaze firing"
+    )
+    shelves = mk_note(
+        conn, z, "Note: wash the top side only.", hub=hub, title="Kiln shelves"
+    )
+    garden = mk_note(conn, z, "Notes from the garden club.", title="Garden")
+    return z, [hub, bisque, glaze, shelves], garden
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "kiln",
+        "kiln notes",
+        "notes kiln",
+        "Kiln Notes",
+        "kiln notes?",
+        "kiln hub",
+        "kiln stuff",
+        "everything kiln",
+        "kiln hub notes",
+    ],
+)
+def test_a_word_for_what_is_kept_here_drops_no_result(conn, kiln, query):
+    z, about_kiln, garden = kiln
+    assert set(keyword_matches(conn, z, query)) == set(about_kiln)
+    found = listed(handlers.search(conn, z, query=query))
+    assert {ref(a) for a in about_kiln} <= set(found), found
+
+
+def test_notes_that_have_the_word_come_before_those_that_do_not(conn, kiln):
+    z, (hub, bisque, glaze, shelves), _ = kiln
+    matches = keyword_matches(conn, z, "kiln notes")
+    assert set(matches[:2]) == {hub, shelves}  # these two say "note"
+    assert set(matches[2:]) == {bisque, glaze}
+
+
+def test_such_a_word_alone_or_excluded_or_quoted_is_searched_as_written(conn, kiln):
+    z, (hub, bisque, glaze, shelves), garden = kiln
+    # alone: the word is all there is to look for
+    assert set(keyword_matches(conn, z, "notes")) == {hub, shelves, garden}
+    assert set(keyword_matches(conn, z, "the notes")) == {hub, shelves, garden}
+    # excluded: notes without the word
+    assert set(keyword_matches(conn, z, "kiln -notes")) == {bisque, glaze}
+    # in a quoted phrase: the phrase
+    assert keyword_matches(conn, z, '"notes on running"') == [hub]
+    assert keyword_matches(conn, z, '"cone 6" notes') == [glaze]
+    # with or: either side, as typed
+    assert set(keyword_matches(conn, z, "bisque or notes")) == {
+        hub,
+        bisque,
+        shelves,
+        garden,
+    }
+
+
+def test_the_other_words_of_the_query_are_still_all_required(conn, kiln):
+    z, (hub, bisque, glaze, shelves), _ = kiln
+    assert keyword_matches(conn, z, "kiln bisque notes") == [bisque]
+    assert set(keyword_matches(conn, z, "kiln firing notes")) == {bisque, glaze}
+    # no note has both words: the second try looks at the content words only
+    assert set(keyword_matches(conn, z, "kiln zzyzx notes")) == {
+        hub,
+        bisque,
+        glaze,
+        shelves,
+    }
+
+
+def test_content_words():
+    same = [
+        "kiln",
+        "notes",
+        "Hub notes",
+        "kiln or notes",
+        "kiln OR notes",
+        '"kiln notes"',
+        "-notes",
+        "notes -kiln",
+        "",
+    ]
+    for query in same:
+        assert find.content_words(query) == query
+    assert find.content_words("kiln notes") == "kiln"
+    assert find.content_words("Notes, kiln (papers)") == "kiln"
+    assert (
+        find.content_words('notes "bisque firing" -notes') == '"bisque firing" -notes'
+    )
+    assert find.content_words('kiln -"glaze notes" info') == 'kiln -"glaze notes"'
