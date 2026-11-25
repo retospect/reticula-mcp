@@ -451,8 +451,8 @@ def test_grant_rules(conn, make_account):
     assert not can_read(conn, carol, hub)
     share(conn, bob, hub, carol, "read")
     assert can_read(conn, carol, hub)
-    # listing: visible to readers, with modes and granters
-    listing = handlers.share(conn, dan, hub=hub)
+    # listing: visible to members who can add, with modes and granters
+    listing = handlers.share(conn, bob, hub=hub)
     assert f"@{alice.handle} admin" in listing
     assert f"@{bob.handle} add (granted by @{alice.handle})" in listing
     assert f"@{carol.handle} read (granted by @{bob.handle})" in listing
