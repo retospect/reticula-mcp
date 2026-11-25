@@ -8,8 +8,19 @@ BAD_INPUT = "BadInput"
 CONFLICT = "Conflict"
 NOT_IMPLEMENTED = "NotImplemented"
 INTERNAL = "Internal"
+UNAVAILABLE = "Unavailable"
+RATE_LIMITED = "RateLimited"
 
-CODES = (NOT_FOUND, FORBIDDEN, BAD_INPUT, CONFLICT, NOT_IMPLEMENTED, INTERNAL)
+CODES = (
+    NOT_FOUND,
+    FORBIDDEN,
+    BAD_INPUT,
+    CONFLICT,
+    NOT_IMPLEMENTED,
+    INTERNAL,
+    UNAVAILABLE,
+    RATE_LIMITED,
+)
 
 
 class ReticulaError(Exception):

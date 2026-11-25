@@ -18,6 +18,11 @@ from psycopg_pool import ConnectionPool
 
 Conn = psycopg.Connection[dict[str, Any]]
 
+#: Longest one statement may run on a connection the running server took from
+#: its pool. The CLI commands (``migrate``, ``rebuild``, embedding upkeep, ...)
+#: open their own connections with :func:`connect` and have no limit.
+STATEMENT_TIMEOUT_SECONDS = 15.0
+
 
 def configure_connection(conn: psycopg.Connection[Any]) -> None:
     """Per-connection setup: dict rows; pgvector adapters when the extension exists.
@@ -51,14 +56,28 @@ class Database:
     back when it raises.
     """
 
-    def __init__(self, url: str, *, min_size: int = 1, max_size: int = 10) -> None:
+    def __init__(
+        self,
+        url: str,
+        *,
+        min_size: int = 1,
+        max_size: int = 10,
+        statement_timeout: float | None = STATEMENT_TIMEOUT_SECONDS,
+    ) -> None:
         self.url = url
+        self.statement_timeout = statement_timeout
+        kwargs: dict[str, Any] = {}
+        if statement_timeout:
+            # Set when the connection is opened, so it holds for the connection's
+            # whole life in the pool and needs no statement of its own.
+            kwargs["options"] = f"-c statement_timeout={int(statement_timeout * 1000)}"
         self._pool = ConnectionPool(
             url,
             min_size=min_size,
             max_size=max_size,
             open=False,
             configure=configure_connection,
+            kwargs=kwargs,
         )
 
     def open(self) -> None:

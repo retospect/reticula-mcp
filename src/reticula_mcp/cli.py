@@ -16,7 +16,7 @@ import psycopg
 
 from reticula_mcp import __version__
 from reticula_mcp.config import Settings
-from reticula_mcp.errors import ReticulaError
+from reticula_mcp.errors import BAD_INPUT, UNAVAILABLE, ReticulaError
 
 
 def _migrate(settings: Settings) -> int:
@@ -95,11 +95,17 @@ def _token(settings: Settings, email: str, label: str, ttl_days: int | None) -> 
     from reticula_mcp import accounts
     from reticula_mcp.db import connect
 
+    if ttl_days is not None and ttl_days <= 0:
+        raise ReticulaError(
+            BAD_INPUT,
+            "--ttl-days must be at least 1",
+            hint="leave it out for a token that does not expire",
+        )
     with connect(settings.require_database_url()) as conn:
         account = accounts.get_account_by_email(conn, email)
         if account is None:
             raise ReticulaError("NotFound", f"no account with e-mail {email!r}")
-        ttl = timedelta(days=ttl_days) if ttl_days else None
+        ttl = timedelta(days=ttl_days) if ttl_days is not None else None
         token = accounts.mint_token(conn, account, label, ttl)
         conn.commit()
     print(token)
@@ -203,7 +209,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except psycopg.OperationalError as exc:
         reason = str(exc).strip().splitlines()[0] if str(exc).strip() else "no answer"
         print(
-            f"[error:Unavailable] cannot reach the database: {reason}\n"
+            f"[error:{UNAVAILABLE}] cannot reach the database: {reason}\n"
             "hint: check RETICULA_DATABASE_URL and that PostgreSQL is running",
             file=sys.stderr,
         )

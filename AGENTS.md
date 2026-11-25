@@ -116,6 +116,13 @@ Coordinator decisions (25 Nov 2026):
 * `put(kind="debug")` with no hub files itself into the system account's debug hub. Ordinary accounts cannot read that hub.
 * The sign-in page states the host that receives access as its main line and warns for hosts outside `RETICULA_KNOWN_CLIENTS` (loopback never warns). Client registration is open, so the client's self-given name proves nothing.
 * A grant's `revoked_at` is authoritative: no token of a revoked grant is accepted, whatever the token row says.
+* Corrections by other people: a newer atom hides the one it supersedes when both have the same author. With different authors it hides the original only when both are filed in a common hub, each by its own author, the original is neither a hub nor an instruction, and the original's author has not objected. The objection is `link(ref=<mine>, to=<theirs>, rel="disputes")`; removing the link withdraws it. (`current_nodes`, migration 0202.)
+* Below a hub: an invitation into a sub-hub is refused when a hub above it has `invite: admins`, or when that hub's admin removed the person, unless the inviter is that admin. When an admin removes a person from a hub, the hubs that person owns and filed under it (at any depth) are detached in the same transaction. A hub's admin may withdraw statements in the hubs below it.
+* A `personal` hub takes adds from its owner only, whatever a hub above it grants.
+* A note an admin removed from a hub can be filed there again only by an admin (`membership.moderated`).
+* Text other accounts control is never printed raw: `kind` is `^[a-z][a-z0-9_-]{0,31}$`, `rel` is `^[A-Za-z0-9_.:-]{1,64}$`, title at most 200 characters, 20 tags of 50, anchor 500, model 100, ext_id 300, checked on write in `graph/api.py` and quoted again on read. `start` lists hubs owned by others under their own heading.
+* Limits: the server's statements stop after 15 s (`[error:Unavailable]`), CLI commands have none; writes per account are limited by `RETICULA_WRITE_RATE` (`[error:RateLimited]`); a failed write does not count. `get` depth is capped at 2.
+* A handle someone gave up stays reserved for that person (`released_handle`); to others it reads as taken.
 * A lane that needs a new dependency adds it to `pyproject.toml`, runs `uv lock` in its worktree, and says so in its report; the coordinator re-locks at merge.
 
 Other facts: `records.sign_and_append` enforces local-write rules (own address, first version has no parents, parents exist and share the address, nothing after a tombstone, identity signed by `root`, everything else by `k1`); `records.append_signed(conn, envelope, signature)` is the lower-level ingest path (also the federation entry later) and stores bytes verbatim. `records.head` = newest row by log id.
