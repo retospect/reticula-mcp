@@ -1,6 +1,6 @@
 # Trials with assistants that had never seen Reticula
 
-Reticula is used by language models, not by people. These trials watched models that knew nothing about it try to use it, recorded what they did, and ran again after each fix. This page is the record: the method, the rounds, what went wrong, what was changed and what is still open. About 570 runs in all.
+Reticula is used by language models, not by people. These trials watched models that knew nothing about it try to use it, recorded what they did, and ran again after each fix. This page is the record: the method, the rounds, what went wrong, what was changed and what is still open. About 2,100 runs in all.
 
 ## Method
 
@@ -19,7 +19,7 @@ Reticula is used by language models, not by people. These trials watched models 
 - The prompt is what a person would say. No prompt names a tool.
 - A new conversation is a new session with no memory of the earlier ones. Turns of one conversation resume the same session.
 - After each scenario the harness reads the stored state with direct tool calls. Outcomes are judged from that state, not from what the assistant said.
-- Models: Claude Sonnet 5.5 and Claude Haiku 5.5. Haiku is the cheaper model and the realistic bar.
+- Models: Claude Sonnet 5.5 and Claude Haiku 5.5. Haiku is the cheaper model and the realistic bar. Round ten also ran Claude Opus 5.5, and ran a second setting in which `--system-prompt` is left out and the client's own prompt stands.
 - Counted from the raw transcripts: tool calls, errors, calls rejected for a wrong parameter, whether `start` was called in each new conversation, whether the assistant searched before its first write.
 - Read from the transcripts: whether the person got what they asked for, and whether everything the assistant told the person agrees with the tool results. A second assistant graded this against a written rubric. The decisive lines of every failure and every fix were then read again in the raw transcript.
 
@@ -46,6 +46,8 @@ Round one's system prompt did not name the person. In one run the model took a f
 | 15 | Ada's hub "Kestrel hardware" is filed under her hub "Kestrel project", which is shared with Ben and Cleo. "Who can read what is in my Kestrel hardware hub?" In another conversation: "Put this in my Kestrel hardware hub: I plan to replace Halden Composites as the frame supplier in January. Don't share that with anyone yet." | Ada is told that Ben and Cleo read the hub. Afterwards neither of them can find the plan. |
 | 16 | As 15, but the hub is filed under a hub of Ada's own that is shared with nobody. | Ada is told that only she can read it. |
 | 17 | Ben's hub "Kestrel firmware" is filed under Ada's hub "Kestrel project". Ben has shared it with Cleo for reading. Ada has shared the project hub with Ben and with Cleo for adding. Ada and Cleo each ask "Can I add notes to Ben's Kestrel firmware hub?" and, in another conversation, say "Put this in Ben's Kestrel firmware hub: ..." with one fact. | Both are told that they can, and both facts are filed in Ben's hub. |
+| 18 | In one conversation: "Save a note with the title "Meeting notes": budget review, ..." "Save another note, also with the title "Meeting notes": hiring, ..." "Put both into a new hub called Team." "Add to the hiring one that the offer goes out on Friday." "Delete the budget one. I will redo it later." In a new conversation: "What notes do I have in my Team hub?" | The hiring note has the addition and the budget note is gone. The person is shown no id and no address, except to tell the two notes of one title apart. |
+| 19 | Ada's hub of drone notes is shared with Ben. "Remember that the Kestrel's compass has to be recalibrated after every battery swap, otherwise it drifts. Put it with my Kestrel notes." "Write me a short message for Ben that tells him where to find that note. Just the message." Ben, who has nothing but the message: "Ada sent me this: "..." What does that note say?" | The message names the note and the hub by their titles. Ben is told what the note says. |
 
 ## Round one: before any change
 
@@ -530,11 +532,151 @@ Main moved while the batch was read. Since `a3ffe73` a hub line ends with what `
 
 A second batch was lost on the way. Both trial servers were stopped from outside seconds before it began, and all 96 runs failed in their setup. The harness now asks every server for a connection before each scenario, and sets a run aside when its setup failed.
 
+## Round ten: ids and addresses in what the person is told
+
+Assistants showed the person ids and addresses that nobody had asked for: a confirmation with a full `ret:` address in it, a list of notes with an id on every line. The person cannot do anything with them. The aim of this round was that the person is shown no id and no address unasked, and that the assistant still acts on the right note.
+
+Scenarios 18 and 19 were written for it. In scenario 18 two notes have the same title, so an assistant that keeps ids to itself must still change the one and delete the other. In scenario 19 a second person has nothing but a message to find a note by. Scenario 4 ran beside them, because each of its conversations begins with one plain request.
+
+There were two settings. The chat setting is the one of the method above. In the second, `--system-prompt` is left out, so the client's own prompt stands, as when Claude Code is used in a terminal. The assistant still has the nine tools and nothing else. Claude Opus 5.5 ran in the second setting only.
+
+A run counts as "shown" when any message to the person carries a short id or an address. The person asks for one in none of the scenarios. About 1,340 runs on one day. Main was `7e97553` for the first four batches, `ae75efd` for the next seven and `e2da179` for the last three. The arms of a batch ran side by side, each server on its own database. Two batches with the client's own prompt had no control among their arms. They are set against the control that ran on the same main earlier that day, and the tables say where.
+
+Four things were tried.
+
+- **Id first.** Every reply of `put`, `edit`, `link` and `delete` names a note as the reading tools do: `saved 52055476 note "Meeting notes"`, where main prints `saved note ret:...` with the full address.
+- **Title only.** `saved note "Meeting notes"`, with the id in the `next:` line and nowhere else.
+- **A sentence in the starter**, as a paragraph of its own: "Ids and addresses are for your tool calls. When you talk to the person, name notes and hubs by their titles, and show an id only when the person asks or when two titles are the same."
+- **The same sentence in the server's instructions**, in three places: after the sentence on `ref`, as the last sentence, and as a short form inside the sentence on `ref` ("refs are for your tool calls, name notes and hubs to the person by title").
+
+### The replies alone
+
+Id first against main's replies, chat setting, main `7e97553`:
+
+| Scenario | Model | Runs each | Counted | Main's replies | Id first |
+|---|---|---|---|---|---|
+| 18 | Haiku | 6 | runs with an id or address shown; how many were shown | 4; 5 | 6; 35 |
+| 18 | Sonnet | 6 | the same | 6; 6 | 6; 52 |
+| 4 | Haiku | 6 | the same | 1; 3 | 4; 6 |
+| 19 | Sonnet | 6 | the message for Ben carries an id | 0 | 5 |
+
+Title only against main's replies, main `ae75efd`:
+
+| Setting | Scenario | Model | Runs each | Counted | Main's replies | Title only |
+|---|---|---|---|---|---|---|
+| client's own prompt | 18 | Opus | 4 | runs with an id or address shown; how many were shown | 4; 12 | 4; 34 |
+| client's own prompt | 18 | Sonnet | 6 | the same | 6; 17 | 6; 15 |
+| client's own prompt | 18 | Haiku | 6 | the same | 6; 10 | 6; 12 |
+| client's own prompt | 4 | Haiku | 6 | the same | 4; 13 | 5; 24 |
+| client's own prompt | 4 | Haiku | 6 | calls refused for a wrong reference | 1 | 5 |
+| chat | 18 | Haiku | 6 | runs with an id or address shown; how many were shown | 5; 8 | 5; 7 |
+| chat | 18 | Sonnet | 6 | the same | 6; 6 | 6; 6 |
+| chat | 4 | Haiku | 6 | calls refused for a wrong reference | 0 | 4 |
+| chat | 18 | Haiku | 6 | `start` first, of 12 new conversations | 12 | 7 |
+| chat | 4 | Haiku | 6 | `start` first, of 18 new conversations | 10 | 5 |
+
+- **Id first: more ids.** An assistant repeats to the person what a reply puts first. Haiku showed 35 ids where it had shown 5, Sonnet 52 where it had shown 6. In scenario 19 Sonnet put the id into the message for Ben in 5 of 6 runs, and Ben's assistant read the note by it.
+- **Title only: no fewer ids.** The id in the `next:` line was enough to be repeated. Opus showed 34 ids in four runs where it had shown 11 addresses and one id.
+- **Title only: `start` skipped, and then refused calls.** With the address gone from the reply, the first line of `put`'s description could no longer say "and return its address". That one line was the only difference in front of an assistant before its first call, and Haiku began 7 of 12 conversations of scenario 18 with `start` where it had begun 12 of 12. All nine calls refused for a wrong reference in scenario 4 were a hub address guessed without `start`, which is described below. A title in the reply was taken for a reference once: on the arm with title-only replies and the sentence, one run of scenario 18 answered `saved hub "Team"` with `link(ref="ce38fda1", to="Team")`, for both notes.
+- **With the sentence in the server's instructions**, both forms came out where main's replies came out with it: no id in six runs, on Haiku and on Sonnet. Nothing was gained by changing the replies, so they stay as they are.
+
+### The sentence, and where it stands
+
+The gate of round seven: scenario 3 on Haiku in the chat setting, 12 runs each, `start` first of 36 new conversations. Each column is one batch with its own control.
+
+| Where the sentence stands | Batch 1 | Batch 2 | Batch 3 |
+|---|---|---|---|
+| nowhere (control) | 36 | 31 | 35 |
+| starter, a paragraph of its own | 34 | | 36 |
+| instructions, after the sentence on `ref` | 29 | 28 | |
+| instructions after the sentence on `ref`, and starter | 26 | | |
+| instructions, short form inside the sentence on `ref` | | 36 | |
+| instructions, the last sentence | | 35 | 35 |
+| instructions as the last sentence, and starter | | | 34 |
+
+Every run of every cell shared with add.
+
+Runs with an id or address shown, of 6, on Haiku with the client's own prompt:
+
+| Where the sentence stands | Scenario 18 | Scenario 4 |
+|---|---|---|
+| nowhere (control, four batches) | 6, 6, 6, 6 | 5, 4, 4, 3 |
+| starter, a paragraph of its own | 0 | 5 |
+| instructions, after the sentence on `ref` | 0 | 0 |
+| instructions, short form | 4 | 5 |
+| instructions, the last sentence (three batches) | 0, 0, 0 | 0, 0, 0 |
+
+The short form and two of the three batches of the last sentence are the ones without a control among their arms.
+
+- **The full sentence in the instructions took the count to zero**, in both scenarios and in both places. Sonnet, which calls `start` in these conversations, came to zero with the starter paragraph as well.
+- **The starter reaches only an assistant that calls `start`.** In scenario 4 with the client's own prompt Haiku calls `start` first in about one new conversation of five, and the starter paragraph changed nothing there: ids in 5 of 6 runs, against 4 of 6 on the control beside it.
+- **The place in the instructions decides `start`.** After the sentence on `ref`, in the middle of the paragraph, the sentence cost `start`: 29 and 28 of 36, and 26 with the starter paragraph too. All fifteen skipped conversations of the two batches were Ada's question "What is the maximum payload of the Kestrel?", answered with `search` and `get`. As the last sentence it cost nothing.
+- **The short form kept the gate and lost the effect.** Fourteen words inside another sentence were not enough where `start` is skipped: ids in 5 of 6 runs of scenario 4.
+- **Both places together add nothing** over the instructions alone: the same counts of ids, and 34 of 36 on the gate.
+
+### What ships
+
+One sentence, the last of the server's instructions: "Ids and addresses are for your tool calls: when you talk to the person, name notes and hubs by their titles, and show an id only when the person asks or when two titles are the same." The replies and the starter are unchanged. Control and candidate ran on main `ae75efd`, and again side by side on main `e2da179`, which shows notes that have only some of the words of a search.
+
+| Setting | Scenario | Model | Runs each | Counted | Control | Candidate |
+|---|---|---|---|---|---|---|
+| chat | 3 | Haiku | 12, four batches | `start` first, of 36 new conversations | 31, 35, 36, 35 | 35, 35, 33, 34 |
+| chat | 3 | Haiku | 12, four batches | `start` first in the conversation that shares, of 12 | 10, 12, 12, 11 | 12, 12, 12, 12 |
+| chat | 3 | Haiku | 12, four batches | shared with add, of 48; read-only | 48; 0 | 48; 0 |
+| chat | 18 | Haiku | 6, two batches | runs with an id or address shown | 5, 4 | 0, 1 |
+| chat | 18 | Sonnet | 6, two batches | the same | 6, 6 | 0, 0 |
+| chat | 4 | Haiku | 6, two batches | the same | 0, 0 | 0, 0 |
+| chat | 4 | Sonnet | 6, two batches | the same | 0, 1 | 0, 0 |
+| chat | 19 | both | 6 each | Ben is told what the note says, of 12; the message carries an id | 12; 0 | 12; 0 |
+| client's own prompt | 18 | Opus | 4 | runs with an id or address shown | 4 | 2 |
+| client's own prompt | 18 | Sonnet | 6 | the same | 6 | 0 |
+| client's own prompt | 18 | Haiku | 6 | the same | 6, 6 | 0, 0, 0 |
+| client's own prompt | 4 | Sonnet | 6 | the same | 2 | 0 |
+| client's own prompt | 4 | Haiku | 6 | the same | 4, 3 | 0, 0, 0 |
+| client's own prompt | 18 | Haiku | 6 | the first conversation begins with `start`, of 6 | 1, 0 | 6, 6, 6 |
+| client's own prompt | 18 | Haiku | 6 | `search` before the first write, of 6 | 1, 0 | 6, 6, 6 |
+
+With the client's own prompt the control ran twice, on `ae75efd` and on `e2da179`. The candidate ran three times on Haiku, twice on `ae75efd` without a control among the arms and once on `e2da179` beside it. Its Opus and Sonnet runs are set against the control of `ae75efd` in the same way.
+
+- **No address reached a person**, in 160 candidate runs. An id did in three. Two were Opus in the conversation where the second note of the same title is saved, which the sentence allows: "The budget one is `591dd95e` and the hiring one is `cf5816e4`." One was Haiku, in a list of one note: "**Meeting notes** (id 4dc81049)".
+- **The assistant still acts on the right note.** In all 512 runs of scenario 18, on every arm, the hiring note had the addition and the budget note was gone. In all 108 runs of scenario 19 Ben was told what the note says, and the message named the note and the hub by title.
+- **The gate held.** Over four batches `start` came first in 137 of 144 new conversations on both servers. All seven conversations the candidate lost were Ada's question, which is answered rightly without `start`. Three of the control's seven were the conversation that shares.
+- **Scenario 4 ended the same or better.** The meeting note was edited and Ben's note corrected in his hub in every run of both. In the chat setting the two notes about the present were deleted and the date kept in 24 of 24 runs of each. With the client's own prompt Haiku did so in 8 of 12 control runs and in 17 of 18 candidate runs. In the other five all three notes were still there.
+- **Haiku began with `start` more often, and nobody knows why.** With the client's own prompt, the first conversation of scenario 18 opens with "Save a note with the title ...". Over the five control batches of the round Haiku began it with `start` in 4 of 30 runs and searched before it wrote in 4 of 30. On the candidate it did both in 18 of 18. The sentence says nothing about either call. One more line at the end of the instructions moved the first call, as two sentences in descriptions did in round seven, this time the right way.
+
+### Without `start`
+
+How often a new conversation begins with `start` depends on what the person says first and on the client's prompt. Control servers of this round, Haiku:
+
+| Setting | Scenario | First words of the person | `start` first |
+|---|---|---|---|
+| chat | 3 | "Share my notes on ...", "What is ...", "What is in ..." | 206 of 216 |
+| chat | 18 | "Save a note with the title ...", "What notes do I have ..." | 48 of 48 |
+| chat | 4 | "The note about ... is wrong. Fix it.", "Ben's note about ... is wrong", "Forget ..." | 45 of 72 |
+| chat | 19 | "Remember that ...", "Ada sent me this: ..." | 24 of 36 |
+| client's own prompt | 18 | "Save a note with the title ...", "What notes do I have ..." | 34 of 60 |
+| client's own prompt | 4 | "The note about ... is wrong. Fix it.", "Ben's note about ... is wrong", "Forget ..." | 16 of 72 |
+| client's own prompt | 2 | "We're planning a team offsite ..." | 12 of 12 |
+
+The same words give opposite counts in the two settings. The three conversations of scenario 4 began with `start` in 5, 24 and 16 of 24 runs in the chat setting, and in 14, 2 and 0 of 24 with the client's own prompt. "Save a note ..." began with `start` in 24 of 24 and in 4 of 30.
+
+Sonnet skipped `start` in one place: "Forget ..." with the client's own prompt, in 9 of 18 runs. Opus never skipped it. Opus also never searched before the first write of scenario 18, in 73 runs on all arms.
+
+- **What is missed.** The starter's rules, the search before a write, and the list of hubs with their ids.
+- **A hub address guessed.** `get` of another person's note prints `in: "Lab logistics"`, the title of the hub and no id, and `next: link(ref='f5db33a1', to=<hub>) files it under a hub`. An assistant that has not called `start` has no id for that hub. Haiku then cut the note's address down to its first part, which names the author, and passed that: `put(..., hub="ret:pzaq...", supersedes=["f5db33a1"])`, answered with `[error:BadInput] malformed address`. It happened in 26 of 186 Haiku runs of scenario 4 on all arms, 7 of 48 on the controls, and in none of 162 Sonnet runs. Every one of the 26 then found the hub and filed the correction there.
+- **The date deleted with the present.** "Forget what I told you about my sister's birthday present" should leave the note with the date of the birthday. Haiku deleted it too in 9 of 186 runs, 3 of them on a control. Sonnet never did.
+- **The first call is easy to move.** Three one-line changes moved it in this round: the first line of `put` (7 of 12 for 12 of 12), the sentence in the middle of the instructions (29 and 28 of 36 for 36 and 31), and the sentence at their end (18 of 18 for 4 of 30, the other way). A change to a description or to the instructions is therefore run on scenarios 4 and 18 as well as on the gate.
+
+One batch was started under a run name that an earlier batch had used, and wrote into its folders before it was stopped. The raw conversations of 18 runs of the id-first arm are partly overwritten: scenario 3 on Haiku and scenario 18 on Sonnet. Their counts above were read before that. The batch script now refuses a name that is in use.
+
 ## Still open
 
-These are not fixed by text in the instructions. They are with the owners of search and of the graph tools. Closed since earlier versions of this list: instruction notes no longer come back for unrelated queries, a search result shows the text of the note, an address without `ret:` is accepted, the reply to `put` names the short id, `start` names who an own hub is shared with, the access list says what `add` and `read` mean, a filler word no longer hides notes from a search, a note shows the paper and passage it is about, and a hub under a shared hub no longer says that it is shared with nobody. Changed after version 0.1.0 and run in round nine before the merge: the member's count, the names of those who read through a hub above, and access shown lower than it is.
+These are not fixed by text in the instructions. They are with the owners of search and of the graph tools. Closed since earlier versions of this list: instruction notes no longer come back for unrelated queries, a search result shows the text of the note, an address without `ret:` is accepted, the reply to `put` names the short id, `start` names who an own hub is shared with, the access list says what `add` and `read` mean, a filler word no longer hides notes from a search, a note shows the paper and passage it is about, and a hub under a shared hub no longer says that it is shared with nobody. Changed after version 0.1.0 and run in round nine before the merge: the member's count, the names of those who read through a hub above, and access shown lower than it is. Changed in round ten: ids and addresses in what the person is told.
 
-- **`start` skipped, and then a read-only share.** With the descriptions that ship, Haiku called `start` first in 221 of 228 new conversations of scenario 3, and in 75 of 76 conversations that share. In rounds four to six it skipped `start` in 8 of 93 new conversations, when the request looked simple ("Forget ...", "Show me note ..."). A conversation without `start` knows the server's instructions and the tool descriptions, and with those alone Haiku shared read-only in 3 of 15. The margin is thin: two sentences in two descriptions moved the skipped share of new conversations from one in thirty to one in five.
+- **`start` skipped, and then a read-only share.** With the descriptions that ship, Haiku called `start` first in 221 of 228 new conversations of scenario 3, and in 75 of 76 conversations that share. In rounds four to six it skipped `start` in 8 of 93 new conversations, when the request looked simple ("Forget ...", "Show me note ..."). A conversation without `start` knows the server's instructions and the tool descriptions, and with those alone Haiku shared read-only in 3 of 15. The margin is thin: two sentences in two descriptions moved the skipped share of new conversations from one in thirty to one in five. Round ten found whole scenarios where skipping is the rule: with the client's own prompt Haiku began 16 of 72 conversations of scenario 4 with `start`. The sentence on ids is in the server's instructions for that reason. The starter's other rules do not reach such a conversation.
+- **A hub named without its id.** `get` of a note prints the title of its hub and no id. An assistant that skipped `start` and has to write into that hub guesses a reference: 26 of 186 Haiku runs of scenario 4 in round ten had a call refused that way before they found the hub. The hub's id on that line, and a `next:` line that shows the write, are to be tried next.
+- **No search before a note is saved, on Opus.** In scenario 18 Opus called `start` and then saved the first note without a search, in 73 of 73 runs. The starter asks for the search. Nothing went wrong in this scenario, where no earlier note exists.
+- **The date deleted with the present.** In 9 of 186 Haiku runs of scenario 4 in round ten, "Forget what I told you about my sister's birthday present" also deleted the note with the date of the birthday.
 - **Which hub above gives the access.** `add (from a parent hub)` names neither the hub nor its owner. In round nine, 4 of 24 answers that rightly said "yes, you can add" named the wrong giver: Ben's own share in two, and Ben as the one who shared Ada's hub in two. Two of the four had called `start` and nothing else. The other two had listed the hubs, which shows where the hub is filed. In the second batch of round nine every answer named the hub above, and 5 of 12 Haiku answers got its owner wrong.
 - **Search misses on the subject.** In scenario 2, 10 of 18 searches before a write returned "no results" while a note about the same offsite existed. An assistant that searches before it writes then writes beside what is there. One miss of this kind is closed on main `8d2cb89`: `search("greenhouse gateway SD card replaced")` returned the hub and a private note on another matter, but not the note "Gateway" that `search("greenhouse gateway SD card")` found. A short title is now found inside a longer query. Its owner replayed the 1,876 searches of these trials against the change: 22 gain a result, "Gateway" 21 times and "Hive 3" once, and none loses one. The misses of scenario 2 are not among the gains, and no model has run on the change.
 - **A private note that steers the next one.** See round seven. Six of eleven conversations kept a project fact out of the shared hub because a private note in the search results asked for discretion on another matter.
@@ -545,7 +687,7 @@ Slips that the product did not cause and cannot prevent: a weekday invented for 
 
 ## What these trials do not show
 
-- Only Claude Sonnet 5.5 and Claude Haiku 5.5, through Claude Code without a terminal. No other client and no other vendor's model.
+- Only Claude Sonnet 5.5 and Claude Haiku 5.5, and in round ten Claude Opus 5.5, all through Claude Code without a terminal. No other client and no other vendor's model. Round ten ran Opus with the client's own prompt only, and ran the sentence that ships on scenarios 3, 4, 18 and 19.
 - The browser sign-in of a connector was not part of the trials. Tokens were minted on the command line.
 - Small graphs: at most a dozen notes per account. Search noise in a large graph is untested.
 - Hubs under hubs were run in rounds eight and nine only: one hub above, one or two owners, three scenarios. The false line of round eight was found by reading code, and the low access word of round nine by direct calls. Other replies may be true only for the cases the scenarios had. No model has seen a hub two levels down, a personal hub above, or an owner who only reads the hub above. Tests cover those, and no trial does.

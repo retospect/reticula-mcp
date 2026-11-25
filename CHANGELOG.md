@@ -8,6 +8,7 @@
 - When more notes have some of the words than are shown, a last line says how many and how to list them: `2 more have some of the words; a search for one of the words alone lists them`. It counts your own notes, the notes of people you gave access to a hub, and the notes in hubs you have filed into.
 - Any other note under that line is by somebody else and stands in a hub you have not filed into, or in one that anyone may file into. It is shown without its text, a note without a title as `(no title)`, and at most three of them are shown, after the others. 0.1.1 listed those with half of the words or more as results with their text, however many there were. Notes found in full, by all the words or by meaning, are listed as before.
 - The first line of a search says `1 result` for one result.
+- The server's instructions end with one more sentence: ids and addresses are for the assistant's tool calls, and it names notes and hubs to the person by their titles. Before, an assistant that saved or listed notes showed the person an id or an address unasked in most conversations. Now it shows an id only when the person asks or when two notes have the same title. The replies of the tools are unchanged. `docs/trials.md`, round ten, has the runs.
 
 ## 0.1.1 (2026-11-25)
 
