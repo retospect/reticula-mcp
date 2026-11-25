@@ -191,7 +191,8 @@ put(title="Tube furnace: 40 min nitrogen purge before runs above 600 C",
     text="Lab tube furnace: before any run above 600 C, purge with nitrogen for 40
     minutes first. Without the purge, the quartz tube clouds up.",
     tags=["lab", "tube-furnace", "safety", "procedure"])
-    saved note ret:p3yrqdwqwubmd5rdi47yb3fhbuk/01a21216-0b15-701f-9e88-ee35c9fc885e
+    saved note c9fc885e "Tube furnace: 40 min nitrogen purge before runs above 600 C"
+    (ret:p3yrqdwqwubmd5rdi47yb3fhbuk/01a21216-0b15-701f-9e88-ee35c9fc885e)
     next: link(ref='c9fc885e', to=<hub>) to file it under a hub
 
 Assistant: Saved. The tube furnace rule is stored in your Reticula account: before any

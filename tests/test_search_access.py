@@ -19,7 +19,7 @@ from reticula_mcp.graph import handlers as graph
 from reticula_mcp.search import handlers, read
 from tests.search_support import use_hash_embedder
 
-_ADDRESS = re.compile(r"ret:\S+")
+_ADDRESS = re.compile(r"ret:p[a-z2-7]{26}/[0-9a-f-]{36}")
 
 
 @pytest.fixture(autouse=True)

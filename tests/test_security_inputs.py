@@ -301,7 +301,8 @@ def test_a_debug_note_filed_automatically_says_so(conn, make_account):
     out = handlers.put(conn, make_account(), text="it broke", kind="debug")
     note = addr(out)
     assert out == (
-        f"saved debug note {note} (filed for the operator; only the operator reads it)"
+        f'saved debug note {note[-8:]} "it broke" ({note})'
+        " (filed for the operator; only the operator reads it)"
     )
 
 
@@ -309,7 +310,10 @@ def test_other_kinds_keep_their_success_line(conn, make_account):
     z = make_account()
     hub = mk_hub(conn, z, "h")
     out = handlers.put(conn, z, text="x", hub=hub)
-    assert out.startswith(f"saved note {addr(out)} in hub {hub}")
+    note = addr(out)
+    assert out.startswith(
+        f'saved note {note[-8:]} "x" ({note}) in hub {hub[-8:]} "h" ({hub})'
+    )
 
 
 # --- a new paper stub says how to write notes about it ----------------------------

@@ -33,7 +33,9 @@ from reticula_mcp.errors import BAD_INPUT, NOT_FOUND, ReticulaError
 from reticula_mcp.graph.access import adders_from_above, readers_above
 from reticula_mcp.graph.paper import ext_key_from_payload
 from reticula_mcp.permissions import (
+    current_among_sql,
     current_nodes_sql,
+    readable_among_sql,
     readable_hub_ids,
     readable_hub_sql,
     readable_nodes_sql,
@@ -48,6 +50,11 @@ MEMBERS_SHOWN = 20  # notes per page of a hub, first page and every next page
 SUB_MEMBERS_SHOWN = 5  # notes shown for a sub-hub expanded inside a larger answer
 SUBHUBS_SHOWN = 30
 LINKS_SHOWN = 30
+# the members of the hubs ``hubs``, for _visible_among
+MEMBERS_OF_HUBS = (
+    "SELECT m2.node_id FROM membership m2 WHERE m2.hub_node_id = ANY(%(hubs)s)"
+)
+SECOND_STEP_READ = 1_000  # link rows read for depth 2 on a note, before who may read
 MAX_DEPTH = 2  # the hub, and its sub-hubs opened; deeper is another call
 HUB_BUDGET = 60  # hubs one call opens, the one asked for included
 TEXT_SLICE = 8_000  # characters of a note's text per answer
@@ -108,7 +115,9 @@ def read_ref(
         return _render_hub(
             conn, viewer, row, history=history, depth=depth, asked=asked, offset=offset
         )
-    return _render_note(conn, viewer, row, history=history, offset=offset)
+    return _render_note(
+        conn, viewer, row, history=history, offset=offset, depth=depth, asked=asked
+    )
 
 
 # --------------------------------------------------------------------- withdrawn
@@ -239,6 +248,8 @@ class _Chain:
     disputable: list[str]
     # the viewer's own notes that this one, written by someone else, hides
     hides_own: list[str]
+    # the notes shown on a link line, in that order (for depth 2)
+    linked: list[int]
 
 
 # Every supersession pair with ``p.hides``: does the newer atom hide the
@@ -277,7 +288,21 @@ def _chain_lines(conn: Conn, viewer: Account, node: Row) -> _Chain:
     that does not hide it is "corrected by @x" / "corrects", and the original
     stays in search and hub lists.
     """
-    readable = readable_nodes_sql("%(viewer)s")
+    # each list asks readable_nodes about its own candidates only
+    olds_sql = readable_among_sql(
+        "SELECT s2.old_node_id FROM supersedes s2 WHERE s2.new_node_id = %(node)s"
+    )
+    newer_sql = readable_among_sql(
+        "SELECT s2.new_node_id FROM supersedes s2 WHERE s2.old_node_id = %(node)s"
+    )
+    targets_sql = readable_among_sql(
+        "SELECT d2.id FROM link l2 JOIN node d2 ON d2.address = l2.dst_address"
+        " WHERE l2.src_node_id = %(node)s"
+    )
+    sources_sql = readable_among_sql(
+        "SELECT l2.src_node_id FROM link l2"
+        " WHERE l2.dst_node_id = %(node)s OR l2.dst_address = %(address)s"
+    )
     own = node["author"] == viewer.person_id
     params = {
         "node": node["id"],
@@ -288,29 +313,29 @@ def _chain_lines(conn: Conn, viewer: Account, node: Row) -> _Chain:
     }
     old = conn.execute(
         f"SELECT s.old_node_id AS id, p.hides {_PAIRS}"
-        f" WHERE s.new_node_id = %(node)s AND s.old_node_id IN ({readable})"
+        f" WHERE s.new_node_id = %(node)s AND s.old_node_id IN ({olds_sql})"
         " ORDER BY p.hides DESC, s.old_node_id LIMIT %(cap)s",
         params,
     ).fetchall()
     new = conn.execute(
         f"SELECT s.new_node_id AS id, p.hides {_PAIRS}"
-        f" WHERE s.old_node_id = %(node)s AND s.new_node_id IN ({readable})"
+        f" WHERE s.old_node_id = %(node)s AND s.new_node_id IN ({newer_sql})"
         " ORDER BY p.hides DESC, s.new_node_id LIMIT %(cap)s",
         params,
     ).fetchall()
     out = conn.execute(
         "SELECT l.rel, l.dst_address, d.id AS dst_id,"
-        f" (d.id IS NOT NULL AND d.id IN ({readable})) AS can_read"
+        f" (d.id IS NOT NULL AND d.id IN ({targets_sql})) AS can_read"
         " FROM link l LEFT JOIN node d ON d.address = l.dst_address"
         " WHERE l.src_node_id = %(node)s"
-        f" AND (d.id IS NULL OR %(own)s OR d.id IN ({readable}))"
+        f" AND (d.id IS NULL OR %(own)s OR d.id IN ({targets_sql}))"
         " ORDER BY l.rel, l.dst_address LIMIT %(cap)s",
         params,
     ).fetchall()
     inc = conn.execute(
         "SELECT DISTINCT l.rel, l.src_node_id AS id FROM link l"
         " WHERE (l.dst_node_id = %(node)s OR l.dst_address = %(address)s)"
-        f" AND l.src_node_id <> %(node)s AND l.src_node_id IN ({readable})"
+        f" AND l.src_node_id <> %(node)s AND l.src_node_id IN ({sources_sql})"
         " ORDER BY l.rel, l.src_node_id LIMIT %(cap)s",
         params,
     ).fetchall()
@@ -351,9 +376,11 @@ def _chain_lines(conn: Conn, viewer: Account, node: Row) -> _Chain:
     for r in new:
         if not r["hides"]:
             lines.append(f"corrected by {whom(r['id'])}: {show(r['id'])}")
+    linked: list[int] = []
     for r in out:
         if r["can_read"] and r["dst_id"] in rows:
             target = show(r["dst_id"])
+            linked.append(r["dst_id"])
         elif r["dst_id"] is None or own:
             target = f"{_address_as_written(r['dst_address'])} (opaque)"
         else:
@@ -362,6 +389,7 @@ def _chain_lines(conn: Conn, viewer: Account, node: Row) -> _Chain:
     for r in inc:
         if r["id"] in rows:
             lines.append(f"link {render.rel_word(r['rel'])} <- {show(r['id'])}")
+            linked.append(r["id"])
     if more:
         lines.append("(more links not shown)")
     disputable: list[str] = []
@@ -378,7 +406,76 @@ def _chain_lines(conn: Conn, viewer: Account, node: Row) -> _Chain:
             for i in olds
             if rows[i]["author"] == viewer.person_id
         ]
-    return _Chain(lines, disputable, hides_own)
+    return _Chain(lines, disputable, hides_own, list(dict.fromkeys(linked)))
+
+
+def _second_step_lines(
+    conn: Conn, viewer: Account, node: Row, linked: list[int]
+) -> list[str]:
+    """depth 2 on a note: the typed links of the notes it links to and is linked
+    from, in both directions, as ``get`` of each of them lists them. One line
+    per note reached, the first way it is reached; not the note itself and not
+    the notes already shown on a link line. Only notes the viewer may read,
+    checked before anything of them is read. A linked address with no node
+    here is left out: the step goes through notes."""
+    if not linked:
+        return []
+    found = conn.execute(
+        """
+        SELECT x.via, x.rel, x.dir, x.far FROM (
+            SELECT l.src_node_id AS via, l.rel, 'out' AS dir, d.id AS far
+            FROM link l JOIN node d ON d.address = l.dst_address
+            WHERE l.src_node_id = ANY(%(via)s)
+            UNION
+            SELECT nb.id AS via, l.rel, 'in' AS dir, l.src_node_id AS far
+            FROM node nb
+            JOIN link l ON l.dst_node_id = nb.id OR l.dst_address = nb.address
+            WHERE nb.id = ANY(%(via)s) AND l.src_node_id <> nb.id
+        ) x
+        WHERE x.far <> %(node)s AND x.far <> ALL(%(via)s)
+        ORDER BY array_position(%(via)s, x.via), x.rel, x.dir DESC, x.far
+        LIMIT %(cap)s
+        """,
+        {"via": linked, "node": node["id"], "cap": SECOND_STEP_READ},
+    ).fetchall()
+    readable = visible_subset(conn, viewer, sorted({r["far"] for r in found}))
+    reached: list[Row] = []
+    seen: set[int] = set()
+    for r in found:
+        if r["far"] in readable and r["far"] not in seen:
+            seen.add(r["far"])
+            reached.append(r)
+    shown = reached[:LINKS_SHOWN]
+    rows = fetch_rows(
+        conn,
+        viewer,
+        sorted({r["far"] for r in shown} | {r["via"] for r in shown}),
+        text_chars=200,
+    )
+    shown = [r for r in shown if r["far"] in rows and r["via"] in rows]
+    if not shown:
+        return []
+    lines = ["two link steps away:"]
+    for r in shown:
+        far = rows[r["far"]]
+        arrow = "->" if r["dir"] == "out" else "<-"
+        lines.append(
+            f"- {render.short_ref(rows[r['via']]['address'])} link"
+            f" {render.rel_word(r['rel'])} {arrow} {render.short_ref(far['address'])}"
+            f" {render.kind_word(far['kind'])} {_title(far)}"
+        )
+    rest = reached[LINKS_SHOWN:]
+    if rest or len(found) >= SECOND_STEP_READ:
+        vias = list(dict.fromkeys(r["via"] for r in rest)) or [shown[-1]["via"]]
+        refs = fetch_rows(conn, viewer, vias, text_chars=0)
+        calls = ", ".join(
+            f"get(ref={render.short_ref(refs[v]['address'])!r})"
+            for v in vias
+            if v in refs
+        )
+        count = f"{len(rest)}" if len(found) < SECOND_STEP_READ else f"{len(rest)} or"
+        lines.append(f"and {count} more: {calls}")
+    return lines
 
 
 def _history_lines(conn: Conn, address: str) -> list[str]:
@@ -470,7 +567,11 @@ def _about_lines(conn: Conn, viewer: Account, row: Row) -> list[str]:
     if key and row["kind"] != "paper":
         paper = conn.execute(
             "SELECT n.id FROM node n WHERE n.kind = 'paper' AND n.ext_key = %(key)s"
-            f" AND n.id IN ({readable_nodes_sql('%(viewer)s')})"
+            " AND n.id IN ("
+            + readable_among_sql(
+                "SELECT p.id FROM node p WHERE p.kind = 'paper' AND p.ext_key = %(key)s"
+            )
+            + ")"
             " ORDER BY n.id LIMIT 1",
             {"key": key, "viewer": viewer.id},
         ).fetchone()
@@ -501,10 +602,14 @@ def _paper_notes(
     key = paper.get("ext_key")
     if not key:
         return []
+    candidates = (
+        "SELECT a.id FROM node a WHERE a.kind <> 'paper' AND a.payload ? 'ext'"
+        " AND a.payload->'ext'->>'key' = %(key)s"
+    )
     about = (
         "n.kind <> 'paper' AND n.payload ? 'ext'"
         " AND n.payload->'ext'->>'key' = %(key)s AND n.tombstoned_at IS NULL"
-        f" AND n.id IN ({_visible_fn(history)})"
+        f" AND n.id IN ({_visible_among(history, candidates)})"
     )
     params = {"key": key, "viewer": viewer.id, "limit": PAPER_NOTES_SHOWN}
     counted = conn.execute(
@@ -541,7 +646,14 @@ def _paper_notes(
 
 
 def _render_note(
-    conn: Conn, viewer: Account, row: Row, *, history: bool, offset: int
+    conn: Conn,
+    viewer: Account,
+    row: Row,
+    *,
+    history: bool,
+    offset: int,
+    depth: int = 1,
+    asked: int | None = None,
 ) -> str:
     ref = render.short_ref(row["address"])
     # The note's own header shows its whole title, up to the longest a write
@@ -571,6 +683,13 @@ def _render_note(
         lines.append(f"in: {filed}")
     chain = _chain_lines(conn, viewer, row)
     lines.extend(chain.lines)
+    if depth >= 2:
+        lines.extend(_second_step_lines(conn, viewer, row, chain.linked))
+    if asked is not None and asked > MAX_DEPTH:
+        lines.append(
+            f"depth {min(asked, 10**6)} is more than one call reads: this is depth"
+            f" {MAX_DEPTH} (two link steps); read a linked note with get(ref=<its id>)"
+        )
     if row.get("tags"):
         lines.append("tags: " + " ".join(render.quote(t, 30) for t in row["tags"][:12]))
     if history:
@@ -620,6 +739,11 @@ def _visible_fn(history: bool) -> str:
     )
 
 
+def _visible_among(history: bool, ids_sql: str) -> str:
+    """:func:`_visible_fn` asked about the ids ``ids_sql`` gives only."""
+    return readable_among_sql(ids_sql) if history else current_among_sql(ids_sql)
+
+
 def member_counts(
     conn: Conn, viewer: Account, hub_ids: list[int], history: bool
 ) -> dict[int, tuple[int, int]]:
@@ -635,7 +759,7 @@ def member_counts(
         WHERE m.hub_node_id = ANY(%(hubs)s) AND NOT m.withdrawn
           AND (m.audience = 'hub' OR m.author = %(person)s)
           AND n.tombstoned_at IS NULL
-          AND n.id IN ({_visible_fn(history)})
+          AND n.id IN ({_visible_among(history, MEMBERS_OF_HUBS)})
         GROUP BY m.hub_node_id
         """,
         {"hubs": hub_ids, "person": viewer.person_id, "viewer": viewer.id},

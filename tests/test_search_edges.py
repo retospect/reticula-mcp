@@ -54,7 +54,7 @@ def titles(out: str) -> list[str]:
 
 
 def address(out: str) -> str:
-    found = re.search(r"ret:\S+", out)
+    found = re.search(r"ret:p[a-z2-7]{26}/[0-9a-f-]{36}", out)
     assert found, out
     return found.group(0)
 
