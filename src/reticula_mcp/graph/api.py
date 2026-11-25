@@ -148,6 +148,69 @@ def _check_rel(rel: str) -> None:
         )
 
 
+#: Relation names the starting instruction recommends: their first use is not
+#: news to the assistant. ``part-of`` and ``supersedes`` are built in.
+KNOWN_RELS = (
+    "related-to",
+    "supports",
+    "disputes",
+    "explains",
+    "qualifies",
+    "generalises",
+    "derived-from",
+    "cites",
+)
+BUILT_IN_RELS = frozenset({"part-of", "supersedes"})
+#: How many names in use a reply lists.
+RELS_SHOWN = 8
+
+
+def relation_names_in_use(conn: Conn, person_id: str) -> list[tuple[str, int]]:
+    """The typed link names on this person's live notes, with how many links
+    use each, most used first (then by name). Built-in relations are left out."""
+    rows = conn.execute(
+        "SELECT l.rel, count(*) AS n FROM link l"
+        " JOIN node s ON s.id = l.src_node_id"
+        " WHERE s.author = %s AND s.tombstoned_at IS NULL"
+        " AND NOT (l.rel = ANY(%s))"
+        " GROUP BY l.rel ORDER BY n DESC, l.rel",
+        (person_id, sorted(BUILT_IN_RELS)),
+    ).fetchall()
+    return [(r["rel"], r["n"]) for r in rows]
+
+
+def _rel_key(rel: str) -> str:
+    key = rel.lower().replace("-", "").replace("_", "")
+    return key[:-1] if key.endswith("s") else key
+
+
+def _distance(a: str, b: str) -> int:
+    """Levenshtein distance."""
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+def close_relation_name(rel: str, candidates: Iterable[str]) -> str | None:
+    """The first candidate that looks like a variant of ``rel``: the same after
+    lowercasing and dropping ``-``, ``_`` and a trailing ``s``, or at most two
+    edits apart. Names shorter than four characters only match the first way,
+    since two edits turn most short words into each other."""
+    key = _rel_key(rel)
+    for name in candidates:
+        if name == rel:
+            continue
+        if _rel_key(name) == key:
+            return name
+        if min(len(name), len(rel)) >= 4 and _distance(name.lower(), rel.lower()) <= 2:
+            return name
+    return None
+
+
 def _clean_tags(tags: Iterable[str] | None) -> list[str]:
     out: list[str] = []
     for tag in tags or ():
