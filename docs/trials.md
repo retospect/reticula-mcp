@@ -1,6 +1,6 @@
 # Trials with assistants that had never seen Reticula
 
-Reticula is used by language models, not by people. These trials watched models that knew nothing about it try to use it, recorded what they did, and ran again after each fix. This page is the record: the method, the rounds, what went wrong, what was changed and what is still open. About 2,100 runs in all.
+Reticula is used by language models, not by people. These trials watched models that knew nothing about it try to use it, recorded what they did, and ran again after each fix. This page is the record: the method, the rounds, what went wrong, what was changed and what is still open. About 2,200 runs in all.
 
 ## Method
 
@@ -668,6 +668,33 @@ Sonnet skipped `start` in one place: "Forget ..." with the client's own prompt, 
 - **The first call is easy to move.** Three one-line changes moved it in this round: the first line of `put` (7 of 12 for 12 of 12), the sentence in the middle of the instructions (29 and 28 of 36 for 36 and 31), and the sentence at their end (18 of 18 for 4 of 30, the other way). A change to a description or to the instructions is therefore run on scenarios 4 and 18 as well as on the gate.
 
 One batch was started under a run name that an earlier batch had used, and wrote into its folders before it was stopped. The raw conversations of 18 runs of the id-first arm are partly overwritten: scenario 3 on Haiku and scenario 18 on Sonnet. Their counts above were read before that. The batch script now refuses a name that is in use.
+
+## Round eleven: search shows notes that have only some of the words
+
+120 runs on the day of round ten, in the chat setting, six runs in each cell, the change beside main with its own database.
+
+Before the change, an assistant that searched with four words before it wrote could be told "no results" although a note on the subject existed under other words, and then wrote a second note. With the change, when fewer than three notes are found, up to three notes that have some of the words follow under a line of their own, each with the words it has: `· has: offsite`. With no result at all the first line reads `no note has all of these words; N have some of them`.
+
+There were two trials. The first ran the first form of the change against main `7e97553` on scenarios 2, 13 and 14, 72 runs. It gave two points on the wording, below. The second ran the reworded form against main `ae75efd` on scenarios 2 and 14, 48 runs. The change is on main as `2a288b5`.
+
+| Scenario | Model | Counted | Trial 1, main | Trial 1, change | Trial 2, main | Trial 2, change |
+|---|---|---|---|---|---|---|
+| 2 | Haiku | searches before a write that said "no results" though the run had saved a note on the subject | 3 | 0 | 1 | 1 |
+| 2 | Sonnet | the same | 8 | 6 | 12 | 6 |
+| 2 | Haiku | the answer in the later conversation has all nine facts, of 6 | 6 | 5 | 6 | 6 |
+| 2 | Sonnet | the same | 6 | 6 | 6 | 6 |
+| 14 | Haiku | searches answered in a new form, of 42 | | 13 | | 16 |
+| 14 | Sonnet | the same | | 16 | | 15 |
+| 14 | both | the plan to leave is readable by Ben, of 12 | 0 | 0 | 0 | 0 |
+| 13 | both | wrote the note that supersedes Ben's, of 12 | 12 | 12 | | |
+
+- **Fewer false "no results" on Sonnet**, 8 to 6 and 12 to 6. The six left in the first trial were in two runs whose queries shared no word with the notes: "catering dietary requirements", "flights group rate deadline". Haiku has too few to tell.
+- **A reply in a new form was followed by a write, as a plain reply is.** In scenario 14 every one of them was followed by `put`, but for one `get`. Where the facts were filed did not differ beyond what six runs show. No search of scenario 13 was answered in a new form.
+- **A list cut at three read as complete.** In the first trial one Haiku run searched "Lisbon offsite plan" and got one result and two rows with some of the words. A fourth note had the same word and was not listed. The assistant answered from the three, without the catering: the one answer of 24 that lacked a fact. Main lists one row for that search, so the change was still the better reply. A last line now counts what is not shown: `1 more has some of the words; a search for one of the words alone lists them`.
+- **That line was never followed.** In the second trial it came 30 times and was followed by `put` 29 times and by `get` once, never by a search for one word. In all 30 the search was the check before a write, and three rows were enough to decide. Whether an assistant follows it when the fourth note matters is not shown. One run passed `limit=5` and still got three rows and the line.
+- **"with only some of the words:" said too much.** It tells the reader that the rows above it have all of the words. Often they do not, because they came by meaning: a search for "soil moisture probe recalibration" answered `1 results` with a note that has no "recalibration". No assistant acted on it. The line now reads `also, with some of the words:`, which is true of the rows under it and says nothing of the rows above. A single result now reads `1 result`.
+- **Haiku kept the facts apart.** In scenario 2 of the second trial Haiku wrote 30 notes and made no edit on the change, and 23 notes and 8 edits on main, where it had merged later facts into a note. The answers were complete on both.
+- **Not run:** a note from a hub of somebody the reader has nothing to do with. What is on main shows such a note without its text and does not count it in the last line. Scenarios 2 and 14 have no such hub.
 
 ## Still open
 
