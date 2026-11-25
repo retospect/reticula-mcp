@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 import re
-import time
+import threading
 
 import pytest
 
@@ -28,6 +28,7 @@ from tests.conftest import PASSWORD
 from tests.helpers import make_atom
 from tests.search_support import (
     SlowEmbedder,
+    record_calls,
     use_embedder,
     use_hash_embedder,
     use_real_model,
@@ -57,23 +58,25 @@ def vectors(conn, model: str) -> int:
 def test_search_answers_from_keywords_while_the_model_loads(
     conn, make_account, monkeypatch
 ):
-    slow = SlowEmbedder(delay=1.0)
+    gate = threading.Event()  # the load cannot finish until the test says so
+    slow = SlowEmbedder(delay=0.0, gate=gate)
     use_embedder(monkeypatch, slow)
     alice = make_account(handle="alice")
     note = make_atom(conn, alice, "The aardvark burrow survey is due Friday.")
     make_atom(conn, alice, "Grocery list: bread, milk, eggs.")
 
-    started = time.monotonic()
     out = handlers.search(conn, alice, query="aardvark")
-    took = time.monotonic() - started
 
+    # the search returned while the load was still shut: it did not wait for it
+    assert not slow.ready, "the search waited for the model"
     assert note["address"][-8:] in out  # the keyword legs found it
     assert LOADING in out  # and the caller is told what kind of answer this is
-    assert took < 0.5, f"the search waited for the model ({took:.2f}s)"
     assert slow.embed_calls == 0 and vectors(conn, slow.model) == 0
     # a miss says so too: the caller should not conclude that nothing exists
     assert LOADING in handlers.search(conn, alice, query="zeppelin")
+    assert not slow.ready
 
+    gate.set()
     assert wait_until(lambda: slow.ready, 5)  # the search started the load
     assert slow.loads == 1
     again = handlers.search(conn, alice, query="aardvark")
@@ -137,12 +140,10 @@ def test_a_write_neither_loads_nor_waits_for_the_model(conn, make_account, monke
     use_embedder(monkeypatch, slow)
     alice = make_account(handle="alice")
 
-    started = time.monotonic()
     note = address(graph.put(conn, alice, text="tapir field notes", title="Tapir"))
     graph.edit(conn, alice, ref=note, text="tapir field notes, revised")
-    took = time.monotonic() - started
 
-    assert took < 2.0, f"the write waited for the model ({took:.2f}s)"
+    # a write that waited for the model would have asked it to load (30 s here)
     assert slow.loads == 0 and slow.embed_calls == 0  # not even asked to load
     assert vectors(conn, slow.model) == 0
     assert "revised" in handlers.get(conn, alice, ref=note)  # the write happened
@@ -200,7 +201,8 @@ def server(fresh_db_url, monkeypatch):
 
 def test_the_worker_loads_the_model_and_embeds_what_was_missed(server, monkeypatch):
     settings, db = server
-    slow = SlowEmbedder(delay=0.4)
+    gate = threading.Event()  # the load cannot finish until the test says so
+    slow = SlowEmbedder(delay=0.0, gate=gate)
     use_embedder(monkeypatch, slow)
     with connect(db.url) as c:
         alice = accounts.create_account(c, "alice@example.com", PASSWORD, "alice")
@@ -214,10 +216,9 @@ def test_the_worker_loads_the_model_and_embeds_what_was_missed(server, monkeypat
             "SELECT count(*) AS n FROM node WHERE tombstoned_at IS NULL"
         ).fetchone()["n"]
 
-    started = time.monotonic()
     hooks.on_server_start(settings, db)
-    assert time.monotonic() - started < 0.2  # the start does not wait for the model
-    assert not slow.ready
+    assert not slow.ready  # the start did not wait for the model
+    gate.set()
 
     with connect(db.url, autocommit=True) as c:
         # everything written before the start is embedded, nobody asked
@@ -361,9 +362,9 @@ def test_real_model_first_search_does_not_wait_and_later_ones_use_it(
 
 def test_real_model_write_does_not_load_it(conn, make_account, monkeypatch):
     real = use_real_model(monkeypatch)
+    asked = record_calls(monkeypatch, real, "load", "warm", "embed", "embed_query")
     alice = make_account(handle="alice")
-    started = time.monotonic()
     graph.put(conn, alice, text="quokka field notes", title="Quokka")
-    assert time.monotonic() - started < 2.0
+    assert asked == []  # the model was not asked to load, nor to embed
     assert not embedder_module.is_ready(real)
     assert vectors(conn, real.model) == 0

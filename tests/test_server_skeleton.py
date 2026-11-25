@@ -24,7 +24,7 @@ from reticula_mcp.content import handlers as content_handlers
 from reticula_mcp.db import connect
 from reticula_mcp.graph import handlers as graph_handlers
 from reticula_mcp.search import handlers as search_handlers
-from reticula_mcp.server import build_app
+from reticula_mcp.server import INSTRUCTIONS, build_app
 from tests.conftest import PASSWORD
 
 CONTRACT = json.loads((Path(__file__).parent / "contract" / "tools.json").read_text())
@@ -111,6 +111,28 @@ def test_tool_contract_is_frozen(live):
         assert t.description and len(t.description) > 40, t.name
         for pname, p in t.inputSchema.get("properties", {}).items():
             assert p.get("description"), f"{t.name}.{pname} needs a description"
+
+
+def test_the_sentence_on_ids_is_the_last_of_the_instructions(live):
+    # Where this sentence stands was measured (docs/trials.md, round ten).
+    # Between the sentence on `ref` and "Errors look like" it cost `start` as
+    # the first call on Haiku: 29 and 28 of 36 new conversations of scenario 3,
+    # against 36 and 31 without it. As the last sentence it did not, and it kept
+    # ids and addresses out of what the person is told. Do not move or shorten
+    # it without running the scenarios again.
+    _, token = live.make_token()
+
+    async def work(session, init):
+        return init.instructions
+
+    instructions = run_mcp(live, token, work)
+    assert instructions == INSTRUCTIONS
+    assert instructions.endswith(
+        " Ids and addresses are for your tool calls: when you talk to the person, name"
+        " notes and hubs by their titles, and show an id only when the person asks or"
+        " when two titles are the same."
+    )
+    assert instructions.count("Ids and addresses") == 1
 
 
 def test_handler_signatures_match_the_tools():

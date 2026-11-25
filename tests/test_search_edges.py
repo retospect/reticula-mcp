@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 import re
-import time
 from collections.abc import Callable
 from typing import Any
 
@@ -21,7 +20,7 @@ from reticula_mcp.graph import handlers as graph
 from reticula_mcp.resolve import resolve_ref
 from reticula_mcp.search import handlers, read, render
 from tests.helpers import make_atom
-from tests.search_support import file_under, use_hash_embedder
+from tests.search_support import file_under, spy_on_sql, use_hash_embedder
 
 Node = dict[str, Any]
 
@@ -223,9 +222,9 @@ def test_a_query_over_1000_characters_is_refused_before_any_search(
     alice = make_account(handle="alice")
     make_atom(conn, alice, "the quick brown fox", title="Fox")
     seen = _spy_on_the_query(monkeypatch)
-    started = time.perf_counter()
+    sql = spy_on_sql(monkeypatch)
     err = error_of(lambda: search(conn, alice, query))
-    assert time.perf_counter() - started < 0.5
+    assert sql.statements == []  # refused before the database is asked anything
     assert err.code == "BadInput"
     assert "1000" in err.message and str(len(query.strip())) in err.message
     assert seen == []
@@ -658,14 +657,17 @@ def _big_hub(conn: Conn, who: Account, count: int = 3_000) -> Node:
 
 
 def test_a_hub_of_3000_members_answers_fast_with_the_newest_20_and_a_count(
-    conn, make_account
+    conn, make_account, monkeypatch
 ):
     alice = make_account(handle="alice")
     hub = _big_hub(conn, alice)
     ref = render.short_ref(hub["address"])
-    started = time.perf_counter()
+    sql = spy_on_sql(monkeypatch)
     out = get(conn, alice, hub["address"])
-    assert time.perf_counter() - started < 1.0
+    # The call reads 45 rows and runs 12 statements. Reading the 3000 members,
+    # or one statement per member, is what would make it slow: rows and
+    # statements are counted, not seconds.
+    assert sql.rows < 200 and len(sql.statements) < 100
     assert "members (newest first, 20 of 3000):" in out
     assert titles(out) == [f"Note {i}" for i in range(1, 21)]
     assert f"... 2980 more; next page: get(ref='{ref}+20')" in out
@@ -758,7 +760,10 @@ def test_pages_count_and_list_only_what_the_viewer_may_read(conn, make_account):
     page = get(conn, carol, f"{ref}+20")
     assert titles(page) == [f"Note {i}" for i in range(21, 26)]
     assert "last page: 25 members in all" in page
-    assert "Bob" not in first + page and "bob" not in (first + page).lower()
+    # Not a bare "bob": the address line holds alice's person id, 26 characters
+    # of a-z and 2-7, and three of them spell it once in about 1,400 runs.
+    shown = first + page
+    assert "bob secret" not in shown.lower() and "@bob" not in shown
 
 
 def test_more_than_30_sub_hubs_say_how_many_more_and_how_to_find_them(

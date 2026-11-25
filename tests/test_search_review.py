@@ -26,7 +26,7 @@ from tests.graph_support import (
     share,
     sql_node_id,
 )
-from tests.search_support import use_hash_embedder
+from tests.search_support import spy_on_sql, use_hash_embedder
 
 
 @pytest.fixture(autouse=True)
@@ -96,26 +96,30 @@ def test_one_call_opens_a_bounded_number_of_hubs(conn, make_account, monkeypatch
     assert out.count(" hub ") >= 10  # every sub-hub is still listed
 
 
-def test_a_wide_deep_tree_is_read_in_bounded_time(conn, make_account):
+def test_a_wide_deep_tree_is_read_in_bounded_time(conn, make_account, monkeypatch):
     """The reviewer's tree: 585 hubs, 8 under each. At depth 3 it took 20.9 s
     and at depth 4 it did not finish."""
     z = make_account()
     root, made = tree(conn, z, fan=8, levels=3)
     assert made == 585
-    times = {}
+    sql = spy_on_sql(monkeypatch)
+    times, fetched = {}, {}
     for depth in (1, 2, 4):
+        sql.reset()
         started = time.perf_counter()
         out = handlers.get(conn, z, ref=root, depth=depth)
         times[depth] = time.perf_counter() - started
+        fetched[depth] = sql.rows
+        # Rows read stand for the time: the read of the whole tree is what took
+        # 20.9 s. A call that stops at two levels reads 229 rows at most (29 at
+        # depth 1); a call that goes one level deeper reads more than 1000.
+        assert sql.rows < 600, f"depth {depth} read {sql.rows} rows"
+        assert len(out.splitlines()) <= read.LINE_BUDGET + 5
     print(
         f"\n585 hubs: depth 1 {times[1]:.3f}s, depth 2 {times[2]:.3f}s,"
-        f" depth 4 (read as 2) {times[4]:.3f}s, {len(out.splitlines())} lines"
+        f" depth 4 (read as 2) {times[4]:.3f}s, {len(out.splitlines())} lines,"
+        f" rows {fetched}"
     )
-    # Wall clock on a shared machine: a read takes under 1 s alone and took
-    # over 5 s once with two other suites running. 15 s still fails the
-    # 20.9 s this test is here for.
-    assert max(times.values()) < 15.0
-    assert len(out.splitlines()) <= read.LINE_BUDGET + 5
 
 
 # ------------------------------------------- 2. kind and rel are quoted data
@@ -225,7 +229,7 @@ def test_the_candidate_list_of_an_ambiguous_ref_quotes_kind_and_text(
 # ------------------------------------------------------ 3. search query length
 
 
-def test_a_query_over_the_limit_is_refused(conn, make_account):
+def test_a_query_over_the_limit_is_refused(conn, make_account, monkeypatch):
     z = make_account()
     mk_note(conn, z, "alpha beta gamma")
     with pytest.raises(ReticulaError) as caught:
@@ -233,10 +237,11 @@ def test_a_query_over_the_limit_is_refused(conn, make_account):
     assert caught.value.code == BAD_INPUT and "1000" in caught.value.message
     assert "1001" in caught.value.message
 
-    started = time.perf_counter()
+    sql = spy_on_sql(monkeypatch)
     with pytest.raises(ReticulaError):  # the reviewer's 4000-word query
         handlers.search(conn, z, query=" ".join(f"word{i}" for i in range(4_000)))
-    assert time.perf_counter() - started < 0.5
+    # refused before the database is asked anything: that is what keeps it cheap
+    assert sql.statements == []
 
     longest = ("alpha " * 200)[:1000].strip()
     assert "alpha beta gamma"[:5] in handlers.search(conn, z, query=longest).lower()

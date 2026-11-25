@@ -17,6 +17,7 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
+import psycopg
 import pytest
 
 from reticula_mcp.accounts import Account
@@ -88,13 +89,97 @@ def wait_until(
     return bool(condition())
 
 
+class SqlSpy:
+    """What the code under test asked the database (``statements``) and how
+    many rows it read back (``rows``), since the spy was installed or last
+    :meth:`reset`. A count stands for the time a call takes where the wall
+    clock would make a test fail on a busy machine."""
+
+    def __init__(self) -> None:
+        self.statements: list[str] = []
+        self.rows = 0
+
+    def reset(self) -> None:
+        self.statements.clear()
+        self.rows = 0
+
+
+def spy_on_sql(monkeypatch: pytest.MonkeyPatch) -> SqlSpy:
+    """Count the statements run, and the rows fetched, on every psycopg cursor
+    (so on every connection) for the rest of the test."""
+    spy = SqlSpy()
+    execute = psycopg.Cursor.execute
+    fetchone = psycopg.Cursor.fetchone
+    fetchmany = psycopg.Cursor.fetchmany
+    fetchall = psycopg.Cursor.fetchall
+    iterate = psycopg.Cursor.__iter__
+
+    def counted_execute(self: Any, query: Any, *args: Any, **kwargs: Any) -> Any:
+        spy.statements.append(str(query))
+        return execute(self, query, *args, **kwargs)
+
+    def counted_fetchone(self: Any) -> Any:
+        row = fetchone(self)
+        spy.rows += row is not None
+        return row
+
+    def counted_fetchmany(self: Any, *args: Any, **kwargs: Any) -> Any:
+        rows = fetchmany(self, *args, **kwargs)
+        spy.rows += len(rows)
+        return rows
+
+    def counted_fetchall(self: Any) -> Any:
+        rows = fetchall(self)
+        spy.rows += len(rows)
+        return rows
+
+    def counted_iter(self: Any) -> Any:
+        for row in iterate(self):
+            spy.rows += 1
+            yield row
+
+    monkeypatch.setattr(psycopg.Cursor, "execute", counted_execute)
+    monkeypatch.setattr(psycopg.Cursor, "fetchone", counted_fetchone)
+    monkeypatch.setattr(psycopg.Cursor, "fetchmany", counted_fetchmany)
+    monkeypatch.setattr(psycopg.Cursor, "fetchall", counted_fetchall)
+    monkeypatch.setattr(psycopg.Cursor, "__iter__", counted_iter)
+    return spy
+
+
+def record_calls(
+    monkeypatch: pytest.MonkeyPatch, target: Any, *names: str
+) -> list[str]:
+    """Note each call of the named methods of ``target`` (an instance), in
+    order, and let the call through."""
+    calls: list[str] = []
+
+    def wrap(name: str) -> None:
+        real = getattr(target, name)
+
+        def recorded(*args: Any, **kwargs: Any) -> Any:
+            calls.append(name)
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(target, name, recorded)
+
+    for name in names:
+        wrap(name)
+    return calls
+
+
 class SlowEmbedder:
     """Stands in for a real model where the suite has none: not cheap, takes
     ``delay`` seconds to load, fails its first ``failures`` loads, and counts
-    what was asked of it. Vectors come from the hash embedder."""
+    what was asked of it. Vectors come from the hash embedder.
+
+    With a ``gate`` the load also waits until the test sets the event (or
+    ``gate_wait`` seconds have passed). A test that must show "the caller did
+    not wait for the load" holds the gate shut, checks ``ready`` is still
+    false, and opens it afterwards: no clock decides the outcome."""
 
     cheap = False
     max_distance = 0.8
+    gate_wait = 30.0  # only so that a broken test ends
 
     def __init__(
         self,
@@ -103,8 +188,10 @@ class SlowEmbedder:
         dim: int = 64,
         model: str = "slow",
         embed_delay: float = 0.0,
+        gate: threading.Event | None = None,
     ) -> None:
         self._inner = HashEmbedder(dim=dim, model=model)
+        self.gate = gate
         self.delay = delay
         self.failures = failures
         self.embed_delay = embed_delay
@@ -130,6 +217,8 @@ class SlowEmbedder:
                 return
             self.loads += 1
             time.sleep(self.delay)
+            if self.gate is not None:
+                self.gate.wait(self.gate_wait)
             if self.loads <= self.failures:
                 self.load_error = "RuntimeError: no network"
                 raise RuntimeError("no network")
