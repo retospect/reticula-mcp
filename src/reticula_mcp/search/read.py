@@ -779,8 +779,19 @@ def _load_bodies(
         sub_ids = _newest(
             conn, viewer, hub_ids, hubs=True, history=history, limit=SUBHUBS_SHOWN
         )
-    note_ids = _newest(
-        conn, viewer, hub_ids, hubs=False, history=history, limit=limit, offset=offset
+    # limit 0: no page of notes (a hub shown in lettered groups)
+    note_ids = (
+        _newest(
+            conn,
+            viewer,
+            hub_ids,
+            hubs=False,
+            history=history,
+            limit=limit,
+            offset=offset,
+        )
+        if limit
+        else {}
     )
     all_subs = sorted({i for ids in sub_ids.values() for i in ids})
     all_notes = sorted({i for ids in note_ids.values() for i in ids})
@@ -965,18 +976,14 @@ def _render_hub_page(
     return "\n".join(lines)
 
 
-def _grouped(conn: Conn, viewer: Account, top: _Body) -> list[str] | None:
+def _grouped(conn: Conn, viewer: Account, hub: Row) -> list[str] | None:
     """The lettered groups (search/groups.py) when the hub and its sub-hubs
-    hold more than ``groups.FLAT`` notes the viewer may read, else None. The
-    counts already read rule out most small hubs without another statement."""
-    deeper = top.sub_total > len(top.subs) or any(s.hubs for s in top.subs)
-    if not deeper and top.total + sum(s.notes for s in top.subs) <= groups.FLAT:
-        return None
-    notes, total = groups.load(conn, viewer, top.hub["id"])
+    hold more than ``groups.FLAT`` notes the viewer may read, else None."""
+    notes, total = groups.load(conn, viewer, hub["id"])
     if len(notes) <= groups.FLAT:
         return None
     tree = groups.build(notes)
-    return groups.overview(tree, render.short_ref(top.hub["address"]), total)
+    return groups.overview(tree, render.short_ref(hub["address"]), total)
 
 
 def _render_part(
@@ -1043,10 +1050,10 @@ def _render_hub(
     if history:
         lines.extend(_history_lines(conn, hub["address"]))
     lines.extend(_cut_hub_text(hub))
-    top = _load_body(conn, viewer, hub, history=history, limit=MEMBERS_SHOWN)
-    grouped = None if history else _grouped(conn, viewer, top)
-    if grouped is not None:
-        top.members = []  # the groups take the place of the newest-first page
+    grouped = None if history else _grouped(conn, viewer, hub)
+    # the groups take the place of the newest-first page: no page is loaded
+    limit = 0 if grouped is not None else MEMBERS_SHOWN
+    top = _load_body(conn, viewer, hub, history=history, limit=limit)
     used = sum(ln.count("\n") + 1 for ln in lines) + top.cost + RESERVED_LINES
     skipped = _expand(conn, viewer, top, history=history, depth=depth, used=used)
     if grouped is None or top.subs:
