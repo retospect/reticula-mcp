@@ -36,9 +36,15 @@ Not events: a deletion, a note taken out of a hub, a share taken away.
 
 What the viewer may read
 ------------------------
-Every listed id comes out of ``find._scope``, which is ``current_nodes(viewer)``
-or ``readable_nodes(viewer)``; so does the total behind "N more". Nothing here
-decides whether a note is readable.
+Every listed id is one that ``readable_nodes(viewer)`` returns; so is every
+note in the total behind "N more". The function is asked about the notes that
+changed (``_readable_among``), and nothing here decides whether a note is
+readable. A note that a newer readable note replaces is left out, unless
+``include_superseded`` is given. That is the rule of ``current_nodes``,
+applied to those notes with its own SQL function (``supersession_hides``):
+``current_nodes`` cannot be asked about a few ids. With ``hub``, the hub's
+subtree is ``find.subtree_sql``, and the kinds left out are those
+``find.scope`` leaves out.
 
 What is decided here is how far back the listing tells: nothing from before
 the viewer could read the note. ``_reach`` works out, for every hub the viewer
@@ -70,7 +76,7 @@ from reticula_mcp import records
 from reticula_mcp.accounts import Account
 from reticula_mcp.db.pool import Conn
 from reticula_mcp.errors import BAD_INPUT, ReticulaError
-from reticula_mcp.permissions import readable_nodes_sql
+from reticula_mcp.permissions import readable_hub_ids, readable_nodes_sql
 from reticula_mcp.search import find, render
 from reticula_mcp.search.read import member_counts
 from reticula_mcp.search.rows import fetch_rows, visible_subset
@@ -161,6 +167,8 @@ class _Reach:
     shared: dict[int, tuple[datetime, str]]
     #: those of ``shared`` that the system account shared
     by_system: frozenset[int] = frozenset()
+    #: every hub the viewer can read (``permissions.readable_hub_ids``)
+    hubs: tuple[int, ...] = ()
 
 
 def _granted_since(
@@ -206,14 +214,12 @@ def _granted_since(
 
 def _reach(conn: Conn, viewer: Account, hubs: Sequence[Row] | None = None) -> _Reach:
     """Since when the viewer can read each hub they can read. ``hubs``: those
-    hubs (``id``, ``author``, ``address``), when the caller has read them."""
+    hubs (``id``, ``author``, ``address``), when the caller has read them.
+    Which hubs they are is ``permissions.readable_hub_ids``."""
     if hubs is None:
         hubs = conn.execute(
-            "SELECT n.id, n.author, n.address FROM node n WHERE n.id IN ("
-            + _readable_among("SELECT h.id FROM node h WHERE h.kind = 'hub'")
-            + ")",
-            {"viewer": viewer.id},
-            prepare=False,
+            "SELECT n.id, n.author, n.address FROM node n WHERE n.id = ANY(%s)",
+            (readable_hub_ids(conn, viewer),),
         ).fetchall()
     ids = [h["id"] for h in hubs]
     opened = {h["id"]: ALWAYS for h in hubs if h["author"] == viewer.person_id}
@@ -279,7 +285,7 @@ def _reach(conn: Conn, viewer: Account, hubs: Sequence[Row] | None = None) -> _R
                 opened[edge["hub"]] = at
                 moved = True
     shared = {hub: (at, by) for hub, (at, by) in granted.items() if opened[hub] == at}
-    return _Reach(opened, shared, frozenset(system & set(shared)))
+    return _Reach(opened, shared, frozenset(system & set(shared)), tuple(ids))
 
 
 def _readable_among(ids_sql: str) -> str:
@@ -317,7 +323,7 @@ def _best_sql(
     hides; the rule of ``current_nodes``, with the same two functions, for
     the candidates alone. ``scope``: the readable candidates that are left, of
     the kind asked for, no debug notes unless asked for by kind (as
-    ``find._scope`` has it), and nothing the system account wrote unless a
+    ``find.scope`` has it), and nothing the system account wrote unless a
     kind is asked for. ``base`` is since when the viewer reads the note where
     that does not depend on a filing: always for their own, for a hub since it
     opened to them.
@@ -337,11 +343,7 @@ def _best_sql(
     for a handful of rows whatever they hold, and a join of two of them is
     then planned as a loop over all pairs (22 ms instead of 5 for 350 notes).
     """
-    hub = (
-        f" AND (n.id = %(hub)s OR n.id IN ({find._subtree('%(viewer)s')}))"
-        if in_hub
-        else ""
-    )
+    hub = f" AND (n.id = %(hub)s OR n.id IN ({find.subtree_sql()}))" if in_hub else ""
     theirs = " AND {0}.author <> %(person)s" if others else ""
     cand = (
         "SELECT o.id FROM unnest(%(only)s::bigint[]) AS o(id)"
@@ -540,7 +542,9 @@ def events(
     reach = _reach(conn, viewer)
     params = _params(viewer, reach, since=since, kind=kind)
     if hub_node_id is not None:
+        # what find.subtree_sql reads besides ``person``
         params["hub"] = hub_node_id
+        params["hubs"] = list(reach.hubs)
     if limit is not None:
         params["limit"] = limit
     if only is not None:
