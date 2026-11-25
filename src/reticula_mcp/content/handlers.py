@@ -29,8 +29,6 @@ PROFILE_HUB_LIMIT = 8
 HUB_TITLE_LIMIT = 80
 #: Other instructions named by ``start``.
 START_INSTRUCTION_LIMIT = 6
-#: How many ancestor levels are searched for an inherited grant.
-_MAX_DEPTH = 20
 
 
 def short_id(address: str) -> str:
@@ -46,25 +44,41 @@ def _day(moment: Any) -> str:
     return f"{moment:%Y-%m-%d}"
 
 
-def _inherited_mode(conn: Conn, viewer: Account, hub_node_id: int) -> str:
-    """The mode ``viewer`` holds on a hub: the nearest grant on the hub or on a
-    hub above it (a hub is above another when the other is filed under it)."""
-    row = conn.execute(
-        "WITH RECURSIVE up(id, depth) AS ("
-        "  SELECT %(hub)s::bigint, 0"
-        "  UNION"
-        "  SELECT m.hub_node_id, up.depth + 1 FROM up"
-        "  JOIN membership m ON m.node_id = up.id AND NOT m.withdrawn"
-        "  WHERE up.depth < %(max)s"
-        ") SELECT g.mode, up.depth FROM up"
-        " JOIN hub_grant g ON g.hub_node_id = up.id"
-        " AND g.grantee_account_id = %(viewer)s AND g.mode IN ('read', 'add')"
-        " ORDER BY up.depth, (g.mode = 'add') DESC LIMIT 1",
-        {"hub": hub_node_id, "max": _MAX_DEPTH, "viewer": viewer.id},
+def _mode_text(conn: Conn, viewer: Account, hub_node_id: int, shown: str | None) -> str:
+    """What the viewer may do on somebody else's hub, in words.
+
+    ``shown`` is ``shown_access``: the strongest of the grants on the hub and on
+    the hubs above it, ``add`` for the owner of a hub above, and ``read`` where
+    only the owner adds. The line used to take the nearest grant instead, which
+    said ``read`` to a person who can add: the owner of a hub above (no grant
+    anywhere), and a reader of the hub who can add to a hub above.
+
+    "(from a parent hub)" is added when the grant on the hub itself is not what
+    gives that access.
+    """
+    if shown is None:
+        return "read"  # readable without a grant, as the hub listing of search has it
+    own = conn.execute(
+        "SELECT mode FROM hub_grant WHERE hub_node_id = %s AND grantee = %s"
+        " AND mode IN ('read', 'add')",
+        (hub_node_id, viewer.person_id),
     ).fetchone()
-    if row is None:
-        return "read"
-    return row["mode"] if row["depth"] == 0 else f"{row['mode']} (from a parent hub)"
+    if own is not None and (own["mode"] == shown or shown == "read"):
+        return shown
+    return f"{shown} (from a parent hub)"
+
+
+def _through(above: list[dict[str, Any]], others: bool) -> str:
+    """The people who read a hub through a hub above it, for a hub line: up to
+    three handles, then how many more, or "and others" when there are people
+    this viewer is not shown."""
+    names = [f"@{p['handle']}" if p["handle"] else str(p["person"])[:12] for p in above]
+    text = ", ".join(names[:3])
+    if others:
+        return f"{text} and others"
+    if len(names) > 3:
+        return f"{text} and {len(names) - 3} more"
+    return text
 
 
 def _hub_rows(conn: Conn, viewer: Account) -> list[dict[str, Any]]:
@@ -96,19 +110,23 @@ def _hub_rows(conn: Conn, viewer: Account) -> list[dict[str, Any]]:
 
 
 def _hub_line(conn: Conn, viewer: Account, row: dict[str, Any]) -> str:
-    mode = "owner" if row["own"] else _inherited_mode(conn, viewer, row["id"])
     shown = (
         None if row["own"] else access.shown_access(conn, viewer.person_id, row["id"])
     )
-    if shown == "read" and mode.startswith("add"):
-        # add on a parent does not reach into a personal hub
-        mode = "read" + mode[3:]
+    mode = "owner" if row["own"] else _mode_text(conn, viewer, row["id"], shown)
     # Anyone can share a hub with anyone, so its title is a stranger's text:
     # quoted, one line, cut short.
     name = quote(row["title"], HUB_TITLE_LIMIT) if row["title"] else "(untitled hub)"
     notes = f"{row['notes']} {'note' if row['notes'] == 1 else 'notes'}"
     if row["hubs"]:
         notes += f", {row['hubs']} {'hub' if row['hubs'] == 1 else 'hubs'}"
+    # Who reads it through a hub above. The SQL column is a cheap first test
+    # for every hub of the list; `readers_above` is exact and knows whom this
+    # viewer may be shown.
+    above: list[dict[str, Any]] = []
+    others_above = False
+    if row["above"] and (row["own"] or shown == "add"):
+        above, others_above = access.readers_above(conn, viewer.person_id, row["id"])
     # Who shares a hub is shown only to those who may see the list: the owner
     # gets the handles (a bare count was misread as "shared with others"), a
     # member who can add gets a count, a reader gets nothing.
@@ -124,18 +142,27 @@ def _hub_line(conn: Conn, viewer: Account, row: dict[str, Any]) -> str:
         ]
         more = f" and {len(names) - 3} more" if len(names) > 3 else ""
         shared = f"{', '.join(names[:3])}{more}" if names else "nobody"
-        if row["above"]:
-            # Other people read it through a hub above: "nobody" would be
-            # false and the grants here are not the whole list.
-            above = "everyone who has a hub above it"
-            shared = f"{shared} and {above}" if names else above
+        # Other people read it through a hub above: "nobody" would be false
+        # and the grants here are not the whole list.
+        if above:
+            through = f"{_through(above, others_above)} through a hub above it"
+            shared = f"{shared}, and with {through}" if names else through
+        elif others_above:
+            everyone = "everyone who has a hub above it"
+            shared = f"{shared} and {everyone}" if names else everyone
         count = f"  shared with {shared},"
-    elif shown == "add" and not row["above"]:
-        people = row["grants"] + 1  # everyone with a grant, plus the owner
-        count = f"  {people} people have access,"
+    elif shown == "add" and not above and not others_above:
+        # Said as who they are: "2 people have access" was read as two people
+        # besides the reader (docs/trials.md, round seven).
+        more = max(row["grants"] - 1, 0)  # grants besides the viewer's own
+        count = (
+            f"  you, the owner and {more} more have access,"
+            if more
+            else "  only you and the owner have access,"
+        )
     else:
-        # no head count for a hub under another hub: the grants on the hub
-        # itself are not everyone who reads it
+        # no head count for a hub that people read through a hub above: the
+        # grants on the hub itself are not everyone who reads it
         count = ""
     owner = ""
     if not row["own"]:
