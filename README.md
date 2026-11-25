@@ -140,7 +140,7 @@ A cloud-hosted assistant makes the request from the provider's servers. Those ar
 1. Add the server to the assistant as a custom connector (a remote MCP server). The URL is your `RETICULA_PUBLIC_URL` plus `/mcp`, for example `https://reticula.example.com/mcp`. While `RETICULA_PUBLIC_URL` is not set, an assistant on the machine that runs the server can use `http://127.0.0.1:8787/mcp`. Once it is set, the sign-in works only through the public URL.
 
    - Claude (claude.ai and the desktop app): open "Customize", then "Connectors", click "+ Add", then "Add custom connector", and enter a name and the URL. The dialog then shows the sign-in settings it detected. Reticula registers each connector automatically and has no client ID or secret for you to enter. On a Team or Enterprise plan an owner adds it first under "Organization settings", "Connectors"; members then find it under "Customize", "Connectors" and click "Connect". This is read from Anthropic's support article [Get started with custom connectors using remote MCP](https://support.claude.com/en/articles/11175166) on 2026-11-25; the menus may have moved since. Claude connects from Anthropic's servers, so the URL must be public and on port 443.
-   - Claude Code: `claude mcp add --transport http reticula https://reticula.example.com/mcp`, then type `/mcp` inside Claude Code and follow the steps in the browser. `reticula` is the name the server gets in Claude Code. This is read from the [documentation of Claude Code](https://code.claude.com/docs/en/mcp) on 2026-11-25.
+   - Claude Code: `claude mcp add --transport http reticula https://reticula.example.com/mcp`, then type `/mcp` inside Claude Code and follow the steps in the browser. `reticula` is the name the server gets in Claude Code. This is read from the [documentation of Claude Code](https://code.claude.com/docs/en/mcp) on 2026-11-25. On a machine without a browser, connect Claude Code with a token minted on the server instead, as shown below. That way was run.
 
 2. The assistant opens the sign-in page in your browser. The page is titled "Connect to Reticula", names the application that will get access to your notes, and lets you choose between "Sign in" and "Create account". To create an account, give an e-mail address, a password of at least 10 characters and, if you want to choose it, a handle; the button "Create account and connect" sends you back to the assistant.
 
@@ -150,24 +150,27 @@ A cloud-hosted assistant makes the request from the provider's servers. Those ar
 
 Each connected assistant gets its own token, which can be revoked on its own.
 
-What was tried for this release: the sign-in flow with the scripted client of `scripts/smoke` and with the OAuth client of the MCP Python SDK (discovery, registration, the sign-in page, the token), and Claude Code with a minted token. The SDK's client also called `start` and renewed an expired token, once over plain HTTP on the machine itself and once over HTTPS through a reverse proxy. In both cases a script filled in the sign-in page; no browser was used. `scripts/oauth-client-check` repeats the SDK client's run against a running server. The browser sign-in from Claude Code and from claude.ai was not walked against a server of this release. The server offers automatic registration of a connector and nothing else, so if a dialog asks how to register, that is the choice that matches.
+What was tried for this release: the sign-in flow with the scripted client of `scripts/smoke` and with the OAuth client of the MCP Python SDK (discovery, registration, the sign-in page, the token), and Claude Code with a minted token, on the machine itself and on a machine without a browser through the public HTTPS address. The SDK's client also called `start` and renewed an expired token, once over plain HTTP on the machine itself and once over HTTPS through a reverse proxy. In both cases a script filled in the sign-in page; no browser was used. `scripts/oauth-client-check` repeats the SDK client's run against a running server. The browser sign-in from Claude Code and from claude.ai was not walked against a server of this release. The server offers automatic registration of a connector and nothing else, so if a dialog asks how to register, that is the choice that matches.
 
-A local client that cannot do the sign-in flow can use a token minted on the server. Under Docker Compose, run these in the `deploy` directory:
+A client that cannot do the sign-in flow, or a machine without a browser, can use a token minted on the server. Under Docker Compose, run these in the `deploy` directory:
 
 ```
 docker compose exec app reticula-mcp account create --email me@example.com
-docker compose exec app reticula-mcp token --email me@example.com --label laptop
+docker compose exec app reticula-mcp token --email me@example.com --label "laptop" --ttl-days 90
 ```
 
 Without Docker, leave out `docker compose exec app` and run them where `RETICULA_DATABASE_URL` is set, with `uvx` in front if that is how you run the server.
 
-`account create` asks for a password of at least 10 characters, twice, and needs a terminal for that (add `--handle name` to choose the handle). `token` prints a bearer token once: a secret string that stands for the account, so whoever holds it can read and write the account's notes. Only a hash is stored. `--ttl-days N` makes it expire. Send it in the header `Authorization: Bearer <token>`. A minted token works on `http://127.0.0.1:8787/mcp` whether `RETICULA_PUBLIC_URL` is set or not. For example, with Claude Code:
+`account create` asks for a password of at least 10 characters, twice, and needs a terminal for that (add `--handle name` to choose the handle). `token` prints a bearer token once: a secret string that stands for the account, so whoever holds it can read and write the account's notes. Only a hash is stored. `--ttl-days N` makes it expire. Send it in the header `Authorization: Bearer <token>`. A minted token works on the public URL, and on `http://127.0.0.1:8787/mcp` whether `RETICULA_PUBLIC_URL` is set or not. For example, with Claude Code on another machine:
 
 ```
-claude mcp add --transport http reticula http://127.0.0.1:8787/mcp --header "Authorization: Bearer <token>"
+claude mcp add --transport http reticula https://reticula.example.com/mcp --header "Authorization: Bearer <token>"
+claude mcp list
 ```
 
-`reticula-mcp connections list` and `connections revoke` show and revoke an account's connected assistants and minted tokens one by one. See [Accounts, tokens and connections](https://github.com/retospect/reticula-mcp/blob/main/docs/operating.md#accounts-tokens-and-connections).
+`claude mcp list` then shows the server as `Connected`. Claude Code keeps the header, token included, in plain text in its configuration for the scope the server was added in. The default scope is your own; do not add a server with a token with `--scope project`, whose file `.mcp.json` is meant to be committed.
+
+`reticula-mcp connections list` and `connections revoke` show and revoke an account's connected assistants and minted tokens one by one. A minted token is listed under "operator tokens" with its expiry, and `connections revoke --token N` ends it. See [Accounts, tokens and connections](https://github.com/retospect/reticula-mcp/blob/main/docs/operating.md#accounts-tokens-and-connections).
 
 ## An assistant's first five minutes
 

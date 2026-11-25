@@ -750,13 +750,19 @@ Mint a token for a client that cannot do the sign-in flow. A token here is a bea
 docker compose exec app reticula-mcp token --email someone@example.com --label laptop --ttl-days 90
 ```
 
-Claude Code is a client that takes such a header. This form of its command was run against a running instance on 2026-11-25. `reticula` is the name the server gets in Claude Code, and the address is the one the client reaches the server under, with `/mcp` at the end.
+Claude Code is a client that takes such a header, and this is how it connects on a machine without a browser. `reticula` is the name the server gets in Claude Code, and the address is the one the client reaches the server under, with `/mcp` at the end. The label says where the token is used.
 
 ```
-claude mcp add --transport http reticula http://127.0.0.1:8787/mcp --header "Authorization: Bearer <token>"
+docker compose exec app reticula-mcp token --email someone@example.com --label "<where it is used>" --ttl-days 90
+claude mcp add --transport http reticula https://<name>.<tailnet>.ts.net/mcp --header "Authorization: Bearer <token>"
+claude mcp list
 ```
 
-List what an account has. Connected assistants come first, operator tokens minted with `reticula-mcp token` in a second block. Each row has an id.
+Measured on 2026-11-25, on a machine without a browser and through the public address of the Tailscale node of [Tailscale Funnel from a container](#tailscale-funnel-from-a-container): `claude mcp list` said `Connected`. The same command with `http://127.0.0.1:8787/mcp` was run on the machine of the server. Claude Code keeps the header, token included, in plain text in its configuration for the scope the server was added in. Its documentation, read on 2026-11-25: the default scope `local` and the scope `user` are kept in `~/.claude.json`, and `project` in `.mcp.json` in the project, which is meant to be committed. Do not add a server with a token with `--scope project`.
+
+Claude Code 2.1.323 also has `claude mcp login --no-browser <name>`: it prints the sign-in address to open on another machine, and asks for the address the browser was sent back to. That was not tried.
+
+List what an account has. Connected assistants come first, operator tokens minted with `reticula-mcp token` in a second block headed `operator tokens`, with the expiry of each. Each row has an id.
 
 ```
 docker compose exec app reticula-mcp connections list --email someone@example.com
