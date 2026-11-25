@@ -2,7 +2,7 @@
 
 This page is for the person who runs the server. Settings are listed in the [README](../README.md).
 
-The commands are written for the Docker Compose files in [`deploy/`](../deploy) and are run from that directory. They were run as written here against a throwaway copy of the stack, with Docker Compose 5.8 on macOS, where Docker runs inside a Linux virtual machine. No older version of Compose was tried. To run the server without Docker, see [Without Docker](#without-docker) at the end.
+The commands are written for the Docker Compose files in [`deploy/`](../deploy) and are run from that directory. They were run as written here against a throwaway copy of the stack, with Docker Compose 5.8 on macOS, where Docker runs inside a Linux virtual machine. On Linux, the project's Check run on GitHub builds the image from the checkout, starts the stack of `compose.dev.yaml` and runs the smoke test against it on every change. On 2026-11-25 that was Ubuntu 26.04 with Docker Compose 5.1.3. No older version of Compose was tried. To run the server without Docker, see [Without Docker](#without-docker) at the end.
 
 ## Start
 
@@ -120,7 +120,7 @@ The limits on sign-ups, client registrations and failed sign-ins are counted per
 | The proxy is a container in the compose network and sets `X-Forwarded-For` | the address of that container (give it a fixed one) |
 | The tunnel forwards plain TCP, or sets no `X-Forwarded-For` | empty |
 
-`172.31.88.1` is the gateway of the compose network. A process on the host that connects to the published port reaches the server from that address, not from `127.0.0.1`. `compose.yaml` fixes the subnet of its network to `172.31.88.0/24` so that this address stays the same.
+`172.31.88.1` is the gateway of the compose network. A process on the host that connects to the published port reaches the server from that address, not from `127.0.0.1`. That was measured on macOS and on Linux: in the Check run of 2026-11-25 (Ubuntu 26.04, Docker Compose 5.1.3) a request from the runner to the published port of the dev stack arrived from `172.31.87.1`, the gateway of that stack's network. `compose.yaml` fixes the subnet of its network to `172.31.88.0/24` so that this address stays the same.
 
 Measured, with the gateway address trusted and requests sent from the host to the published port:
 
