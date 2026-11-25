@@ -1,0 +1,306 @@
+{
+ "start": {
+  "properties": {},
+  "required": []
+ },
+ "profile": {
+  "properties": {
+   "handle": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
+   }
+  },
+  "required": []
+ },
+ "search": {
+  "properties": {
+   "query": {
+    "type": "string"
+   },
+   "hub": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
+   },
+   "kind": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
+   },
+   "limit": {
+    "default": 10,
+    "type": "integer"
+   },
+   "include_superseded": {
+    "default": false,
+    "type": "boolean"
+   }
+  },
+  "required": [
+   "query"
+  ]
+ },
+ "get": {
+  "properties": {
+   "ref": {
+    "type": "string"
+   },
+   "history": {
+    "default": false,
+    "type": "boolean"
+   },
+   "depth": {
+    "default": 1,
+    "type": "integer"
+   }
+  },
+  "required": [
+   "ref"
+  ]
+ },
+ "put": {
+  "properties": {
+   "text": {
+    "type": "string"
+   },
+   "kind": {
+    "default": "note",
+    "type": "string"
+   },
+   "hub": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
+   },
+   "title": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
+   },
+   "tags": {
+    "anyOf": [
+     {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
+   },
+   "private": {
+    "default": false,
+    "type": "boolean"
+   },
+   "supersedes": {
+    "anyOf": [
+     {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
+   },
+   "ext_id": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
+   },
+   "anchor": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
+   },
+   "preset": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
+   },
+   "model": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
+   }
+  },
+  "required": [
+   "text"
+  ]
+ },
+ "edit": {
+  "properties": {
+   "ref": {
+    "type": "string"
+   },
+   "text": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
+   },
+   "title": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
+   },
+   "tags": {
+    "anyOf": [
+     {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
+   },
+   "private": {
+    "anyOf": [
+     {
+      "type": "boolean"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
+   }
+  },
+  "required": [
+   "ref"
+  ]
+ },
+ "link": {
+  "properties": {
+   "ref": {
+    "type": "string"
+   },
+   "to": {
+    "type": "string"
+   },
+   "rel": {
+    "default": "part-of",
+    "type": "string"
+   },
+   "remove": {
+    "default": false,
+    "type": "boolean"
+   }
+  },
+  "required": [
+   "ref",
+   "to"
+  ]
+ },
+ "delete": {
+  "properties": {
+   "ref": {
+    "type": "string"
+   }
+  },
+  "required": [
+   "ref"
+  ]
+ },
+ "share": {
+  "properties": {
+   "hub": {
+    "type": "string"
+   },
+   "person": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
+   },
+   "mode": {
+    "default": "add",
+    "type": "string"
+   }
+  },
+  "required": [
+   "hub"
+  ]
+ }
+}
