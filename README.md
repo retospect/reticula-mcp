@@ -143,6 +143,8 @@ A cloud-hosted assistant makes the request from the provider's servers. Those ar
 
    The e-mail address is not verified in this release: the server sends no mail. `start` therefore shows the account as `verified: no`. That limits nothing; the account works in full.
 
+What was tried for this release: the sign-in flow with the scripted client of `scripts/smoke` (discovery, registration, the sign-in page, the token), and Claude Code with a minted token. The browser sign-in from Claude Code and from claude.ai was not walked against a server of this release. The server offers automatic registration of a connector and nothing else, so if a dialog asks how to register, that is the choice that matches.
+
 3. Ask the assistant to call `start`. It receives who it is, a starting instruction and your hubs, and then saves its first note.
 
 Each connected assistant gets its own token, which can be revoked on its own.
