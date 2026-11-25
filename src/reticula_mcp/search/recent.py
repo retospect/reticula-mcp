@@ -573,12 +573,13 @@ def events(
 class News:
     """What other people did since a moment, for the block in ``start``."""
 
-    #: (hub title, notes and hubs in it with an event by another person), the
-    #: hub with the most first. A title is its owner's text: quote it.
-    counts: list[tuple[str | None, int]]
-    #: (hub title, who shared it) for the hubs shared with the viewer since
-    #: then, the newest share first
-    shared: list[tuple[str | None, str]]
+    #: (hub, notes and hubs in it with an event by another person), the hub
+    #: with the most first. A hub is its node id: the caller says how it is
+    #: named, because the title of another person's hub is that person's text.
+    counts: list[tuple[int, int]]
+    #: (hub, who shared it) for the hubs shared with the viewer since then,
+    #: the newest share first
+    shared: list[tuple[int, str]]
 
 
 def news(
@@ -592,7 +593,8 @@ def news(
     by hub, and the hubs shared with the viewer since then. Same events, same
     rule about what may be told; nothing here is read that the listing does
     not read. ``hubs``: every hub the viewer can read (``id``, ``author``,
-    ``address``, ``title``), when the caller has read them, as ``start`` has."""
+    ``address``), when the caller has read them, as ``start`` has; the hubs
+    named in the reply are then among them."""
     reach = _reach(conn, viewer, hubs)
     if not reach.opened:
         return News([], [])
@@ -600,31 +602,25 @@ def news(
     rows = conn.execute(_news_sql(), params, prepare=False).fetchall()
     if not rows:
         return News([], [])
-    named = [r["hub"] for r in rows if r["hub"] in reach.opened]
-    if hubs is None:
-        hubs = conn.execute(
-            "SELECT n.id, n.title FROM node n WHERE n.id = ANY(%s)", (named,)
-        ).fetchall()
-    titles = {h["id"]: h["title"] for h in hubs if h["id"] in named}
+    known = set(reach.opened)
+    if hubs is not None:
+        known &= {h["id"] for h in hubs}
     counted = sorted(
-        (r for r in rows if not r["shared"] and r["hub"] in titles),
+        (r for r in rows if not r["shared"] and r["hub"] in known),
         key=lambda r: (r["newest"], r["hub"]),
         reverse=True,
     )
     counted.sort(key=lambda r: -r["n"])  # most first; of equals the newest
     shared = sorted(
-        (r for r in rows if r["shared"] and r["hub"] in titles),
+        (r for r in rows if r["shared"] and r["hub"] in known),
         key=lambda r: r["newest"],
         reverse=True,
     )
     handles = _handles(conn, sorted({reach.shared[r["hub"]][1] for r in shared}))
     return News(
-        [(titles[r["hub"]], int(r["n"])) for r in counted],
+        [(r["hub"], int(r["n"])) for r in counted],
         [
-            (
-                titles[r["hub"]],
-                handles.get(reach.shared[r["hub"]][1], "another person"),
-            )
+            (r["hub"], handles.get(reach.shared[r["hub"]][1], "another person"))
             for r in shared
         ],
     )
