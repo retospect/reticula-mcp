@@ -856,7 +856,18 @@ def test_the_title_leg_finds_what_comparing_every_title_finds(
     conn, greenhouse, make_account
 ):
     ada, gateway, battery, hive = greenhouse
-    minutes = mk_note(conn, ada, "Twelve members were present.", title=MINUTES)
+
+    def stored_long(address: str) -> str:
+        # MINUTES is longer than a write accepts now (100); titles stored
+        # under the old limit of 200 are still searched.
+        conn.execute(
+            "UPDATE node SET title = %s WHERE address = %s", (MINUTES, address)
+        )
+        return address
+
+    minutes = stored_long(
+        mk_note(conn, ada, "Twelve members were present.", title="Minutes")
+    )
     beds = mk_note(
         conn,
         ada,
@@ -867,8 +878,9 @@ def test_the_title_leg_finds_what_comparing_every_title_finds(
     ben = make_account(handle="ben")
     theirs = [
         mk_note(conn, ben, "Private.", title=title)
-        for title in ("Gateway", MINUTES, "Greenhouse gateway SD card")
+        for title in ("Gateway", "Minutes", "Greenhouse gateway SD card")
     ]
+    stored_long(theirs[1])
     typed = MINUTES.replace("committee", "comittee").lower()
     pasted = (
         f"{MINUTES}. Present were twelve members. The chair opened at seven and"

@@ -620,7 +620,12 @@ def _render_note(
     asked: int | None = None,
 ) -> str:
     ref = render.short_ref(row["address"])
-    head = f"{ref} {render.kind_word(row['kind'])} {_title(row)}"
+    # The note's own header shows its whole title, up to the longest a write
+    # accepts (graph.api.MAX_PAPER_TITLE); an untitled note's first line is cut
+    # as in listings.
+    full = str(row["title"]) if row.get("title") else None
+    name = render.quote(full, 200) if full else _title(row)
+    head = f"{ref} {render.kind_word(row['kind'])} {name}"
     tag = render.trust_tag(row)
     if tag:
         head += f" [{tag}]"
