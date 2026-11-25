@@ -32,7 +32,7 @@ The commands are written for the Docker Compose files in [`deploy/`](../deploy) 
    docker compose -f compose.yaml -f compose.source.yaml up -d --build --wait
    ```
 
-   The first build of a checkout took 30 seconds. With the image built, the command returned after 11 seconds, with both containers healthy. The server container waits for the database, applies pending migrations and then serves.
+   The build of release 0.1.0 took 19 seconds, the first build of a checkout 30 seconds. With the image built, the command returned after 11 to 12 seconds, with both containers healthy. The server container waits for the database, applies pending migrations and then serves.
 
 3. Check health.
 
@@ -179,7 +179,7 @@ Never add `-v` to `down`: it deletes the database. If the stack is already stuck
 - On a machine that already uses Funnel on 443, a second service goes on another port with `--https=<port>`. `RETICULA_PUBLIC_URL` must then carry that port.
 - A port other than 443 works only for assistants that connect from your own machines, such as Claude Code. Claude's custom connectors (claude.ai, the desktop and mobile apps) connect from Anthropic's servers and accept port 443 only: "Claude can't connect to a URL that specifies another port" (Claude support, "Get started with custom connectors using remote MCP", read on 2026-11-25). For those, run Reticula on a machine whose port 443 is free, or put a reverse proxy with a name of its own in front.
 - `tailscale funnel reset` removes every service of the machine, not one.
-- In its HTTPS mode Funnel writes `X-Forwarded-For` itself and replaces a value sent by the client: measured with Tailscale 1.104.7 on 2026-11-25, where a request with a made-up header was counted under the caller's real address. It passes the `Host` header on with its port. Its TCP modes add no header (read from the Tailscale source, not measured). Run the check above on your version.
+- In its HTTPS mode Funnel writes `X-Forwarded-For` itself and replaces a value sent by the client: measured with Tailscale 1.104.7 on 2026-11-25, where a request with a made-up header was counted under the caller's real address. With `tailscaled` on the host this is the first row of the table above: trust the gateway address. It passes the `Host` header on with its port, which is what `/mcp` expects when `RETICULA_PUBLIC_URL` carries the port. Its TCP modes add no header (read from the Tailscale source, not measured): leave `RETICULA_TRUSTED_PROXIES` empty for those. Run the check above on your version.
 
 ## Limits
 
@@ -332,9 +332,31 @@ If the model cannot be loaded, for example without outbound HTTPS, the log has e
 
 The volume must be writable by uid 10001. The named volume of `compose.yaml` is. A directory mounted from the host in its place has to be given to that user first.
 
-The server container used 190 MiB of memory with the model loaded.
+The server container used 190 MiB of memory with the model loaded. The start that downloads the model peaked at 268 MiB, the file cache of the download included.
 
 `RETICULA_EMBEDDER=hash` needs no download. Search then matches keywords only.
+
+### The vector index
+
+A search compares the query with every vector the account may read, as long as those are at most 20,000. Above that it uses a vector index in the database. Each model has its own index. The index needs pgvector 0.8 or newer; the database image of `compose.yaml` has 0.8.5.
+
+- The server creates the index of its model at start, once the model is loaded. At the first start the log has the line `vector index embedding_hnsw_f1f52874959c_384 ready for fastembed:BAAI/bge-small-en-v1.5`. With `RETICULA_EMBEDDER=hash` the server does not create one.
+- A search never creates the index. After a switch to another model, a search compares every vector until the index of the new model exists. Measured after a switch to `hash`: a start and a search left that model without an index, and `docker compose exec app reticula-mcp reindex` created it. Without the index a search still answers correctly. It only gets slower, and only above 20,000 vectors.
+- A search chooses between the two ways by the row estimate PostgreSQL keeps for the table. Right after many vectors were written at once the estimate is still the old one, and a search keeps comparing every vector although the index exists. PostgreSQL corrects the estimate by itself: with 30,000 rows added at once it took 41 seconds. To correct it at once, which took 1 second:
+
+  ```
+  docker compose exec -T db psql -U reticula -d reticula -c 'ANALYZE embedding'
+  ```
+
+### Change the model
+
+`RETICULA_EMBED_MODEL` in `.env` names another model of `fastembed`. Apply it with `docker compose up -d --wait`. Measured with `sentence-transformers/all-MiniLM-L6-v2` and with `jinaai/jina-embeddings-v2-small-en`, which has another vector size:
+
+- The server downloaded the model and was healthy after 7 seconds. The log names the model: `embedding model sentence-transformers/all-MiniLM-L6-v2 loaded in 2.6s`, then `vector index embedding_hnsw_40541eb5df3b_384 ready for fastembed:sentence-transformers/all-MiniLM-L6-v2`.
+- The server then computes the vectors of all notes under the new model by itself, in the background. All 6 notes of the test instance had theirs 7 seconds after the switch, with no command run. Search works in the meantime.
+- `docker compose exec app reticula-mcp reindex` does the same work in one run and returns when it is done. Run it on a large instance to know when the new model is complete. After a switch to `RETICULA_EMBEDDER=hash` it is needed: the server does not create that index by itself.
+- The vectors and the index of the old model stay in the database, and its files stay in the volume. After a switch back they were used again at once. `docker compose exec app reticula-mcp reindex --drop` removed the vectors and the index of the old model. It does not remove model files from the volume.
+- A name `fastembed` does not know: the server starts and stays healthy, and the log has `embedding model fastembed:no/such-model did not load; search answers from keywords; next try in 30s` with `ValueError: Model no/such-model is not supported in TextEmbedding`. Saving and searching still worked.
 
 ## What the container does
 

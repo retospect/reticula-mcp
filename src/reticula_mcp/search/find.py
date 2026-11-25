@@ -49,6 +49,11 @@ log = logging.getLogger("reticula_mcp.search")
 RRF_K = 60
 POOL_MIN = 50
 TRIGRAM_MIN = 0.25
+# How much of a title must be found inside the query, word for word, for the
+# title to match although the query is much longer (see _trigram). 1 is the
+# title exactly as written. 0.8 forgives a plural in a title of several words;
+# a one-word title has to be there letter for letter.
+TITLE_INSIDE_MIN = 0.8
 # The share of the query's distinct words a note must have to be a keyword
 # match when no note has all of them (see _lexical). 0 keeps any note with one
 # of the words; 1 means every word, that is no second try at all.
@@ -79,6 +84,14 @@ REQUEST_WORDS = frozenset(
     ]
 )
 _QUERY_PART = re.compile(r'-?"[^"]*"?|\S+')
+# A word that says what a note is about, as a condition on a stem ``w`` of
+# the text search: three letters or more, not a bare number or date, and not
+# the stem of one of the REQUEST_WORDS (passed as the parameter ``request``).
+_REQUEST_TEXT = " ".join(sorted(REQUEST_WORDS))
+_COUNTS = (
+    "length(w) >= 3 AND w !~ '^[-0-9.,:/]+$'"
+    " AND w <> ALL (tsvector_to_array(to_tsvector('english', %(request)s)))"
+)
 # Weight of each leg in the fusion (see rank_fusion.py).
 LEG_WEIGHTS: dict[str, float] = {
     "identifier": 1.0,
@@ -156,11 +169,14 @@ def _scope(
         # debug notes only when asked for by kind
         "(n.kind <> 'debug' OR %(kind)s::text = 'debug')",
     ]
-    params: dict[str, Any] = {"viewer": viewer.id, "kind": kind}
+    params: dict[str, Any] = {
+        "viewer": viewer.id,
+        "person": viewer.person_id,
+        "kind": kind,
+    }
     if hub_node_id is not None:
         where.append(f"n.id IN ({_subtree('%(viewer)s')})")
         params["hub"] = hub_node_id
-        params["person"] = viewer.person_id
     return " AND ".join(where), params
 
 
@@ -309,17 +325,46 @@ def _lexical(
 def _trigram(
     conn: Conn, query: str, where: str, params: dict[str, Any], pool: int
 ) -> list[tuple[int, float]]:
+    # A title matches when it resembles the whole query (TRIGRAM_MIN), or when
+    # it stands inside the query as written (TITLE_INSIDE_MIN). The second is
+    # for a long query and a short title: every further word of the query
+    # lowers the similarity of the two as wholes, so "Gateway" was found for
+    # four words and lost for five. It needs a title with a word that says
+    # something (_COUNTS): "Notes", "To do" or "3" inside a query is no match.
+    # Of two titles that match equally the viewer's own comes first, so that
+    # titles other people chose cannot take the leg from the viewer's notes.
     # Exact scan of the (already visibility-restricted) titles. When the corpus
     # grows, use the GIN index node_title_trgm with `n.title % q` instead.
     rows = conn.execute(
         f"""
-        SELECT n.id, similarity(n.title, %(q)s) AS score
-        FROM node n
-        WHERE n.title IS NOT NULL AND similarity(n.title, %(q)s) >= %(min)s
-          AND {where}
-        ORDER BY score DESC, n.id DESC LIMIT %(pool)s
+        SELECT y.id, greatest(y.whole, y.inside) AS score
+        FROM (
+            SELECT x.id, x.own, x.whole,
+                   CASE WHEN x.inside >= %(inside)s AND EXISTS (
+                            SELECT 1
+                            FROM unnest(tsvector_to_array(
+                                to_tsvector('english', x.title))) w
+                            WHERE {_COUNTS})
+                        THEN x.inside ELSE 0 END AS inside
+            FROM (
+                SELECT n.id, n.title, n.author = %(person)s AS own,
+                       similarity(n.title, %(q)s) AS whole,
+                       strict_word_similarity(n.title, %(q)s) AS inside
+                FROM node n
+                WHERE n.title IS NOT NULL AND {where}
+            ) x
+        ) y
+        WHERE y.whole >= %(min)s OR y.inside > 0
+        ORDER BY score DESC, y.own DESC, y.id DESC LIMIT %(pool)s
         """,
-        {**params, "q": query, "min": TRIGRAM_MIN, "pool": pool},
+        {
+            **params,
+            "q": query,
+            "min": TRIGRAM_MIN,
+            "inside": TITLE_INSIDE_MIN,
+            "request": _REQUEST_TEXT,
+            "pool": pool,
+        },
     ).fetchall()
     return [(r["id"], float(r["score"])) for r in rows]
 
