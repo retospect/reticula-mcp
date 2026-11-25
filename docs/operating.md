@@ -13,7 +13,7 @@ The commands are written for the Docker Compose files in [`deploy/`](../deploy) 
    cd reticula-mcp/deploy
    ```
 
-   For release 0.1.0 the option is `--branch v0.1.0`. The releases are listed on [PyPI](https://pypi.org/project/reticula-mcp/#history). `git` prints a warning that the tag is not a commit and a note about a detached HEAD. Both are expected.
+   For release 0.1.1 the option is `--branch v0.1.1`. The releases are listed on [PyPI](https://pypi.org/project/reticula-mcp/#history). `git` prints a warning that the tag is not a commit and a note about a detached HEAD. Both are expected.
 
    The files under `deploy/` at a tag belong to that release, and so does this guide. Read it at the same tag: the main branch can describe things a release does not have yet.
 
@@ -26,7 +26,7 @@ The commands are written for the Docker Compose files in [`deploy/`](../deploy) 
    Set two values in `.env`:
 
    - `RETICULA_DB_PASSWORD`: generate one with `openssl rand -hex 24`.
-   - `RETICULA_VERSION`: the release you cloned, without the `v`. For the tag `v0.1.0` it is `0.1.0`.
+   - `RETICULA_VERSION`: the release you cloned, without the `v`. For the tag `v0.1.1` it is `0.1.1`.
 
    Leave `RETICULA_PUBLIC_URL` and `RETICULA_TRUSTED_PROXIES` empty for now.
 
@@ -56,7 +56,7 @@ The commands are written for the Docker Compose files in [`deploy/`](../deploy) 
    curl -s -w '\n%{http_code}\n' http://127.0.0.1:8787/healthz
    ```
 
-   The answer is `{"status":"ok","version":"0.1.0"}`, with the installed version, and `200` on the next line. When the database does not answer, it is `{"status":"unavailable","version":"0.1.0"}` and `503`. `docker compose ps` shows the same result as `healthy` or `unhealthy`.
+   The answer is `{"status":"ok","version":"0.1.1"}`, with the installed version, and `200` on the next line. When the database does not answer, it is `{"status":"unavailable","version":"0.1.1"}` and `503`. `docker compose ps` shows the same result as `healthy` or `unhealthy`.
 
 5. Run the smoke test. It needs [uv](https://docs.astral.sh/uv/).
 
@@ -378,7 +378,14 @@ The last of these lines that is in the log says how far it got. Three runs that 
 
 4. Check `/healthz` and run the smoke test.
 
-The server container applies pending migrations when it starts and logs one line per file, for example `applied 0203_shared_rules.sql`. The drill went from 0.1.0 to a build of 0.1.1 from source that added this one migration. The command took 28 seconds when it had to build the image, and 8 to 9 seconds on later switches, when Docker still had the layers of the image. The server was away for about a second: `/healthz` was asked every 0.1 seconds during a switch that applied migration 0203, and the longest time without an answer was 1.1 seconds.
+The server container applies pending migrations when it starts and logs one line per file, for example `applied 0203_shared_rules.sql`.
+
+0.1.1 adds two migrations to those of 0.1.0:
+
+- `0203_shared_rules` defines three SQL functions and changes no table.
+- `0301_title_words` adds one index on the note table, over the words of each title. No column is added and no row is changed. The index is built at that start, before the server answers. On a test database with 30,041 notes the build took 36 to 83 milliseconds.
+
+The drill went from 0.1.0 to a build of 0.1.1 from source that had 0203 and did not have 0301 yet. The command took 28 seconds when it had to build the image, and 8 to 9 seconds on later switches, when Docker still had the layers of the image. The server was away for about a second: `/healthz` was asked every 0.1 seconds during a switch that applied migration 0203, and the longest time without an answer was 1.1 seconds.
 
 Tokens issued before the upgrade worked after it: the access and refresh tokens of a sign-in, and a token minted with `reticula-mcp token`. An account signed in with the password it had before. Notes written before the upgrade read back unchanged: 112 recorded replies of `start`, `profile`, `search`, `get` and `share` were the same before and after.
 
@@ -423,9 +430,13 @@ app-1  | warning: the database has migrations this version does not have (0203_s
 
 A command such as `reticula-mcp token` prints the same line and then does its work.
 
-That is safe only when the release notes of the newer version say that its migrations change no table. Otherwise the older version reads and writes tables in a form it does not know. Take the variable out of `.env` again once the newer version runs. While it is set, nothing is refused.
+That is safe only when the release notes of the newer version say that its migrations leave the columns and the rows of every table as they are. Otherwise the older version reads and writes tables in a form it does not know. Take the variable out of `.env` again once the newer version runs. While it is set, nothing is refused.
 
-0.1.0 has no such check: it starts on a newer schema and says nothing. The 0.1.1 build of the drill added one migration, `0203_shared_rules`. It defines three SQL functions and changes no table. In the drill 0.1.0 ran on the database that this build had migrated. It gave the same 112 replies as that build on the same data, its smoke test passed, notes written under the 0.1.1 build read back, and tokens issued under it worked. That is a measurement for 0.1.0 and this one migration, not a promise for any other.
+0.1.0 has no such check: it starts on a newer schema and says nothing. So 0.1.0 starts on a database that 0.1.1 has migrated, with the two migrations listed under Upgrade.
+
+The drill covered 0203 only: its build of 0.1.1 did not have 0301 yet. In the drill 0.1.0 ran on the database that this build had migrated. It gave the same 112 replies as that build on the same data, its smoke test passed, notes written under that build read back, and tokens issued under it worked. That is a measurement for 0.1.0 and migration 0203, not a promise for any other.
+
+0.1.0 on a database with 0301 has not been measured.
 
 ## Back up
 
