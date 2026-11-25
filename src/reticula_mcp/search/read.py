@@ -40,7 +40,7 @@ from reticula_mcp.permissions import (
     readable_hub_sql,
     readable_nodes_sql,
 )
-from reticula_mcp.resolve import resolve_ref
+from reticula_mcp.resolve import ends_with_params, ends_with_sql, resolve_ref
 from reticula_mcp.search import render
 from reticula_mcp.search.rows import fetch_rows, visible_subset
 
@@ -126,13 +126,15 @@ def _withdrawn(conn: Conn, viewer: Account, ref: str) -> Row | None:
     person, slash, _ = ref.partition("/")
     if slash and fmt.is_person_id(person):
         ref = "ret:" + ref  # an address written without its scheme
+    tail: dict[str, Any] = {}
     if ref.startswith("ret:"):
         cond, arg = "n.address = %(ref)s", ref
     else:
         suffix = ref.lower()
         if not _SUFFIX_RE.match(suffix) or len(suffix.replace("-", "")) < 6:
             return None
-        cond, arg = "right(n.address, length(%(ref)s)) = %(ref)s", suffix
+        cond, arg = ends_with_sql("n.address"), suffix
+        tail = ends_with_params(suffix)
     rows = conn.execute(
         f"""
         SELECT n.id, n.address FROM node n
@@ -146,6 +148,7 @@ def _withdrawn(conn: Conn, viewer: Account, ref: str) -> Row | None:
         LIMIT 2
         """,
         {
+            **tail,
             "ref": arg,
             "person": viewer.person_id,
             "hubs": readable_hub_ids(conn, viewer),
