@@ -94,6 +94,18 @@ def find_debug_hub(conn: Conn) -> Row | None:
     ).fetchone()
 
 
+def _is_instructions_hub(conn: Conn, hub: Row) -> bool:
+    """The instance's instructions hub: authored by the system account and
+    tagged ``slug:hub-instructions`` (an imposter's hub with the tag is not)."""
+    if "slug:hub-instructions" not in (hub.get("tags") or []):
+        return False
+    row = conn.execute(
+        "SELECT 1 FROM account WHERE person_id = %s AND status = 'system'",
+        (hub["author"],),
+    ).fetchone()
+    return row is not None
+
+
 def _require_can_add(conn: Conn, viewer: Account, hub: Row) -> None:
     if access.can_add_person(conn, viewer.person_id, hub["id"]):
         return
@@ -481,6 +493,15 @@ def share(
         raise ReticulaError(BAD_INPUT, "mode must be add, read or none")
     ref = person.strip()
     targets_self = ref in (f"@{viewer.handle}", viewer.person_id)
+    if mode == "none" and targets_self and _is_instructions_hub(conn, hub_row):
+        # bootstrap never grants over an existing row, so a `none` written
+        # here would cut the account off the instructions for good
+        raise ReticulaError(
+            FORBIDDEN,
+            "the Reticula instructions hub cannot be left",
+            hint="it holds the instructions every account reads; keeping it"
+            " shares nothing of yours and costs nothing",
+        )
     # Refuse before looking the person up: a viewer who may not grant must get
     # the same answer whether or not that handle exists or has access.
     access.precheck_grant(
