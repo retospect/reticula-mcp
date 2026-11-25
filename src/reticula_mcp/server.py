@@ -496,7 +496,9 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
 
         The address stays and answers as deleted, with no content. Delete only
         what the person asked for: read a note with `get` before you delete it,
-        and tell the person what you deleted and what you kept.
+        and tell the person what you deleted and what you kept. Delete only the
+        notes that say what the person named. A note that came up in the same
+        search and says something else stays.
         """
         return await run(ctx, graph_handlers.delete, write=True, ref=ref)
 
