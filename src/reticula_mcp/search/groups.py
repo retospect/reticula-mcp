@@ -49,6 +49,7 @@ from reticula_mcp.accounts import Account
 from reticula_mcp.config import Settings
 from reticula_mcp.db.pool import Conn
 from reticula_mcp.errors import BAD_INPUT, ReticulaError
+from reticula_mcp.permissions import readable_hub_ids
 from reticula_mcp.search import find
 from reticula_mcp.search.embedder import get_embedder
 from reticula_mcp.search.find import REQUEST_WORDS
@@ -397,12 +398,28 @@ def load(conn: Conn, viewer: Account, hub_id: int) -> tuple[list[Note], int]:
     """The notes of the hub's subtree that ``search(query="", hub=...)`` lists
     (``find.scope``: what the viewer may read, current notes only), sub-hubs
     not among them, newest first: at most ``MOST`` of them, and how many there
-    are. Each with its vector of the current model for its head version."""
-    where, params = find.scope(
-        conn, viewer, hub_node_id=hub_id, kind=None, include_superseded=False
+    are. Each with its vector of the current model for its head version.
+
+    The conditions are those of ``find.scope`` with a hub and no kind, in one
+    statement: the members of the subtree (``find.subtree_sql``), of them the
+    current ones that the viewer may read (``current_among``, asked about
+    those ids alone, not about everything the viewer may read), not deleted,
+    no debug note."""
+    where = (
+        "n.id IN (SELECT c.node_id FROM current_among(%(viewer)s, ARRAY("
+        f"SELECT s.node_id FROM ({find.subtree_sql()}) s)) c)"
+        " AND n.tombstoned_at IS NULL AND n.kind <> 'debug'"
     )
     model = _model()
-    params.update({"model": model, "chars": TEXT_CHARS, "most": MOST + 1})
+    params: dict[str, Any] = {
+        "viewer": viewer.id,
+        "hub": hub_id,
+        "person": viewer.person_id,
+        "hubs": readable_hub_ids(conn, viewer),
+        "model": model,
+        "chars": TEXT_CHARS,
+        "most": MOST + 1,
+    }
     vector = (
         "(SELECT e.vec FROM embedding e WHERE e.node_id = n.id"
         " AND e.model = %(model)s AND e.version_hash = n.head_version)"
