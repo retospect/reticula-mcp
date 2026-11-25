@@ -143,8 +143,14 @@ def _hub_line(conn: Conn, viewer: Account, row: dict[str, Any]) -> str:
             shared = f"{shared} and {everyone}" if names else everyone
         count = f"  shared with {shared},"
     elif shown == "add" and not above and not others_above:
-        people = row["grants"] + 1  # everyone with a grant, plus the owner
-        count = f"  {people} people have access,"
+        # Said as who they are: "2 people have access" was read as two people
+        # besides the reader (docs/trials.md, round seven).
+        more = max(row["grants"] - 1, 0)  # grants besides the viewer's own
+        count = (
+            f"  you, the owner and {more} more have access,"
+            if more
+            else "  only you and the owner have access,"
+        )
     else:
         # no head count for a hub that people read through a hub above: the
         # grants on the hub itself are not everyone who reads it

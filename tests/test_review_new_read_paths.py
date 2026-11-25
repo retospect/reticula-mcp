@@ -153,9 +153,9 @@ def test_ok_hub_access_handles(conn, make_account):
         for h in (rd, ad, c, gone):
             if h is not viewer:
                 assert f"@{h.handle}" not in out.replace(f"@{a.handle}", "")
-        assert ("people have access" in out) == expect
+        assert ("have access" in out) == expect
         if expect:
-            assert "3 people have access" in out
+            assert "you, the owner and 1 more have access," in out
 
 
 def test_ok_hub_listing_for_others(conn, make_account):

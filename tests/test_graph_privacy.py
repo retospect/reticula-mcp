@@ -47,10 +47,10 @@ def test_new_account_cannot_learn_other_handles_or_the_account_count(
             assert f"@{name}" not in text
     hub_line = line_for(content.start(conn, newcomer), hub["address"][-8:])
     assert "people" not in hub_line and "person" not in hub_line
+    assert "have access" not in hub_line
     assert "note" in hub_line  # the note count stays, restricted to what is readable
-    assert "people" not in line_for(
-        content.profile(conn, newcomer), hub["address"][-8:]
-    )
+    profile_line = line_for(content.profile(conn, newcomer), hub["address"][-8:])
+    assert "people" not in profile_line and "have access" not in profile_line
 
     # asking about someone else answers the same whoever exists or has access
     for mode in ("none", "read", "add"):
@@ -86,7 +86,8 @@ def test_reader_of_a_personal_hub_does_not_see_the_other_readers(conn, make_acco
     assert carol.handle not in seen
     for text in (content.start(conn, bob), content.profile(conn, bob)):
         line = line_for(text, "Diary")
-        assert "people" not in line and "1 note" in line and "read" in line
+        assert "people" not in line and "have access" not in line
+        assert "1 note" in line and "read" in line
         assert carol.handle not in text
     # the admin sees everyone and the count
     full = handlers.share(conn, alice, hub=hub)
@@ -114,13 +115,13 @@ def test_members_of_a_group_hub_who_can_add_see_everyone(conn, make_account):
         if viewer is alice:
             assert f"shared with @{bob.handle}, @{carol.handle}, @{dan.handle}," in team
         else:
-            assert "4 people have access" in team
+            assert "you, the owner and 2 more have access," in team
         assert "only to people who can add" not in full
     # the read-only member sees only themself and the owner
     limited = handlers.share(conn, dan, hub=hub)
     assert f"@{dan.handle} read" in limited
     assert bob.handle not in limited and carol.handle not in limited
-    assert "people" not in line_for(content.start(conn, dan), "Team")
+    assert "have access" not in line_for(content.start(conn, dan), "Team")
 
 
 def test_access_through_a_hub_above_follows_the_same_rule(conn, make_account):
@@ -133,7 +134,7 @@ def test_access_through_a_hub_above_follows_the_same_rule(conn, make_account):
     share(conn, alice, sub, dan, "read")  # a direct grant on the sub-hub
     assert f"@{dan.handle}" in handlers.share(conn, bob, hub=sub)  # add inherited
     assert f"@{dan.handle}" not in handlers.share(conn, carol, hub=sub)  # read only
-    assert "people" not in line_for(content.start(conn, carol), "Sub")
+    assert "have access" not in line_for(content.start(conn, carol), "Sub")
 
 
 def test_debug_listing_includes_a_note_only_through_its_authors_statement(
@@ -201,7 +202,9 @@ def test_add_on_a_parent_does_not_show_who_reads_a_personal_hub_below(
         handlers.put(conn, carol, text="x", hub=diary)
 
     # on the parent itself nothing changes for her
-    assert "3 people have access" in line_for(content.start(conn, carol), "Parent")
+    assert "you, the owner and 1 more have access," in line_for(
+        content.start(conn, carol), "Parent"
+    )
     assert f"@{bob.handle} add" in handlers.share(conn, carol, hub=parent)
     # and Bob, the owner, still sees his reader, and the people on the parent,
     # whose list he may see there (he can add to it)
@@ -273,7 +276,9 @@ def test_a_hub_under_a_shared_hub_is_never_called_shared_with_nobody(
     crate = mk_hub(conn, ada, "Crate", parent=attic)
     share(conn, ada, crate, ben, "add")
     assert f"shared with @{ben.handle}," in line_for(content.start(conn, ada), "Crate")
-    assert "2 people have access" in line_for(content.start(conn, ben), "Crate")
+    assert "only you and the owner have access," in line_for(
+        content.start(conn, ben), "Crate"
+    )
 
     # a direct grant on the sub-hub is named, and the rest is still said
     dan = make_account()
