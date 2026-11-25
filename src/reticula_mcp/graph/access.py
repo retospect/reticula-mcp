@@ -8,6 +8,7 @@ from typing import Any
 
 from reticula_mcp.db.pool import Conn
 from reticula_mcp.errors import BAD_INPUT, CONFLICT, FORBIDDEN, ReticulaError
+from reticula_mcp.permissions import read_through_above_sql
 
 Row = dict[str, Any]
 MODES = ("add", "read", "none")
@@ -47,11 +48,11 @@ def shown_access(conn: Conn, person_id: str, hub_node_id: int) -> str | None:
     return mode
 
 
-def has_hub_above(conn: Conn, hub_node_id: int) -> bool:
-    """True when the hub is filed under another hub, so that everyone with
-    access to that hub reads this one too (``hub_ancestors``)."""
+def read_through_above(conn: Conn, hub_node_id: int) -> bool:
+    """True when other people read the hub through a hub above it
+    (:func:`reticula_mcp.permissions.read_through_above_sql`)."""
     row = conn.execute(
-        "SELECT EXISTS (SELECT 1 FROM hub_ancestors(%s)) AS above", (hub_node_id,)
+        f"SELECT {read_through_above_sql()} AS above", {"hub": hub_node_id}
     ).fetchone()
     assert row is not None
     return bool(row["above"])

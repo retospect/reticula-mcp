@@ -18,7 +18,7 @@ from reticula_mcp.accounts import Account
 from reticula_mcp.content import bootstrap
 from reticula_mcp.db.pool import Conn
 from reticula_mcp.graph import access
-from reticula_mcp.permissions import readable_nodes_sql
+from reticula_mcp.permissions import read_through_above_sql, readable_nodes_sql
 from reticula_mcp.search.render import quote
 
 #: Hubs listed by ``start`` and ``profile`` before "and N more".
@@ -72,7 +72,7 @@ def _hub_rows(conn: Conn, viewer: Account) -> list[dict[str, Any]]:
     return conn.execute(
         "SELECT h.id, h.address, h.title, h.author, o.handle AS owner_handle,"
         " (h.author = %(person)s) AS own,"
-        " EXISTS (SELECT 1 FROM hub_ancestors(h.id)) AS above,"
+        f" {read_through_above_sql('h.id')} AS above,"
         " (SELECT count(*) FROM hub_grant g WHERE g.hub_node_id = h.id"
         "   AND g.mode IN ('read', 'add')) AS grants,"
         " (SELECT count(*) FROM membership m WHERE m.hub_node_id = h.id"
@@ -114,8 +114,8 @@ def _hub_line(conn: Conn, viewer: Account, row: dict[str, Any]) -> str:
         more = f" and {len(names) - 3} more" if len(names) > 3 else ""
         shared = f"{', '.join(names[:3])}{more}" if names else "nobody"
         if row["above"]:
-            # Filed under another hub: whoever has that hub reads this one, so
-            # "nobody" would be false and the grants here are not the whole list.
+            # Other people read it through a hub above: "nobody" would be
+            # false and the grants here are not the whole list.
             above = "everyone who has a hub above it"
             shared = f"{shared} and {above}" if names else above
         count = f"  shared with {shared},"

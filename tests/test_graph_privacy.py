@@ -252,6 +252,24 @@ def test_a_hub_under_a_shared_hub_is_never_called_shared_with_nobody(
     assert "hub above" not in search.get(conn, ada, ref=alone)
     assert "hub above" not in handlers.share(conn, ada, hub=project)
 
+    # A hub under the owner's own unshared hub is read by nobody else, and is
+    # not called shared; it is once the hub above gets a reader.
+    attic = mk_hub(conn, ada, "Attic")
+    box = mk_hub(conn, ada, "Box", parent=attic)
+    assert "shared with nobody," in line_for(content.start(conn, ada), "Box")
+    assert "hub above" not in handlers.share(conn, ada, hub=box)
+    assert "hub above" not in search.get(conn, ada, ref=box)
+    share(conn, ada, attic, ben, "read")
+    assert "shared with everyone who has a hub above it," in line_for(
+        content.start(conn, ada), "Box"
+    )
+    assert "hub above" in handlers.share(conn, ada, hub=box)
+    # someone named on the sub-hub itself is not "through a hub above"
+    crate = mk_hub(conn, ada, "Crate", parent=attic)
+    share(conn, ada, crate, ben, "add")
+    assert f"shared with @{ben.handle}," in line_for(content.start(conn, ada), "Crate")
+    assert "2 people have access" in line_for(content.start(conn, ben), "Crate")
+
     # a direct grant on the sub-hub is named, and the rest is still said
     dan = make_account()
     share(conn, ada, hardware, dan, "read")

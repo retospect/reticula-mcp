@@ -26,6 +26,30 @@ def current_nodes_sql(viewer_param: str = "%(viewer)s") -> str:
     return f"SELECT node_id FROM current_nodes({viewer_param})"
 
 
+def read_through_above_sql(hub: str = "%(hub)s") -> str:
+    """A boolean SQL expression: somebody reads the hub ``hub`` through a hub
+    above it who is neither its owner nor named in a grant on the hub itself.
+
+    Everyone with access to a hub reads the hubs filed under it, so for such a
+    hub the grants on the hub are not the whole list of its readers. A hub
+    under the owner's own unshared hub does not count: nobody else reads it.
+    The expression errs on the side of saying yes (a person shut out of the
+    sub-hub by a later grant still counts).
+    """
+    return (
+        f"EXISTS (SELECT 1 FROM hub_ancestors({hub}) up_"
+        " JOIN node above_ ON above_.id = up_.hub_id"
+        f" JOIN node self_ ON self_.id = {hub}"
+        " WHERE above_.author <> self_.author"
+        " OR EXISTS (SELECT 1 FROM hub_grant ga_"
+        "   WHERE ga_.hub_node_id = above_.id AND ga_.mode IN ('read', 'add')"
+        "   AND ga_.grantee <> self_.author"
+        "   AND NOT EXISTS (SELECT 1 FROM hub_grant gd_"
+        "     WHERE gd_.hub_node_id = self_.id AND gd_.grantee = ga_.grantee"
+        "     AND gd_.mode IN ('read', 'add'))))"
+    )
+
+
 def can_read(conn: Conn, viewer: Account, node_id: int) -> bool:
     """May ``viewer`` read node ``node_id``? Delegates to ``readable_nodes``."""
     row = conn.execute(
