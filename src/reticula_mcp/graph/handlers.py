@@ -185,10 +185,14 @@ def put(
         where = " (unfiled: this instance has no debug hub yet)"
     if node["audience"] == "private":
         where += " (private)"
+    # The short id is printed here because an assistant that sees only the
+    # address makes its own short form of it, and that form is refused.
+    sid = node["address"][-8:]
     nxt = (
-        "next: share(hub=<this address>, person='@handle') to invite someone"
+        f"next: share(hub='{sid}', person='@handle') to invite someone;"
+        f" link(ref=<note>, to='{sid}') files a note under it"
         if kind == "hub"
-        else "next: link(ref, to=<hub>) to file it under a hub"
+        else f"next: link(ref='{sid}', to=<hub>) to file it under a hub"
         if hub_row is None and node["audience"] != "private"
         else "next: search or get to find it again"
     )
@@ -197,8 +201,7 @@ def put(
         homes = _hubs_of_superseded(conn, viewer, node)
         if homes:
             calls = " or ".join(
-                f"link(ref={node['address'][-8:]}, to={h['address'][-8:]})"
-                for h in homes[:2]
+                f"link(ref='{sid}', to='{h['address'][-8:]}')" for h in homes[:2]
             )
             nxt = (
                 f"next: only you can read this until it is filed where the original"

@@ -319,7 +319,7 @@ def test_a_new_paper_stub_points_at_notes_with_its_identifier(conn, make_account
     assert out.startswith("saved paper ")
     assert "next: write notes about it with put(text=..., ext_id=doi:10.1000/x," in out
     assert "anchor=<first words of the passage>)" in out
-    assert "link(ref, to=<hub>)" in out  # the hint about filing it stays
+    assert "to=<hub>) to file it under a hub" in out  # the filing hint stays
 
 
 def test_kind_and_rel_patterns_refuse_a_trailing_newline():
