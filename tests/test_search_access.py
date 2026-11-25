@@ -129,10 +129,12 @@ def test_access_through_a_hub_above_follows_the_same_rule(conn, make_account):
     graph.share(conn, alice, hub=top, person="@carol", mode="read")
     graph.share(conn, alice, hub=sub, person="@dave", mode="read")
 
-    # bob can add (through Top): the whole list of the sub-hub
+    # bob can add (through Top): the whole list of the sub-hub, and the remark
+    # that the people on Top read it too
     assert (
         access_line(handlers.get(conn, bob, ref=sub))
-        == "access: @alice owner, @dave read"
+        == "access: @alice owner, @dave read,"
+        " everyone with access to a hub above this one"
     )
     # carol only reads (through Top): the owner and herself
     seen = handlers.get(conn, carol, ref=sub)

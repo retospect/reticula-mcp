@@ -360,6 +360,10 @@ def _list_access(conn: Conn, viewer: Account, hub: Row) -> str:
                 f"{_handle(conn, r['grantee'])} {r['mode']}"
                 f" (granted by {_handle(conn, r['granted_by'])})"
             )
+        if access.has_hub_above(conn, hub["id"]):
+            lines.append(
+                "Everyone with access to a hub above this one can read it too."
+            )
         lines.append(
             "add: reads the hub and adds notes of their own. read: reads only."
             " Nobody can edit another person's note."

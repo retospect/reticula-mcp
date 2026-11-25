@@ -47,6 +47,16 @@ def shown_access(conn: Conn, person_id: str, hub_node_id: int) -> str | None:
     return mode
 
 
+def has_hub_above(conn: Conn, hub_node_id: int) -> bool:
+    """True when the hub is filed under another hub, so that everyone with
+    access to that hub reads this one too (``hub_ancestors``)."""
+    row = conn.execute(
+        "SELECT EXISTS (SELECT 1 FROM hub_ancestors(%s)) AS above", (hub_node_id,)
+    ).fetchone()
+    assert row is not None
+    return bool(row["above"])
+
+
 def lock_hierarchy(conn: Conn) -> None:
     """Take the transaction-scoped hub-hierarchy lock."""
     conn.execute("SELECT pg_advisory_xact_lock(%s)", (_HIERARCHY_LOCK,))

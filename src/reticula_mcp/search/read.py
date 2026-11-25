@@ -670,6 +670,12 @@ def _access_line(conn: Conn, viewer: Account, hub: Row) -> str | None:
             continue  # the owner is already named
         who = f"@{g['handle']}" if g["handle"] else g["grantee"]
         parts.append(f"{who} {g['mode']}")
+    above = conn.execute(
+        "SELECT EXISTS (SELECT 1 FROM hub_ancestors(%s)) AS above", (hub["id"],)
+    ).fetchone()
+    if above and above["above"]:
+        # the grants on the hub itself are not everyone who reads it
+        parts.append("everyone with access to a hub above this one")
     return "access: " + ", ".join(parts)
 
 

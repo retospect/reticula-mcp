@@ -72,6 +72,7 @@ def _hub_rows(conn: Conn, viewer: Account) -> list[dict[str, Any]]:
     return conn.execute(
         "SELECT h.id, h.address, h.title, h.author, o.handle AS owner_handle,"
         " (h.author = %(person)s) AS own,"
+        " EXISTS (SELECT 1 FROM hub_ancestors(h.id)) AS above,"
         " (SELECT count(*) FROM hub_grant g WHERE g.hub_node_id = h.id"
         "   AND g.mode IN ('read', 'add')) AS grants,"
         " (SELECT count(*) FROM membership m WHERE m.hub_node_id = h.id"
@@ -112,11 +113,18 @@ def _hub_line(conn: Conn, viewer: Account, row: dict[str, Any]) -> str:
         ]
         more = f" and {len(names) - 3} more" if len(names) > 3 else ""
         shared = f"{', '.join(names[:3])}{more}" if names else "nobody"
+        if row["above"]:
+            # Filed under another hub: whoever has that hub reads this one, so
+            # "nobody" would be false and the grants here are not the whole list.
+            above = "everyone who has a hub above it"
+            shared = f"{shared} and {above}" if names else above
         count = f"  shared with {shared},"
-    elif shown == "add":
+    elif shown == "add" and not row["above"]:
         people = row["grants"] + 1  # everyone with a grant, plus the owner
         count = f"  {people} people have access,"
     else:
+        # no head count for a hub under another hub: the grants on the hub
+        # itself are not everyone who reads it
         count = ""
     owner = ""
     if not row["own"]:
