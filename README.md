@@ -147,7 +147,7 @@ A cloud-hosted assistant makes the request from the provider's servers. Those ar
 
 Each connected assistant gets its own token, which can be revoked on its own.
 
-What was tried for this release: the sign-in flow with the scripted client of `scripts/smoke` (discovery, registration, the sign-in page, the token), and Claude Code with a minted token. The browser sign-in from Claude Code and from claude.ai was not walked against a server of this release. The server offers automatic registration of a connector and nothing else, so if a dialog asks how to register, that is the choice that matches.
+What was tried for this release: the sign-in flow with the scripted client of `scripts/smoke` and with the OAuth client of the MCP Python SDK (discovery, registration, the sign-in page, the token), and Claude Code with a minted token. The SDK's client also called `start` and renewed an expired token, once over plain HTTP on the machine itself and once over HTTPS through a reverse proxy. In both cases a script filled in the sign-in page; no browser was used. The browser sign-in from Claude Code and from claude.ai was not walked against a server of this release. The server offers automatic registration of a connector and nothing else, so if a dialog asks how to register, that is the choice that matches.
 
 A local client that cannot do the sign-in flow can use a token minted on the server. Under Docker Compose, run these in the `deploy` directory:
 
