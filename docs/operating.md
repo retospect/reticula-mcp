@@ -13,7 +13,7 @@ The commands are written for the Docker Compose files in [`deploy/`](../deploy) 
    cd reticula-mcp/deploy
    ```
 
-   For release 0.1.1 the option is `--branch v0.1.1`. The releases are listed on [PyPI](https://pypi.org/project/reticula-mcp/#history). `git` prints a warning that the tag is not a commit and a note about a detached HEAD. Both are expected.
+   For release 0.2.0 the option is `--branch v0.2.0`. The releases are listed on [PyPI](https://pypi.org/project/reticula-mcp/#history). `git` prints a warning that the tag is not a commit and a note about a detached HEAD. Both are expected.
 
    The files under `deploy/` at a tag belong to that release, and so does this guide. Read it at the same tag: the main branch can describe things a release does not have yet.
 
@@ -26,7 +26,7 @@ The commands are written for the Docker Compose files in [`deploy/`](../deploy) 
    Set two values in `.env`:
 
    - `RETICULA_DB_PASSWORD`: generate one with `openssl rand -hex 24`.
-   - `RETICULA_VERSION`: the release you cloned, without the `v`. For the tag `v0.1.1` it is `0.1.1`.
+   - `RETICULA_VERSION`: the release you cloned, without the `v`. For the tag `v0.2.0` it is `0.2.0`.
 
    Leave `RETICULA_PUBLIC_URL` and `RETICULA_TRUSTED_PROXIES` empty for now.
 
@@ -56,7 +56,7 @@ The commands are written for the Docker Compose files in [`deploy/`](../deploy) 
    curl -s -w '\n%{http_code}\n' http://127.0.0.1:8787/healthz
    ```
 
-   The answer is `{"status":"ok","version":"0.1.1"}`, with the installed version, and `200` on the next line. When the database does not answer, it is `{"status":"unavailable","version":"0.1.1"}` and `503`. `docker compose ps` shows the same result as `healthy` or `unhealthy`.
+   The answer is `{"status":"ok","version":"0.2.0"}`, with the installed version, and `200` on the next line. When the database does not answer, it is `{"status":"unavailable","version":"0.2.0"}` and `503`. `docker compose ps` shows the same result as `healthy` or `unhealthy`.
 
 5. Run the smoke test. It needs [uv](https://docs.astral.sh/uv/).
 
@@ -409,6 +409,8 @@ app-1  | applied 0301_title_words.sql
 - `0203_shared_rules` defines three SQL functions and changes no table.
 - `0301_title_words` adds one index on the note table, over the words of each title. No column is added and no row is changed. The index is built at that start, before the server answers. On a test database with 30,041 notes the build took 36 to 83 milliseconds.
 
+0.2.0 adds no migration to those of 0.1.1. A switch from 0.1.1 to 0.2.0 applies none, and 0.1.1 started again on the same database finds no migration it does not know, so the check described under "Go back to the older version" does not refuse. That is read from the migration files of the two releases, which are the same 14. It has not been run yet.
+
 The drill went from 0.1.0 to 0.1.1, both installed from PyPI. Building the image of 0.1.1 took 22 seconds with no step taken from Docker's build cache. With the image built, the command of step 3 took 7 to 8 seconds. The server was away for one to two seconds: `/healthz` was asked every 0.1 seconds during the switches, and the longest time without an answer was 1.1 and 1.5 seconds in the two switches that applied both migrations, and 1.4 seconds in one that had nothing to apply.
 
 Tokens issued before the upgrade worked after it: the access and refresh tokens of a sign-in, and a token minted with `reticula-mcp token`. An account signed in with the password it had before. The smoke test of 0.1.1 passed.
@@ -470,13 +472,125 @@ The whole instance is one PostgreSQL database. Dump it while the server runs:
 docker compose exec -T db pg_dump -U reticula --format=custom reticula > reticula-$(date +%Y%m%d).dump
 ```
 
-The dump contains every note, the password hashes and the private keys of every account, unencrypted. Store it as carefully as the database itself, and off the machine that runs the database. Run the command from cron or a systemd timer. Keep a copy of `.env` with it: the dump does not contain the settings.
+The dump contains every note, the password hashes and the private keys of every account, unencrypted. The custom format is compressed, not encrypted: a search of the file for a line of a note finds nothing, and `pg_restore` turns the same file into readable SQL without asking for a key. Store the dump as carefully as the database itself. Keep a copy of `.env` with it: the dump does not contain the settings.
 
 The embedding model is not in the dump. It is downloaded again when needed.
 
+A dump that stays on the machine is lost with the machine. A plain dump in another place is a second copy of every note and key, readable by whoever keeps it. The rest of this part encrypts the dump while it is written, takes it on a schedule and checks it. It was tested on release 0.1.1 with age 1.1.1 and GnuPG 2.2.40, the versions in Debian 12.
+
+### Encrypt the dump
+
+`age` and `gpg` both encrypt to a public key. The public key is on the machine that runs the database. The private key is not, so that machine writes backups and cannot read them, and neither can anyone who copies the files.
+
+With `age`, make a key pair once, on your own computer:
+
+```
+age-keygen -o reticula-backup-key.txt
+```
+
+It prints `Public key: age1...`. The file holds the private key. Without it nobody reads the backups, you included. Keep a second copy in a place that does not depend on your computer, for example a password manager.
+
+On the database machine, dump and encrypt in one command, with your public key after `-r`:
+
+```
+docker compose exec -T db pg_dump -U reticula --format=custom reticula | age -r age1... > reticula-$(date +%Y%m%d).dump.age
+```
+
+With `gpg`, export the public key of a key pair you have with `gpg --armor --export backup@example.com > reticula-backup-public.asc`, and import it on the database machine with `gpg --import < reticula-backup-public.asc`. Then:
+
+```
+docker compose exec -T db pg_dump -U reticula --format=custom reticula | gpg --batch --trust-model always --encrypt --recipient backup@example.com > reticula-$(date +%Y%m%d).dump.gpg
+```
+
+`--trust-model always` is needed because an imported key is not marked as trusted. Without it `gpg` ended with status 2 and `There is no assurance this key belongs to the named user`, and the file was empty.
+
+Neither command writes a plain dump to disk. The encrypted files did not contain the text `PGDMP` that a plain dump starts with.
+
+The shell reports the status of the last program of the line, and that is the encryption. With the database stopped, the `age` command ended with status 0 and left a file of 200 bytes, which is an encrypted dump of nothing. The script in the next part stops on a failed dump.
+
+### On a schedule
+
+Save this as `backup.sh` next to `compose.yaml` and `.env`, put your public key in the line `recipient=`, and run `chmod +x backup.sh`:
+
+```
+#!/bin/bash
+set -euo pipefail
+cd "$(dirname "$0")"
+
+recipient=age1...
+dir=backups
+keep_days=14
+
+mkdir -p "$dir"
+out="$dir/reticula-$(date +%Y%m%d-%H%M%S).dump.age"
+trap 'rm -f "$out.part"' EXIT
+docker compose exec -T db pg_dump -U reticula --format=custom reticula \
+  | age -r "$recipient" > "$out.part"
+mv "$out.part" "$out"
+age -r "$recipient" < .env > "$dir/env.age"
+find "$dir" -name 'reticula-*.dump.age' -mtime +"$keep_days" -delete
+```
+
+Each run writes one encrypted dump into `backups/`, replaces the encrypted copy of `.env` beside it, and removes dumps older than 14 days. A dump is written under a name that ends in `.part` and gets its own name when it is complete, so a file named `.dump.age` is a whole dump. `set -o pipefail` makes a failed dump fail the script.
+
+`backup.sh`, `backup.log` and `backups/` are your own files in the clone. `git` does not track them, and moving the clone to another release, as in step 2 of "Upgrade", left them where they were.
+
+For `gpg`, write `gpg --batch --trust-model always --encrypt --recipient "$recipient"` in place of `age -r "$recipient"` in both lines, set `recipient` to the address of the key, and let the names end in `.gpg`. Import the public key as the user whose crontab runs the script.
+
+Run the script from cron. With `crontab -e`, for every night at 02:30:
+
+```
+30 2 * * * /home/reticula/reticula-mcp/deploy/backup.sh >> /home/reticula/reticula-mcp/deploy/backup.log 2>&1
+```
+
+In the test the cron of Debian 12 ran the `age` script from this line, with `* * * * *` as the time. It wrote the dump and the copy of `.env`, and nothing into the log. The `gpg` script was run without a terminal and with an empty environment, which is what cron gives a job, but not by cron itself. A systemd timer can start the same script. That was not tried.
+
+What went wrong in the test, and what the script did then:
+
+| Cause | Result |
+|---|---|
+| The database container is not running | Status 1, `service "db" is not running` in the log, no new file |
+| `docker` is not where cron looks for programs | `docker: command not found` in the log, no new file |
+| `age` is not installed | Status 127, `age: command not found` in the log, no new file |
+| The public key is mistyped | Status 1, `age: error: malformed recipient` in the log, no new file |
+
+The cron of Debian looks for programs in `/usr/bin` and `/bin` only. With `docker` in `/usr/local/bin` the job failed as in the second row. A line `PATH=/usr/local/bin:/usr/bin:/bin` at the top of the crontab made it work.
+
+cron does not tell you about a failed run unless the machine can send mail. Look at `backup.log` and at the date of the newest file in `backups/`.
+
+Do not paste the one-line command into a crontab as it is. In a crontab line `%` ends the command. The line with `$(date +%Y%m%d)` wrote no file at all, and the same line with every `%` written as `\%` wrote the dump. The script makes the date itself, so its crontab line has no `%`.
+
+### Off the machine
+
+Copy `backups/` to another machine after each run, with the tool you already use for copies. As a last line of the script, `rsync` does it:
+
+```
+rsync -a "$dir"/ backup.example.com:reticula-backups/
+```
+
+That line was not part of the test. The other machine gets encrypted files and no key, so it does not have to be trusted with the notes, only to keep the files. `rsync -a` removes nothing there, so the 14 days of the script apply to the database machine alone.
+
+### Check a backup
+
+Check a file before you depend on it. Decrypting it to nowhere reads all of it. That needs the private key, so do it on your own computer with a copy of the file:
+
+```
+age --decrypt -i reticula-backup-key.txt < reticula-20261125-023000.dump.age > /dev/null
+```
+
+Status 0 says that the file is whole and that this key opens it. A file cut off at 60 percent gave status 1 and `age: error: failed to decrypt and authenticate payload chunk`. Another key gave status 1 and `age: error: no identity matched any of the recipients`. `gpg --batch --decrypt` gave status 2 for a file cut off at the same place.
+
+To see what a dump holds, send it through `pg_restore --list` on a machine that runs the stack. For 0.1.1 the list has 18 tables with data:
+
+```
+age --decrypt -i reticula-backup-key.txt < reticula-20261125-023000.dump.age | docker compose exec -T db pg_restore --list
+```
+
+The full check is a restore on another machine, with the steps of the next part.
+
 ## Restore
 
-Restore into an empty database. The steps below replace the data of an existing stack. Everything written after the dump was taken is lost. On a new machine, start at step 2 with the same `.env`.
+Restore into an empty database. The steps below replace the data of an existing stack. Everything written after the dump was taken is lost. On a new machine, start at step 2 with the same `.env`. The script under "Back up" keeps an encrypted copy of it: `age --decrypt -i reticula-backup-key.txt < env.age > .env` writes it back.
 
 The volume name in step 1 starts with the project name, which the compose file fixes to `reticula`. For a copy that was started under another project name, the volume is `<name>_reticula-db`, and every command below needs the same `-p <name>` or `COMPOSE_PROJECT_NAME`. Without it the commands act on the stack called `reticula`.
 
@@ -499,6 +613,15 @@ The volume name in step 1 starts with the project name, which the compose file f
    docker compose exec -T db pg_restore -U reticula --no-owner --exit-on-error --dbname reticula < reticula-20261125.dump
    ```
 
+   An encrypted dump is decrypted into the same command. That needs the private key on this machine for the time of the restore. Remove it afterwards. With `age`, and with `gpg`:
+
+   ```
+   age --decrypt -i reticula-backup-key.txt < reticula-20261125-023000.dump.age | docker compose exec -T db pg_restore -U reticula --no-owner --exit-on-error --dbname reticula
+   gpg --batch --decrypt < reticula-20261125-023000.dump.gpg | docker compose exec -T db pg_restore -U reticula --no-owner --exit-on-error --dbname reticula
+   ```
+
+   If the command ends with an error, the database holds a part of the data. Do not go on to step 4. Start again at step 1 with a whole file.
+
 4. Start the server. If the dump is older than the installed version, the server brings the schema up to date. If the dump is from a newer version, the server refuses to start, as described under "Go back to the older version".
 
    ```
@@ -510,6 +633,10 @@ The volume name in step 1 starts with the project name, which the compose file f
 In the drill the restored instance had the same number of rows in every table as the original. `docker compose exec app reticula-mcp rebuild` printed the same counts on both. Notes read back, shared and private. Accounts keep their person IDs, keys and tokens, so connected assistants keep working, as long as `RETICULA_PUBLIC_URL` is the same as before. With a different public URL, tokens issued at sign-in got status 401 and tokens minted with `reticula-mcp token` still worked.
 
 The same steps took an instance back after an upgrade. A dump taken under 0.1.0 was restored after the upgrade to 0.1.1, with `RETICULA_VERSION=0.1.0` and the compose file of 0.1.0: steps 1 to 3 took 15 seconds and step 4 another 9. Every table had the row counts from before the upgrade, 112 recorded replies were the same as before it, and the notes written after the dump were gone. Started on that database again, 0.1.1 applied its two migrations as in the first upgrade.
+
+A restore from an encrypted dump was tested on 0.1.1, once from the `age` file and once from the `gpg` file. A note written after the backup was gone afterwards. Every table had the row counts from the time of the backup, and 112 recorded replies were the same as then. The smoke test passed on the instance restored from the `gpg` file. Steps 1 to 3 took 7 seconds and step 4 another 7, on a database of 173 rows.
+
+A restore from a file cut off at 60 percent ended with `pg_restore: error: could not read from input file: end of file`. The database then had 45 of the 173 rows, and the server of step 4 started on it and answered `/healthz` with `ok`. The server does not notice a partial restore. The error of step 3 is the only sign.
 
 ## Accounts, tokens and connections
 
@@ -634,6 +761,7 @@ A search compares the query with every vector the account may read, as long as t
 | Search index (embeddings) | a table in the same database, rebuildable with `reindex` |
 | Embedding model | the volume `reticula_reticula-models`, downloaded again when missing |
 | Settings and the database password | `deploy/.env`, which git ignores |
+| Backups written by `backup.sh` | `deploy/backups/`, encrypted. The key that opens them is not on this machine |
 | Shipped instruction texts | inside the installed package; copied into the database when migrations run |
 
 ## Without Docker

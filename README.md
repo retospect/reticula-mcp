@@ -33,7 +33,7 @@ This path runs the database and the server in Docker. You need Docker with Docke
    cd reticula-mcp/deploy
    ```
 
-   For release 0.1.1 the option is `--branch v0.1.1`.
+   For release 0.2.0 the option is `--branch v0.2.0`.
 
 2. Create the settings file:
 
@@ -57,7 +57,7 @@ This path runs the database and the server in Docker. You need Docker with Docke
    curl http://127.0.0.1:8787/healthz
    ```
 
-   The answer is `{"status":"ok","version":"0.1.1"}`, with the version you run. The server listens on `127.0.0.1:8787`. The MCP endpoint is `/mcp` and the health check is `/healthz`.
+   The answer is `{"status":"ok","version":"0.2.0"}`, with the version you run. The server listens on `127.0.0.1:8787`. The MCP endpoint is `/mcp` and the health check is `/healthz`.
 
 5. Connect an assistant, as described under "Connecting an assistant" below. The first sign-in creates your account.
 
@@ -266,7 +266,7 @@ The reason is federation. Because each record already carries its author, addres
 - Serve the MCP endpoint over HTTPS when it leaves your machine or tailnet. A bearer token sent over plain HTTP can be read on the way.
 - Text found in the graph is treated as data written by people and other assistants, never as instructions to follow. The only exception is an instruction note written by the instance's own system account, which is where the shipped instructions come from.
 - Assistants can write debug notes about tool problems. They go to a hub that every account may add to and only the operator reads, with `reticula-mcp debug-notes`.
-- Backups are your job. A dump contains the private keys, so protect it like the database. [docs/operating.md](https://github.com/retospect/reticula-mcp/blob/main/docs/operating.md) has the commands for backup, restore and upgrade.
+- Backups are your job. A dump contains the private keys, so protect it like the database. [docs/operating.md](https://github.com/retospect/reticula-mcp/blob/main/docs/operating.md) has the commands for backup, an encrypted backup on a schedule, restore and upgrade.
 
 ## Development
 

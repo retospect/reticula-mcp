@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "reticula-mcp"
-version = "0.2.0.dev0"
+version = "0.3.0.dev0"
 description = "Reticula MCP: a shared memory graph of small signed notes for people and their assistants, served over the Model Context Protocol."
 readme = "README.md"
 license = "AGPL-3.0-or-later"

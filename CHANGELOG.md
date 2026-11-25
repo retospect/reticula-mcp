@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.0 (2026-11-25)
+
 - Request log: a refused sign-in says why in a fixed word, for example `reason="signin: bad_credentials"`, `signin: throttled`, `signin: signup_rate` or `signin: link_gone`. A request refused for its `Host` or `Origin` header has `reason="Invalid Host header"` or `reason="Invalid Origin header"` on its line. The other lines of the log, such as a library's warning, now begin with the time in UTC.
 - `reticula-mcp connections list` has a `client` column. It holds what the request log prints as `client=` for that connection.
 - Search shows notes that have only some of the words. When fewer than three notes are found, notes with some of the words follow under the line `also, with some of the words:`, and each says which it has (`has: kiln, glaze`). A note is added this way only when one of its words is in at most 50 of the notes searched, so a name alone does not bring every note with that name. When no note has all the words, the first line says so: `no note has all of these words; 2 have some of them`. A note found only because it has half of the words or more was a result in 0.1.1; it now stands under that line.
@@ -12,6 +14,7 @@
 - `start` says what other people did in the last seven days, after the hub lists and only when there is something: `New from other people in the last 7 days: 3 in "Kestrel", 1 in @bea's hub id 4f9c21aa. List them with search(query="", since="7d").` A hub shared with you in that time gets a line of its own: `Newly shared with you in the last 7 days: hub id 4f9c21aa by @bea.` Your own hub is named by its title. Another person's hub is named by its owner and the id on its line in the hub list, because its title is that person's text and stays in the list that says so. Nothing is stored about what you have seen.
 - Migrations: `0350_recent_events` adds three indexes, on the time a note was last changed, on the time a filing was signed and on the log row of each filing. No table, column, function or row is changed. On 30,000 notes they are built in under 50 ms together.
 - The server's instructions end with one more sentence: ids and addresses are for the assistant's tool calls, and it names notes and hubs to the person by their titles. Before, an assistant that saved or listed notes showed the person an id or an address unasked in most conversations. Now it shows an id only when the person asks or when two notes have the same title. The replies of the tools are unchanged. `docs/trials.md`, round ten, has the runs.
+- Migrations: 0.2.0 adds none. A switch from 0.1.1 changes nothing in the database, and 0.1.1 starts again on it.
 
 ## 0.1.1 (2026-11-25)
 
