@@ -181,7 +181,9 @@ def test_who_may_read_is_asked_once_and_not_in_every_statement(
         return [
             " ".join(s.split())
             for s in sql.statements
-            if ("current_nodes(" in s or "readable_nodes(" in s)
+            if any(
+                f in s for f in ("current_nodes(", "readable_nodes(", "current_among(")
+            )
             and "FROM embedding e WHERE e.node_id = n.id" not in s
         ]
 
@@ -193,7 +195,7 @@ def test_who_may_read_is_asked_once_and_not_in_every_statement(
     find.hybrid_search(conn, ada, "kiln firing", only_ids=inside)
     assert len(plain) > 3
     assert len(asks(sql)) == 1, asks(sql)
-    assert "= ANY(%(ids)s)" in asks(sql)[0]
+    assert "current_among(%(viewer)s, %(ids)s::bigint[])" in asks(sql)[0]
     assert sum(find.ONLY_IDS_SQL in s for s in sql.statements) >= len(plain)
 
 
