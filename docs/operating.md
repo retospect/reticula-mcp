@@ -590,6 +590,8 @@ To see what a dump holds, send it through `pg_restore --list` on a machine that 
 age --decrypt -i reticula-backup-key.txt < reticula-20261125-023000.dump.age | docker compose exec -T db pg_restore --list
 ```
 
+The list stands at the start of a dump and does not show that the end is there: a plain dump cut off at 60 percent gave the same list with status 0. With `pg_restore -f /dev/null` in place of `pg_restore --list` the whole dump is read and nothing is written. That gave status 0 for a whole dump and status 1 for one that lacked its last 50 bytes. Use it for a plain dump, which has no check of its own.
+
 The full check is a restore on another machine, with the steps of the next part.
 
 ## Restore
@@ -611,20 +613,20 @@ The volume name in step 1 starts with the project name, which the compose file f
    docker compose up -d --wait db
    ```
 
-3. Restore the dump.
+3. Restore the dump. `--single-transaction` makes the restore all or nothing: it stops at the first error, and the database is then as empty as before.
 
    ```
-   docker compose exec -T db pg_restore -U reticula --no-owner --exit-on-error --dbname reticula < reticula-20261125.dump
+   docker compose exec -T db pg_restore -U reticula --no-owner --single-transaction --dbname reticula < reticula-20261125.dump
    ```
 
    An encrypted dump is decrypted into the same command. That needs the private key on this machine for the time of the restore. Remove it afterwards. With `age`, and with `gpg`:
 
    ```
-   age --decrypt -i reticula-backup-key.txt < reticula-20261125-023000.dump.age | docker compose exec -T db pg_restore -U reticula --no-owner --exit-on-error --dbname reticula
-   gpg --batch --decrypt < reticula-20261125-023000.dump.gpg | docker compose exec -T db pg_restore -U reticula --no-owner --exit-on-error --dbname reticula
+   age --decrypt -i reticula-backup-key.txt < reticula-20261125-023000.dump.age | docker compose exec -T db pg_restore -U reticula --no-owner --single-transaction --dbname reticula
+   gpg --batch --decrypt < reticula-20261125-023000.dump.gpg | docker compose exec -T db pg_restore -U reticula --no-owner --single-transaction --dbname reticula
    ```
 
-   If the command ends with an error, the database holds a part of the data. Do not go on to step 4. Start again at step 1 with a whole file.
+   If the command ends with an error, nothing was restored. Do not go on to step 4: the server would start on the empty database as a new instance. Run step 3 again with a whole file.
 
 4. Start the server. If the dump is older than the installed version, the server brings the schema up to date. If the dump is from a newer version, the server refuses to start, as described under "Go back to the older version".
 
@@ -638,9 +640,13 @@ In the drill the restored instance had the same number of rows in every table as
 
 The same steps took an instance back after an upgrade. A dump taken under 0.1.0 was restored after the upgrade to 0.1.1, with `RETICULA_VERSION=0.1.0` and the compose file of 0.1.0: steps 1 to 3 took 15 seconds and step 4 another 9. Every table had the row counts from before the upgrade, 112 recorded replies were the same as before it, and the notes written after the dump were gone. Started on that database again, 0.1.1 applied its two migrations as in the first upgrade.
 
-A restore from an encrypted dump was tested on 0.1.1, once from the `age` file and once from the `gpg` file. A note written after the backup was gone afterwards. Every table had the row counts from the time of the backup, and 112 recorded replies were the same as then. The smoke test passed on the instance restored from the `gpg` file. Steps 1 to 3 took 7 seconds and step 4 another 7, on a database of 173 rows.
+The commands of step 3 were run on 0.2.0 with the plain dump, the `age` file and the `gpg` file. Each time every table had the row counts from the time of the backup, all 65 indexes and 53 constraints were there, and 112 recorded replies were the same as then. The smoke test passed on the restored instance. Step 3 took 0.2 seconds on a database of 232 rows, the same as without `--single-transaction`. On 0.1.1 the restore from the two encrypted files, then still without `--single-transaction`, gave the same result, and a note written after the backup was gone afterwards. There steps 1 to 3 took 7 seconds and step 4 another 7.
 
-A restore from a file cut off at 60 percent ended with `pg_restore: error: could not read from input file: end of file`. The database then had 45 of the 173 rows, and the server of step 4 started on it and answered `/healthz` with `ok`. The server does not notice a partial restore. The error of step 3 is the only sign.
+A damaged file ends step 3 with `pg_restore: error: could not read from input file: end of file`. That was tried with a dump cut off at 60 percent and with one that lacked its last 50 bytes, plain and encrypted with both tools. Each time the database held nothing afterwards: no table and no extension. Step 3 run again with the whole file then restored everything, without steps 1 and 2 in between.
+
+Step 4 after a failed step 3 gives a new, empty instance and no error. The server answered `/healthz` with `ok`, logged 14 `applied` lines and had no account but its own, and a token from before the restore got status 401. The server cannot tell you that the restore failed. The status of step 3 does.
+
+Without `--single-transaction` a damaged file leaves a part of the dump behind. Up to 0.2.0 this guide gave the command with `--exit-on-error` in its place. With that command the dump cut at 60 percent left 55 of 232 rows, and the server of step 4 did not start: its log said `0001_accounts_records.sql failed: relation "account" already exists`. The dump without its last 50 bytes left 226 of 232 rows, none of the 65 indexes, 5 of the 53 constraints and no trigger, and the server started on that and answered `ok`. A restore with the older command that ended without an error is whole.
 
 ## Accounts, tokens and connections
 
@@ -781,6 +787,6 @@ reticula-mcp serve
 
 `migrate` is safe to run any number of times. Besides applying schema files, it creates the system account (handle `reticula`, no password, cannot sign in) and loads the shipped instructions. The instructions are written as notes by the system account, in a hub that every account can read. It also creates the debug hub. A second run changes nothing. A new version of a shipped note is written only when its text changed in the release you installed.
 
-The other commands on this page are the same without the `docker compose exec app` prefix. Back up with `pg_dump --format=custom "$RETICULA_DATABASE_URL"`, and restore with `pg_restore --no-owner --exit-on-error` into an empty database before the first `migrate`.
+The other commands on this page are the same without the `docker compose exec app` prefix. Back up with `pg_dump --format=custom "$RETICULA_DATABASE_URL"`, and restore with `pg_restore --no-owner --single-transaction` into an empty database before the first `migrate`.
 
 A tunnel or proxy on the same host reaches a server that runs as a host process from `127.0.0.1`. That is then the value for `RETICULA_TRUSTED_PROXIES`.
