@@ -117,7 +117,7 @@ Other facts: `records.sign_and_append` enforces local-write rules (own address, 
 
 ## The tools (frozen: names, parameters, defaults)
 
-`start()`; `profile(handle=None)`; `search(query, hub=None, kind=None, limit=10, include_superseded=False)`; `get(ref, history=False, depth=1)`; `put(text, kind="note", hub=None, title=None, tags=None, private=False, supersedes=None, ext_id=None, anchor=None, preset=None, model=None)`; `edit(ref, text=None, title=None, tags=None, private=None, preset=None)`; `link(ref, to, rel="part-of", remove=False)`; `delete(ref)`; `share(hub, person=None, mode="add")`. Schemas are pinned in `tests/contract/tools.json`. `ref`/`hub`/`to` accept a full address or a unique 6+ hex suffix of the UUID among readable nodes; `person` accepts `@handle` or a person ID. Stubs return `[error:NotImplemented]` naming the owning lane.
+`start()`; `profile(handle=None)`; `search(query, hub=None, kind=None, limit=10, include_superseded=False)`; `get(ref, history=False, depth=1)`; `put(text="", kind="note", hub=None, title=None, tags=None, private=False, supersedes=None, ext_id=None, anchor=None, preset=None, model=None)`; `edit(ref, text=None, title=None, tags=None, private=None, preset=None)`; `link(ref, to, rel="part-of", remove=False)`; `delete(ref)`; `share(hub, person=None, mode="add")`. Schemas are pinned in `tests/contract/tools.json`. `ref`/`hub`/`to` accept a full address or a unique 6+ hex suffix of the UUID among readable nodes; `person` accepts `@handle` or a person ID. Stubs return `[error:NotImplemented]` naming the owning lane.
 
 ## Phase-one acceptance lines
 

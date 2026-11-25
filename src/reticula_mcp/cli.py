@@ -21,9 +21,14 @@ def _migrate(settings: Settings) -> int:
     from reticula_mcp.content import hooks
     from reticula_mcp.db import connect
     from reticula_mcp.db.migrate import migrate
+    from reticula_mcp.db.pool import configure_connection
 
     with connect(settings.require_database_url()) as conn:
         ran = migrate(conn)
+        # On a new database the vector type did not exist when this connection
+        # was opened, so its adapter is registered only now.
+        conn.commit()
+        configure_connection(conn)
         for m in ran:
             print(f"applied {m.path.name}")
         if not ran:

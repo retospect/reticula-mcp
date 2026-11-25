@@ -80,6 +80,7 @@
  "put": {
   "properties": {
    "text": {
+    "default": "",
     "type": "string"
    },
    "kind": {
@@ -185,9 +186,7 @@
     "default": null
    }
   },
-  "required": [
-   "text"
-  ]
+  "required": []
  },
  "edit": {
   "properties": {

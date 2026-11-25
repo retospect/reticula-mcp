@@ -97,7 +97,7 @@ def put(
     conn: Conn,
     viewer: Account,
     *,
-    text: str,
+    text: str = "",
     kind: str = "note",
     hub: str | None = None,
     title: str | None = None,

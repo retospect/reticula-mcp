@@ -226,8 +226,12 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
     @mcp.tool()
     async def put(
         text: Annotated[
-            str, Field(description="The note itself: one idea, self-contained.")
-        ],
+            str,
+            Field(
+                description="The note itself: one idea, self-contained. "
+                "For a hub: what it is for. May be left out for a paper."
+            ),
+        ] = "",
         kind: Annotated[
             str, Field(description="note (default), hub, paper, instruction or debug.")
         ] = "note",
