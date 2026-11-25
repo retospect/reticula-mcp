@@ -16,6 +16,7 @@ from reticula_mcp.search.read import read_ref
 from reticula_mcp.search.rows import fetch_rows, visible_subset
 
 MAX_LIMIT = 50
+MAX_QUERY = 1000  # characters; a longer query is refused, not cut
 # Said when the meaning-based leg did not take part, so that the caller knows a
 # paraphrase may have missed and literal words are worth a try.
 KEYWORDS_ONLY = {
@@ -43,6 +44,12 @@ def search(
     q = (query or "").strip()
     if not q:
         raise ReticulaError(BAD_INPUT, "query is empty", hint="search(query='words')")
+    if len(q) > MAX_QUERY:
+        raise ReticulaError(
+            BAD_INPUT,
+            f"query is {len(q)} characters long; the limit is {MAX_QUERY}",
+            hint="search for a few words or one sentence, not a whole text",
+        )
     limit = max(1, min(int(limit), MAX_LIMIT))
     hub_node_id: int | None = None
     if hub:

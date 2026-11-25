@@ -57,21 +57,35 @@ SEMANTIC_ON = "on"  # the vector leg ran
 SEMANTIC_LOADING = "loading"  # the model is still loading: keywords only
 SEMANTIC_OFF = "off"  # no model, or it failed: keywords only
 
-# All members of the hub subtree: the hub's members, and (transitively) the
-# members of every sub-hub (a hub that is itself a member). UNION, not UNION ALL,
-# so a cycle (refused on write, but never trusted here) cannot loop.
-_SUBTREE = """
-    WITH RECURSIVE sub(id) AS (
-        SELECT %(hub)s::bigint
-        UNION
+
+def _subtree(viewer_sql: str) -> str:
+    """All members of the hub subtree, as this viewer may see it: the hub's
+    members, and (transitively) the members of every sub-hub.
+
+    The walk goes only through sub-hubs the viewer can read, and counts only
+    the filings the viewer may see (not withdrawn; made for the hub's readers,
+    or the viewer's own private ones), the same rule as the member list of
+    ``get``. So a note is never matched through a sub-hub the viewer cannot
+    read or through somebody else's private filing, which would tell them where
+    it is filed. UNION, not UNION ALL, so a cycle (refused on write, but never
+    trusted here) cannot loop.
+    """
+    return f"""
+        WITH RECURSIVE sub(id) AS (
+            SELECT %(hub)s::bigint
+            UNION
+            SELECT m.node_id FROM membership m
+            JOIN sub ON m.hub_node_id = sub.id
+            JOIN node h ON h.id = m.node_id AND h.kind = 'hub'
+            WHERE NOT m.withdrawn
+              AND (m.audience = 'hub' OR m.author = %(person)s)
+              AND h.id IN ({readable_nodes_sql(viewer_sql)})
+        )
         SELECT m.node_id FROM membership m
-        JOIN sub ON m.hub_node_id = sub.id
-        JOIN node h ON h.id = m.node_id AND h.kind = 'hub'
         WHERE NOT m.withdrawn
-    )
-    SELECT m.node_id FROM membership m
-    WHERE NOT m.withdrawn AND m.hub_node_id IN (SELECT id FROM sub)
-"""
+          AND (m.audience = 'hub' OR m.author = %(person)s)
+          AND m.hub_node_id IN (SELECT id FROM sub)
+    """
 
 
 @dataclass
@@ -104,8 +118,9 @@ def _scope(
     ]
     params: dict[str, Any] = {"viewer": viewer.id, "kind": kind}
     if hub_node_id is not None:
-        where.append(f"n.id IN ({_SUBTREE})")
+        where.append(f"n.id IN ({_subtree('%(viewer)s')})")
         params["hub"] = hub_node_id
+        params["person"] = viewer.person_id
     return " AND ".join(where), params
 
 

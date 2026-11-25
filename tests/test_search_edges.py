@@ -210,45 +210,6 @@ def _words(count: int) -> str:
     return " ".join(words[i % len(words)] for i in range(count))
 
 
-def test_a_20000_character_query_answers_without_error_and_quickly(conn, make_account):
-    alice = make_account(handle="alice")
-    make_atom(conn, alice, "the quick brown fox", title="Fox")
-    query = _words(4_200)[:20_000]
-    assert len(query) == 20_000
-    started = time.perf_counter()
-    out = search(conn, alice, query)
-    assert time.perf_counter() - started < 3.0
-    assert any(ln.startswith("search ") for ln in out.splitlines()[:2])
-
-
-def test_a_query_of_2000_distinct_words_answers_without_error_and_quickly(
-    conn, make_account
-):
-    alice = make_account(handle="alice")
-    make_atom(conn, alice, "term7 and term1999", title="Terms")
-    query = " ".join(f"term{i}" for i in range(2_000))
-    started = time.perf_counter()
-    out = search(conn, alice, query)
-    assert time.perf_counter() - started < 3.0
-    assert any(ln.startswith("search ") for ln in out.splitlines()[:2])
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason="handlers.search passes the whole query on; nothing cuts it at 1000"
-    " characters or says so",
-)
-@pytest.mark.parametrize("words", [4_000, 2_000])
-def test_a_query_over_1000_characters_is_cut_and_the_first_line_says_so(
-    conn, make_account, words
-):
-    alice = make_account(handle="alice")
-    make_atom(conn, alice, "the quick brown fox", title="Fox")
-    out = search(conn, alice, _words(words))
-    first = out.splitlines()[0]
-    assert "cut" in first and "1000" in first
-
-
 def _spy_on_the_query(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     """The query text ``handlers.search`` hands to the hybrid search."""
     seen: list[str] = []
@@ -262,17 +223,30 @@ def _spy_on_the_query(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     return seen
 
 
-@pytest.mark.xfail(
-    strict=True, reason="nothing in handlers.search cuts the query (see above)"
+@pytest.mark.parametrize(
+    "query",
+    [
+        _words(4_200)[:20_000],
+        " ".join(f"term{i}" for i in range(2_000)),
+        "word " * 199 + "zebrastripes extra",  # 1013 characters
+        "x" * 1001,
+    ],
+    ids=["20000-characters", "2000-distinct-words", "just-over", "one-word"],
 )
-def test_a_query_is_cut_at_a_word_boundary_not_inside_a_word(
-    conn, make_account, monkeypatch
+def test_a_query_over_1000_characters_is_refused_before_any_search(
+    conn, make_account, monkeypatch, query
 ):
+    """A longer query is refused, not cut: a cut query would be answered as if
+    it were what was asked, and the full one costs time (permission review)."""
     alice = make_account(handle="alice")
+    make_atom(conn, alice, "the quick brown fox", title="Fox")
     seen = _spy_on_the_query(monkeypatch)
-    # 995 characters of filler, then a word that straddles character 1000
-    search(conn, alice, "word " * 199 + "zebrastripes extra")
-    assert seen == [" ".join(["word"] * 199)]
+    started = time.perf_counter()
+    err = error_of(lambda: search(conn, alice, query))
+    assert time.perf_counter() - started < 0.5
+    assert err.code == "BadInput"
+    assert "1000" in err.message and str(len(query.strip())) in err.message
+    assert seen == []
 
 
 def test_a_query_up_to_1000_characters_is_passed_on_whole(
@@ -520,11 +494,6 @@ def _private_filing(
     return bob, carol, sub
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="find._SUBTREE follows every non-withdrawn membership row; it lacks the"
-    " (audience = 'hub' OR author = viewer) test every other query applies",
-)
 def test_hub_scope_does_not_reveal_a_private_filing_by_someone_else(conn, make_account):
     _, carol, sub = _private_filing(conn, make_account)
     assert titles(search(conn, carol, "hippo", hub=sub)) == []
@@ -621,7 +590,13 @@ def test_any_depth_answers_without_error(conn, make_account, depth):
     assert get(conn, alice, top, depth=depth).startswith("")
 
 
-def test_depth_is_clamped_to_one_through_four(conn, make_account):
+def _without_depth_line(out: str) -> str:
+    return "\n".join(
+        ln for ln in out.splitlines() if "more than one call reads" not in ln
+    )
+
+
+def test_depth_is_clamped_to_one_through_two(conn, make_account):
     alice = make_account(handle="alice")
     chain = [address(graph.put(conn, alice, kind="hub", title="L0"))]
     for level in range(1, 7):
@@ -631,19 +606,39 @@ def test_depth_is_clamped_to_one_through_four(conn, make_account):
             )
         )
     graph.put(conn, alice, text="at the bottom", hub=chain[-1])
-    answers = {d: get(conn, alice, chain[0], depth=d) for d in (-3, 0, 1, 4, 5, 10**6)}
+    answers = {
+        d: get(conn, alice, chain[0], depth=d) for d in (-3, 0, 1, 2, 3, 4, 10**6)
+    }
     assert answers[0] == answers[-3] == answers[1]
-    assert answers[5] == answers[10**6] == answers[4]
-    assert answers[1] != answers[4]
-    assert '"L4"' in answers[4] and '"L5"' not in answers[4]
+    assert answers[1] != answers[2]
+    assert '"L2"' in answers[2] and '"L3"' not in answers[2]
+    assert "more than one call reads" not in answers[2]
+    for asked in (3, 4, 10**6):  # read as depth 2, and one line says so
+        assert _without_depth_line(answers[asked]) == answers[2]
+        said = [
+            ln for ln in answers[asked].splitlines() if "more than one call reads" in ln
+        ]
+        assert len(said) == 1 and "depth 2" in said[0]
 
 
-def test_a_deep_wide_hub_stays_under_150_lines_and_says_where_it_stopped(
-    conn, make_account
+def _wide_tree(conn: Conn, who: Account) -> Node:
+    """Top > 30 hubs, each holding 8 notes: more than one answer shows."""
+    seed = make_atom(conn, who, "seed")
+    top = hub_node(conn, who, "Top")
+    for i in range(1, 31):
+        one = hub_node(conn, who, f"Hub {i}")
+        file_under(conn, one, top)
+        bulk_notes(conn, who, one, 8, seed, prefix=f"Note {i}.")
+    return top
+
+
+@pytest.mark.parametrize("depth", [2, 4])
+def test_a_wide_hub_stays_under_150_lines_and_says_where_it_stopped(
+    conn, make_account, depth
 ):
     alice = make_account(handle="alice")
-    top = _tree_sizes(conn, alice)
-    out = get(conn, alice, top["address"], depth=4)
+    top = _wide_tree(conn, alice)
+    out = get(conn, alice, top["address"], depth=depth)
     lines = out.splitlines()
     assert len(lines) < 150
     notice = [ln for ln in lines if "not expanded" in ln]
@@ -654,6 +649,17 @@ def test_a_deep_wide_hub_stays_under_150_lines_and_says_where_it_stopped(
     assert named.group(1) in out
     sub = get(conn, alice, named.group(1), depth=1)
     assert " hub " in sub.splitlines()[0]
+    # every sub-hub is listed, opened or not
+    assert all(f'"Hub {i}"' in out for i in range(1, 31))
+
+
+def test_a_deep_hub_read_at_depth_four_is_the_depth_two_answer(conn, make_account):
+    alice = make_account(handle="alice")
+    top = _tree_sizes(conn, alice)
+    two = get(conn, alice, top["address"], depth=2)
+    four = get(conn, alice, top["address"], depth=4)
+    assert _without_depth_line(four) == two
+    assert "Hub 1.1.1" not in four and len(four.splitlines()) < 150
 
 
 def test_a_hub_that_fits_the_budget_has_no_notice(conn, make_account):

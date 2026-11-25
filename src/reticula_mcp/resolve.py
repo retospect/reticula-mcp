@@ -68,8 +68,12 @@ def resolve_ref(
     if not rows:
         raise ReticulaError(NOT_FOUND, f"no readable note ends in {suffix!r}")
     if len(rows) > 1:
+        # kind, title and text are other people's words: quoted, one line each
+        from reticula_mcp.search import render  # here: search imports this module
+
         shown = "; ".join(
-            f"{r['address']} ({r['kind']}: {(r['title'] or r['text'])[:40]!r})"
+            f"{r['address']} ({render.kind_word(r['kind'])}:"
+            f" {render.quote(r['title'] or r['text'], 40)})"
             for r in rows[:5]
         )
         raise ReticulaError(

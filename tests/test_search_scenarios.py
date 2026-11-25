@@ -132,12 +132,18 @@ def test_search_and_get_never_reveal_what_the_viewer_cannot_read(conn, make_acco
         handlers.get(conn, bob, ref=hidden_hub["address"])
     assert missing.value.code == "NotFound"
 
-    # a link to an unreadable atom is an opaque stub: address only, no title/text
+    # somebody else's link to an atom bob cannot read shows nothing at all: no
+    # address, no stub, no relation (permission review)
     note = handlers.get(conn, bob, ref=ref(visible))
-    stub = lines_with(note, secret_target["address"])
-    assert len(stub) == 1 and "opaque" in stub[0]
+    assert secret_target["address"] not in note and ref(secret_target) not in note
+    assert "opaque" not in note and "cites" not in note
     assert "Zebra target" not in note and "zebra target body" not in note
     assert "Secret zebra hub" not in note and ref(hidden_hub) not in note
+    # bob's own link to it: the address he wrote himself, and nothing else
+    own = handlers.get(conn, bob, ref=ref(bobs))
+    stub = lines_with(own, secret_target["address"])
+    assert len(stub) == 1 and stub[0].endswith("(opaque)")
+    assert "Zebra target" not in own and "zebra target body" not in own
 
     # the shared hub lists only what bob may read, and counts the same way
     hub_view = handlers.get(conn, bob, ref=ref(shared))

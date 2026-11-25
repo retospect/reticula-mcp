@@ -5,9 +5,14 @@ Rules this module keeps:
 
 * the node itself comes from ``resolve_ref`` (``readable_nodes`` only);
 * every neighbour (hub, link target, superseder, member, sub-hub, count) is
-  filtered through ``readable_nodes`` before any of its fields are read; an
-  outgoing link to something unreadable shows its address only, the same as for
-  an address that does not exist;
+  filtered through ``readable_nodes`` before any of its fields are read, and
+  before any limit or count is applied;
+* a link or a supersession that involves an atom on this instance which the
+  viewer cannot read is not shown at all: no address, no stub, no count. (The
+  author of the note still sees the addresses they linked themselves.) A
+  linked address that exists nowhere on this instance is shown as written;
+* one call reads a bounded part of the graph: at most ``MAX_DEPTH`` levels and
+  ``HUB_BUDGET`` hubs, and it says so when that cut something off;
 * a withdrawn (tombstoned) atom reads as an address and nothing else, and only to
   people who could have seen it: its author, and readers of a hub its author
   filed it in;
@@ -18,10 +23,10 @@ Rules this module keeps:
 from __future__ import annotations
 
 import re
-from collections import deque
 from dataclasses import dataclass
 from typing import Any
 
+from reticula_mcp import format as fmt
 from reticula_mcp.accounts import Account
 from reticula_mcp.db.pool import Conn
 from reticula_mcp.errors import BAD_INPUT, NOT_FOUND, ReticulaError
@@ -36,7 +41,8 @@ MEMBERS_SHOWN = 20  # notes per page of a hub, first page and every next page
 SUB_MEMBERS_SHOWN = 5  # notes shown for a sub-hub expanded inside a larger answer
 SUBHUBS_SHOWN = 30
 LINKS_SHOWN = 30
-MAX_DEPTH = 4
+MAX_DEPTH = 2  # the hub, and its sub-hubs opened; deeper is another call
+HUB_BUDGET = 60  # hubs one call opens, the one asked for included
 TEXT_SLICE = 8_000  # characters of a note's text per answer
 TEXT_BREAK_WINDOW = 400  # look this far back for a line break or a space to cut at
 HUB_TEXT_SHOWN = 2_000  # characters of a hub's own text
@@ -70,7 +76,8 @@ def _split_offset(ref: str) -> tuple[str, int]:
 def read_ref(
     conn: Conn, viewer: Account, ref: str, *, history: bool, depth: int
 ) -> str:
-    depth = max(1, min(int(depth), MAX_DEPTH))
+    asked = int(depth)
+    depth = max(1, min(asked, MAX_DEPTH))
     base, offset = _split_offset(ref)
     # The planner prices queries over ``current_nodes()`` above jit_above_cost
     # although they run in a few milliseconds; Postgres then spends ~60 ms per
@@ -88,7 +95,7 @@ def read_ref(
     row = fetch_rows(conn, viewer, [node["id"]], text_chars=None)[node["id"]]
     if row["kind"] == "hub":
         return _render_hub(
-            conn, viewer, row, history=history, depth=depth, offset=offset
+            conn, viewer, row, history=history, depth=depth, asked=asked, offset=offset
         )
     return _render_note(conn, viewer, row, history=history, offset=offset)
 
@@ -198,68 +205,125 @@ def _paths(conn: Conn, viewer: Account, node_id: int, own: Row | None = None) ->
     return "; ".join(paths)
 
 
-def _chain_lines(conn: Conn, viewer: Account, node: Row) -> list[str]:
-    """What this node supersedes, what supersedes it (readable ones only), and
-    its typed links in both directions (unreadable targets as address stubs)."""
-    lines: list[str] = []
+@dataclass
+class _Chain:
+    lines: list[str]
+    # other people's notes that supersede this one and that the viewer, as the
+    # author of this one, has not disputed: short refs
+    disputable: list[str]
+
+
+def _address_as_written(address: str) -> str:
+    """A linked address with no node here. It was written by the author of the
+    link, so it is printed bare only when it has the form of an address."""
+    try:
+        fmt.parse_address(address)
+    except ValueError:
+        return render.quote(address, 120)
+    return address
+
+
+def _chain_lines(conn: Conn, viewer: Account, node: Row) -> _Chain:
+    """What this node supersedes, what supersedes it, and its typed links in
+    both directions.
+
+    Every list is restricted to what the viewer can read IN the query, before
+    the limit, so an unreadable atom neither shows, nor counts towards "more",
+    nor pushes a readable one off the list. Two exceptions show an address and
+    nothing else: a linked address with no node on this instance, and, to the
+    author of this note only, their own links to atoms they can no longer read.
+    """
+    readable = readable_nodes_sql("%(viewer)s")
+    own = node["author"] == viewer.person_id
+    params = {
+        "node": node["id"],
+        "address": node["address"],
+        "viewer": viewer.id,
+        "own": own,
+        "cap": LINKS_SHOWN + 1,
+    }
     old = conn.execute(
-        "SELECT o.id, o.address FROM supersedes s JOIN node o ON o.id = s.old_node_id"
-        " WHERE s.new_node_id = %s ORDER BY o.id",
-        (node["id"],),
+        "SELECT o.id FROM supersedes s JOIN node o ON o.id = s.old_node_id"
+        f" WHERE s.new_node_id = %(node)s AND o.id IN ({readable})"
+        " ORDER BY o.id LIMIT %(cap)s",
+        params,
     ).fetchall()
     new = conn.execute(
-        "SELECT s.new_node_id AS id FROM supersedes s WHERE s.old_node_id = %s"
-        " ORDER BY s.new_node_id",
-        (node["id"],),
+        "SELECT s.new_node_id AS id FROM supersedes s"
+        f" WHERE s.old_node_id = %(node)s AND s.new_node_id IN ({readable})"
+        " ORDER BY s.new_node_id LIMIT %(cap)s",
+        params,
     ).fetchall()
     out = conn.execute(
-        "SELECT l.rel, l.dst_address, d.id AS dst_id FROM link l"
-        " LEFT JOIN node d ON d.address = l.dst_address"
-        " WHERE l.src_node_id = %s ORDER BY l.rel, l.dst_address LIMIT %s",
-        (node["id"], LINKS_SHOWN + 1),
+        "SELECT l.rel, l.dst_address, d.id AS dst_id,"
+        f" (d.id IS NOT NULL AND d.id IN ({readable})) AS can_read"
+        " FROM link l LEFT JOIN node d ON d.address = l.dst_address"
+        " WHERE l.src_node_id = %(node)s"
+        f" AND (d.id IS NULL OR %(own)s OR d.id IN ({readable}))"
+        " ORDER BY l.rel, l.dst_address LIMIT %(cap)s",
+        params,
     ).fetchall()
     inc = conn.execute(
         "SELECT DISTINCT l.rel, l.src_node_id AS id FROM link l"
-        " WHERE (l.dst_node_id = %s OR l.dst_address = %s) AND l.src_node_id <> %s"
-        " ORDER BY l.rel, l.src_node_id LIMIT %s",
-        (node["id"], node["address"], node["id"], LINKS_SHOWN + 1),
+        " WHERE (l.dst_node_id = %(node)s OR l.dst_address = %(address)s)"
+        f" AND l.src_node_id <> %(node)s AND l.src_node_id IN ({readable})"
+        " ORDER BY l.rel, l.src_node_id LIMIT %(cap)s",
+        params,
     ).fetchall()
-    ask = (
-        [r["id"] for r in old]
-        + [r["id"] for r in new]
-        + [r["dst_id"] for r in out if r["dst_id"] is not None]
-        + [r["id"] for r in inc]
-    )
-    readable = visible_subset(conn, viewer, ask)
-    rows = fetch_rows(conn, viewer, sorted(readable), text_chars=200)
+    more = any(len(found) > LINKS_SHOWN for found in (old, new, out, inc))
+    old, new = old[:LINKS_SHOWN], new[:LINKS_SHOWN]
+    out, inc = out[:LINKS_SHOWN], inc[:LINKS_SHOWN]
+    ask = {r["id"] for r in (*old, *new, *inc)}
+    ask |= {r["dst_id"] for r in out if r["can_read"]}
+    # every id asked for came out of a query restricted to what the viewer reads
+    rows = fetch_rows(conn, viewer, sorted(ask), text_chars=200)
 
     def show(i: int) -> str:
-        return f"{render.short_ref(rows[i]['address'])} {rows[i]['kind']} {_title(rows[i])}"
+        r = rows[i]
+        return (
+            f"{render.short_ref(r['address'])} {render.kind_word(r['kind'])}"
+            f" {_title(r)}"
+        )
 
-    if old:
-        lines.append(
-            "supersedes: "
-            + "; ".join(
-                show(r["id"]) if r["id"] in readable else r["address"] for r in old
-            )
-        )
-    sup = [r["id"] for r in new if r["id"] in readable]
-    if sup:
-        lines.append("superseded by: " + "; ".join(show(i) for i in sup))
-    shown_out = out[:LINKS_SHOWN]
-    for r in shown_out:
-        target = (
-            show(r["dst_id"])
-            if r["dst_id"] is not None and r["dst_id"] in readable
-            else f"{r['dst_address']} (opaque)"
-        )
-        lines.append(f"link {r['rel']} -> {target}")
-    shown_in = [r for r in inc if r["id"] in readable][:LINKS_SHOWN]
-    for r in shown_in:
-        lines.append(f"link {r['rel']} <- {show(r['id'])}")
-    if len(out) > LINKS_SHOWN or len(inc) > LINKS_SHOWN:
+    def by(i: int) -> str:
+        """Who wrote a superseding note, when it is not the author of this one."""
+        r = rows[i]
+        if r["author"] == node["author"]:
+            return ""
+        if r["author"] == viewer.person_id:
+            return " by you"
+        return f" by {render.who(r, viewer.person_id)}"
+
+    lines: list[str] = []
+    olds = [r["id"] for r in old if r["id"] in rows]
+    if olds:
+        lines.append("supersedes: " + "; ".join(show(i) for i in olds))
+    news = [r["id"] for r in new if r["id"] in rows]
+    if news:
+        lines.append("superseded by: " + "; ".join(show(i) + by(i) for i in news))
+    for r in out:
+        if r["can_read"] and r["dst_id"] in rows:
+            target = show(r["dst_id"])
+        elif r["dst_id"] is None or own:
+            target = f"{_address_as_written(r['dst_address'])} (opaque)"
+        else:
+            continue
+        lines.append(f"link {render.rel_word(r['rel'])} -> {target}")
+    for r in inc:
+        if r["id"] in rows:
+            lines.append(f"link {render.rel_word(r['rel'])} <- {show(r['id'])}")
+    if more:
         lines.append("(more links not shown)")
-    return lines
+    disputable: list[str] = []
+    if own:
+        disputed = {r["dst_address"] for r in out if r["rel"] == "disputes"}
+        disputable = [
+            render.short_ref(rows[i]["address"])
+            for i in news
+            if rows[i]["author"] != viewer.person_id
+            and rows[i]["address"] not in disputed
+        ]
+    return _Chain(lines, disputable)
 
 
 def _history_lines(conn: Conn, address: str) -> list[str]:
@@ -278,7 +342,8 @@ def _history_lines(conn: Conn, address: str) -> list[str]:
         lines = ["versions (oldest first):"]
     for i, v in enumerate(rows, total - len(rows) + 1):
         lines.append(
-            f"  {i}. {v['version_hash']} {render.stamp(v['created_at'])} [{v['type']}]"
+            f"  {i}. {v['version_hash']} {render.stamp(v['created_at'])}"
+            f" [{render.rel_word(v['type'])}]"
         )
     return lines
 
@@ -337,7 +402,7 @@ def _render_note(
     conn: Conn, viewer: Account, row: Row, *, history: bool, offset: int
 ) -> str:
     ref = render.short_ref(row["address"])
-    head = f"{ref} {row['kind']} {_title(row)}"
+    head = f"{ref} {render.kind_word(row['kind'])} {_title(row)}"
     tag = render.trust_tag(row)
     if tag:
         head += f" [{tag}]"
@@ -353,12 +418,19 @@ def _render_note(
     filed = _paths(conn, viewer, row["id"])
     if filed:
         lines.append(f"in: {filed}")
-    lines.extend(_chain_lines(conn, viewer, row))
+    chain = _chain_lines(conn, viewer, row)
+    lines.extend(chain.lines)
     if row.get("tags"):
         lines.append("tags: " + " ".join(render.quote(t, 30) for t in row["tags"][:12]))
     if history:
         lines.extend(_history_lines(conn, row["address"]))
     lines.extend(_text_part(row, 0))
+    for theirs in chain.disputable[:3]:
+        # someone else's correction hides this note from search and hub lists
+        # unless its author says they do not accept it
+        lines.append(
+            f"next: link(ref={ref!r}, to={theirs!r}, rel='disputes') keeps yours shown"
+        )
     if row["author"] == viewer.person_id:
         lines.append(
             f"next: edit(ref={ref!r}) to change it; link(ref={ref!r}, to=<hub>) to file it"
@@ -375,16 +447,6 @@ def _visible_fn(history: bool) -> str:
     return (
         readable_nodes_sql("%(viewer)s") if history else current_nodes_sql("%(viewer)s")
     )
-
-
-def _members_filter(history: bool) -> str:
-    return f"""
-        n.id IN (SELECT m.node_id FROM membership m
-                 WHERE m.hub_node_id = %(hub)s AND NOT m.withdrawn
-                   AND (m.audience = 'hub' OR m.author = %(person)s))
-        AND n.tombstoned_at IS NULL
-        AND n.id IN ({_visible_fn(history)})
-    """
 
 
 def _counts(
@@ -482,6 +544,109 @@ class _Body:
         return lines
 
 
+def _newest(
+    conn: Conn,
+    viewer: Account,
+    hub_ids: list[int],
+    *,
+    hubs: bool,
+    history: bool,
+    limit: int,
+    offset: int = 0,
+) -> dict[int, list[int]]:
+    """Per hub: the ids of its newest members the viewer can read (its sub-hubs
+    when ``hubs``, else its notes), ``limit`` of them from ``offset`` on. One
+    statement for all the hubs."""
+    if not hub_ids:
+        return {}
+    rows = conn.execute(
+        f"""
+        SELECT hub, id FROM (
+            SELECT hub, id, row_number() OVER (
+                       PARTITION BY hub ORDER BY created_at DESC, id DESC) AS rn
+            FROM (
+                SELECT DISTINCT m.hub_node_id AS hub, n.id, n.created_at
+                FROM membership m JOIN node n ON n.id = m.node_id
+                WHERE m.hub_node_id = ANY(%(hubs)s) AND NOT m.withdrawn
+                  AND (m.audience = 'hub' OR m.author = %(person)s)
+                  AND n.tombstoned_at IS NULL
+                  AND (n.kind = 'hub') = %(want_hubs)s
+                  AND n.id IN ({_visible_fn(history)})
+            ) member
+        ) ranked
+        WHERE rn > %(off)s AND rn <= %(off)s + %(limit)s
+        ORDER BY hub, rn
+        """,
+        {
+            "hubs": hub_ids,
+            "person": viewer.person_id,
+            "viewer": viewer.id,
+            "want_hubs": hubs,
+            "off": offset,
+            "limit": limit,
+        },
+    ).fetchall()
+    found: dict[int, list[int]] = {}
+    for r in rows:
+        found.setdefault(r["hub"], []).append(r["id"])
+    return found
+
+
+def _load_bodies(
+    conn: Conn,
+    viewer: Account,
+    hubs: list[Row],
+    *,
+    history: bool,
+    limit: int,
+    offset: int = 0,
+    with_subs: bool = True,
+) -> dict[int, _Body]:
+    """What each of ``hubs`` shows. The number of statements is the same for
+    one hub and for thirty: each statement evaluates the visibility function
+    once, and that is what a hub read costs."""
+    hub_ids = [h["id"] for h in hubs]
+    sub_ids: dict[int, list[int]] = {}
+    if with_subs:
+        sub_ids = _newest(
+            conn, viewer, hub_ids, hubs=True, history=history, limit=SUBHUBS_SHOWN
+        )
+    note_ids = _newest(
+        conn, viewer, hub_ids, hubs=False, history=history, limit=limit, offset=offset
+    )
+    all_subs = sorted({i for ids in sub_ids.values() for i in ids})
+    all_notes = sorted({i for ids in note_ids.values() for i in ids})
+    counts = _counts(conn, viewer, [*hub_ids, *all_subs], history)
+    sub_rows = fetch_rows(conn, viewer, all_subs, text_chars=100)
+    note_rows = fetch_rows(conn, viewer, all_notes, text_chars=200)
+    # without history the ids came out of current_nodes: none is superseded
+    current = (
+        visible_subset(conn, viewer, all_notes, current=True)
+        if history
+        else set(all_notes)
+    )
+    bodies: dict[int, _Body] = {}
+    for hub in hubs:
+        total, sub_total = counts.get(hub["id"], (0, 0))
+        subs = [
+            _Sub(sub_rows[i], *counts.get(i, (0, 0)))
+            for i in sub_ids.get(hub["id"], [])
+            if i in sub_rows
+        ]
+        members = [
+            render.row_line(
+                note_rows[i],
+                viewer.person_id,
+                superseded=i not in current,
+                show_hub=False,
+            )
+            for i in note_ids.get(hub["id"], [])
+            if i in note_rows
+        ]
+        bodies[hub["id"]] = _Body(hub, subs, sub_total, members, total, offset)
+    return bodies
+
+
 def _load_body(
     conn: Conn,
     viewer: Account,
@@ -492,42 +657,15 @@ def _load_body(
     offset: int = 0,
     with_subs: bool = True,
 ) -> _Body:
-    params = {"hub": hub["id"], "person": viewer.person_id, "viewer": viewer.id}
-    flt = _members_filter(history)
-    sub_ids: list[int] = []
-    if with_subs:
-        sub_ids = [
-            r["id"]
-            for r in conn.execute(
-                f"SELECT n.id FROM node n WHERE n.kind = 'hub' AND {flt}"
-                " ORDER BY n.created_at DESC, n.id DESC LIMIT %(cap)s",
-                {**params, "cap": SUBHUBS_SHOWN},
-            ).fetchall()
-        ]
-    counts = _counts(conn, viewer, [hub["id"], *sub_ids], history)
-    total, sub_total = counts.get(hub["id"], (0, 0))
-    rows = fetch_rows(conn, viewer, sub_ids, text_chars=100)
-    subs = [_Sub(rows[i], *counts.get(i, (0, 0))) for i in sub_ids if i in rows]
-    ids = [
-        r["id"]
-        for r in conn.execute(
-            f"SELECT n.id FROM node n WHERE n.kind <> 'hub' AND {flt}"
-            " ORDER BY n.created_at DESC, n.id DESC LIMIT %(limit)s OFFSET %(off)s",
-            {**params, "limit": limit, "off": offset},
-        ).fetchall()
-    ]
-    members: list[str] = []
-    if ids:
-        mrows = fetch_rows(conn, viewer, ids, text_chars=200)
-        current = visible_subset(conn, viewer, ids, current=True)
-        members = [
-            render.row_line(
-                mrows[i], viewer.person_id, superseded=i not in current, show_hub=False
-            )
-            for i in ids
-            if i in mrows
-        ]
-    return _Body(hub, subs, sub_total, members, total, offset)
+    return _load_bodies(
+        conn,
+        viewer,
+        [hub],
+        history=history,
+        limit=limit,
+        offset=offset,
+        with_subs=with_subs,
+    )[hub["id"]]
 
 
 def _call(ref: str, offset: int, history: bool) -> str:
@@ -571,33 +709,47 @@ def _body_lines(body: _Body, indent: str, history: bool) -> list[str]:
 def _expand(
     conn: Conn, viewer: Account, top: _Body, *, history: bool, depth: int, used: int
 ) -> list[_Sub]:
-    """Expand sub-hubs breadth first down to ``depth`` while the answer stays
-    within ``LINE_BUDGET`` lines. Returns the sub-hubs left unexpanded only
-    because of the budget (empty when everything asked for was shown)."""
+    """Open sub-hubs level by level down to ``depth`` while the answer stays
+    within ``LINE_BUDGET`` lines and ``HUB_BUDGET`` opened hubs. A level is
+    loaded in one go. Returns the sub-hubs left closed only because of a budget
+    (empty when everything asked for was shown)."""
     seen = {top.hub["id"]}
-    queue = deque((s, 1) for s in top.subs)
-    skipped: list[_Sub] = []
-    while queue:
-        sub, level = queue.popleft()
-        if level >= depth or sub.row["id"] in seen:
-            continue
-        seen.add(sub.row["id"])
-        body = _load_body(
-            conn, viewer, sub.row, history=history, limit=SUB_MEMBERS_SHOWN
-        )
-        if used + body.cost > LINE_BUDGET:
-            skipped = [sub] + [s for s, lv in queue if lv < depth]
+    level = list(top.subs)
+    opened = 1  # the hub that was asked for
+    for lv in range(1, depth):
+        todo: list[_Sub] = []
+        for sub in level:
+            if sub.row["id"] not in seen:
+                seen.add(sub.row["id"])
+                todo.append(sub)
+        if not todo:
             break
-        used += body.cost
-        sub.body = body
-        queue.extend((s, level + 1) for s in body.subs)
-    return skipped
+        room = max(0, HUB_BUDGET - opened)
+        bodies = _load_bodies(
+            conn,
+            viewer,
+            [sub.row for sub in todo[:room]],
+            history=history,
+            limit=SUB_MEMBERS_SHOWN,
+        )
+        below: list[_Sub] = []
+        for n, sub in enumerate(todo):
+            body = bodies.get(sub.row["id"])
+            if body is None or used + body.cost > LINE_BUDGET:
+                return todo[n:] + (below if lv + 1 < depth else [])
+            opened += 1
+            used += body.cost
+            sub.body = body
+            below.extend(body.subs)
+        level = below
+    return []
 
 
 def _budget_line(skipped: list[_Sub]) -> str:
     first = render.short_ref(skipped[0].row["address"])
+    n = len(skipped)
     return (
-        f"not expanded, to keep this answer short: {len(skipped)} sub-hubs;"
+        f"not expanded, to keep this answer short: {n} sub-hub{'s' if n != 1 else ''};"
         f" read one with get(ref=<a sub-hub>), for example get(ref='{first}')"
     )
 
@@ -652,6 +804,7 @@ def _render_hub(
     *,
     history: bool,
     depth: int,
+    asked: int | None = None,
     offset: int = 0,
 ) -> str:
     if offset > 0:
@@ -676,6 +829,11 @@ def _render_hub(
     lines.extend(_body_lines(top, "", history))
     if skipped:
         lines.append(_budget_line(skipped))
+    if asked is not None and asked > MAX_DEPTH:
+        lines.append(
+            f"depth {min(asked, 10**6)} is more than one call reads: this is depth"
+            f" {MAX_DEPTH} (sub-hubs opened once); read a sub-hub with get(ref=<its id>)"
+        )
     lines.append(
         f"next: put(text=..., hub={ref!r}) adds a note; history=true shows replaced notes"
     )
