@@ -789,3 +789,138 @@ def test_a_title_someone_else_chose_comes_after_the_viewers_own(
     assert order.index(ref(gateway)) < order.index(ref(theirs))
     (row,) = [r for r in rows(out) if r.split()[1] == ref(theirs)]
     assert " · @mallory · " in row
+
+
+# ------------------------------------------- the title leg in a big account
+
+
+def test_titles_are_not_looked_for_inside_a_pasted_text(conn, greenhouse):
+    ada, gateway, battery, hive = greenhouse
+    words = (
+        "replaced the SD card in the greenhouse gateway on Friday because the old"
+        " one showed write errors after the power cut and Ben wants a spare card"
+    )
+    counted, _ = find.counted_words(conn, words)
+    assert len(counted) <= find.TITLE_INSIDE_WORDS
+    assert title_matches(conn, ada, words) == [gateway]
+    pasted = words + (
+        " taped under the lid, the image was written again from the backup of"
+        " October and the sensors reported within ten minutes, nothing was lost"
+    )
+    counted, _ = find.counted_words(conn, pasted)
+    assert len(counted) > find.TITLE_INSIDE_WORDS
+    assert title_matches(conn, ada, pasted) == []
+    # the note is still found: by its words, not by its title
+    assert ref(gateway) in listed(handlers.search(conn, ada, query=pasted))
+
+
+def every_title(conn, viewer, query: str) -> set[str]:
+    """What the title leg has to find: every readable title compared with
+    the query, without the leg's indexes and bounds."""
+    where, params = find._scope(
+        viewer, hub_node_id=None, kind=None, include_superseded=False
+    )
+    words, _ = find.counted_words(conn, query)
+    args = {
+        **params,
+        "q": query,
+        "min": find.TRIGRAM_MIN,
+        "inside": find.TITLE_INSIDE_MIN,
+    }
+    inside = "false"
+    if words and len(words) <= find.TITLE_INSIDE_WORDS:
+        any_word = " || ".join(find._word_terms(words, args))
+        inside = (
+            f"(to_tsvector('english', n.title) @@ ({any_word})"
+            " AND strict_word_similarity(n.title, %(q)s) >= %(inside)s)"
+        )
+    rows = conn.execute(
+        f"SELECT n.address FROM node n WHERE n.title IS NOT NULL AND {where}"
+        f" AND (similarity(n.title, %(q)s) >= %(min)s OR {inside})",
+        args,
+    ).fetchall()
+    return {r["address"] for r in rows}
+
+
+MINUTES = (
+    "Minutes of the greenhouse committee meeting on irrigation schedules,"
+    " sensor calibration and the winter heating budget"
+)
+
+
+def test_the_title_leg_finds_what_comparing_every_title_finds(
+    conn, greenhouse, make_account
+):
+    ada, gateway, battery, hive = greenhouse
+    minutes = mk_note(conn, ada, "Twelve members were present.", title=MINUTES)
+    beds = mk_note(
+        conn,
+        ada,
+        "Water at six in the morning.",
+        title="Irrigation schedule for the north beds in July and August",
+    )
+    mk_note(conn, ada, "Nothing yet.", title="To do")
+    ben = make_account(handle="ben")
+    theirs = [
+        mk_note(conn, ben, "Private.", title=title)
+        for title in ("Gateway", MINUTES, "Greenhouse gateway SD card")
+    ]
+    typed = MINUTES.replace("committee", "comittee").lower()
+    pasted = (
+        f"{MINUTES}. Present were twelve members. The chair opened at seven and"
+        " asked whether the gateway in the tool shed had been repaired since March."
+    )
+    expected = {
+        "gatway": {gateway},
+        "greenhouse gateway SD card replaced on 20 November by Ben": {gateway},
+        "how long is the battery life of a sensor node": {battery},
+        # longer than the index is used for: only titles long enough can match
+        f"{typed} as sent round on 3 December 2026": {minutes},
+        f"where is the {typed}, and who took them down": {minutes},
+        # a pasted text: no title is looked for inside it, a long one is still
+        # found by what it shares with the whole
+        pasted: {minutes},
+        "irrigation schedule for the north beds in July and August, and who"
+        " waters the south beds when the schedule changes in September": {beds},
+        "thermocouple wiring diagram for the kiln controller in the pottery,"
+        " drawn by the electrician who installed the new supply last winter": set(),
+    }
+    for query, want in expected.items():
+        got = title_matches(conn, ada, query)
+        assert set(got) == want, query
+        assert every_title(conn, ada, query) == want, query
+        assert not set(got) & set(theirs)
+    long_ones = [q for q in expected if len(q) > find.TITLE_BY_INDEX]
+    assert len(long_ones) >= 5 and len(pasted) > 250
+    counted, _ = find.counted_words(conn, pasted)
+    assert len(counted) > find.TITLE_INSIDE_WORDS
+    # Ben finds his own, by the same rules
+    assert set(title_matches(conn, ben, "gatway")) == {theirs[0]}
+    assert set(title_matches(conn, ben, pasted)) == {theirs[1]}
+
+
+@pytest.mark.parametrize("query", ["gatway", "gateway " * 20])
+def test_the_title_leg_runs_first_on_a_connection(conn, make_account, query):
+    ada = make_account(handle="ada")
+    setting = "SELECT current_setting('pg_trgm.similarity_threshold', true) AS is_now"
+    # nothing has used the trigram extension here: its setting does not exist
+    assert conn.execute(setting).fetchone()["is_now"] is None
+    assert title_matches(conn, ada, query) == []
+    assert conn.execute(setting).fetchone()["is_now"] == "0.3"  # the default
+    assert "no results" in handlers.search(conn, ada, query=query)
+
+
+def test_the_legs_that_depend_on_the_words_are_planned_each_time(conn, make_account):
+    ada = make_account(handle="ada")
+    mk_note(conn, ada, "The kiln fired on Monday.", title="Firing")
+    before = conn.execute("SHOW pg_trgm.similarity_threshold").fetchone()
+    for n in range(12):  # a statement run five times is kept by the connection
+        handlers.search(conn, ada, query=f"kiln thermocouple wiring {n}")
+        handlers.search(conn, ada, query="kiln")
+    kept = conn.execute(
+        "SELECT statement FROM pg_prepared_statements"
+        " WHERE statement ~ 'ts_rank_cd|similarity\\('"
+    ).fetchall()
+    assert kept == []
+    # the title leg sets the trigram threshold for its own statement only
+    assert conn.execute("SHOW pg_trgm.similarity_threshold").fetchone() == before
