@@ -88,6 +88,29 @@ def readable_nodes_sql(viewer_param: str = "%(viewer)s") -> str:
     return f"SELECT node_id FROM readable_nodes({viewer_param})"
 
 
+def readable_among_sql(ids_sql: str, viewer_param: str = "%(viewer)s") -> str:
+    """The ids that ``ids_sql`` (a query of one column of node ids) gives and
+    that ``readable_nodes(<viewer_param>)`` holds: embed as ``WHERE n.id IN
+    (<this>)`` where only a few ids are in question.
+
+    Who may read is still ``readable_nodes`` alone. Written as ``= ANY
+    (ARRAY(...))``, the planner takes the condition into each branch of the
+    inlined function, which then reads the rows of those ids only, in place of
+    every note the viewer may read. ``tests/test_resolve_ref_cost.py`` fails
+    when it stops doing so."""
+    return (
+        f"SELECT v.node_id FROM ({readable_nodes_sql(viewer_param)}) v"
+        f" WHERE v.node_id = ANY (ARRAY({ids_sql}))"
+    )
+
+
+def current_among_sql(ids_sql: str, viewer_param: str = "%(viewer)s") -> str:
+    """Like :func:`readable_among_sql`, minus atoms superseded by an atom the
+    same viewer can read: ``current_among`` (migration 0205) asked about the
+    ids ``ids_sql`` gives."""
+    return f"SELECT node_id FROM current_among({viewer_param}, ARRAY({ids_sql}))"
+
+
 def current_nodes_sql(viewer_param: str = "%(viewer)s") -> str:
     """Like :func:`readable_nodes_sql`, minus atoms superseded by an atom the
     same viewer can read (the default view; history needs ``readable``)."""

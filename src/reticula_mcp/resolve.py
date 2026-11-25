@@ -14,11 +14,35 @@ from reticula_mcp.accounts import (
 from reticula_mcp.db.pool import Conn
 from reticula_mcp.errors import BAD_INPUT, CONFLICT, NOT_FOUND, ReticulaError
 from reticula_mcp.format.address import ADDRESS_SCHEME
-from reticula_mcp.permissions import readable_nodes_sql
+from reticula_mcp.permissions import readable_among_sql
 
 MIN_SUFFIX = 6
 _SUFFIX_RE = re.compile(r"^[0-9a-f-]+$")
 Row = dict[str, Any]
+
+
+def ends_with_sql(column: str) -> str:
+    """A boolean SQL expression: the address in ``column`` ends with the
+    suffix of :func:`ends_with_params`. The range on ``reverse(column)`` is
+    what the index ``node_address_tail`` (migration 0002, ``reverse(address)
+    text_pattern_ops``) answers, also in a generic plan; ``right`` keeps it
+    exact. Without the range every address is read."""
+    return (
+        f"reverse({column}) ~>=~ %(tail_from)s AND reverse({column}) ~<~ %(tail_to)s"
+        f" AND right({column}, %(tail_len)s) = %(tail)s"
+    )
+
+
+def ends_with_params(suffix: str) -> dict[str, Any]:
+    """The parameters of :func:`ends_with_sql` for ``suffix`` (not empty)."""
+    tail_from = suffix[::-1]
+    tail_to = tail_from[:-1] + chr(ord(tail_from[-1]) + 1)
+    return {
+        "tail": suffix,
+        "tail_len": len(suffix),
+        "tail_from": tail_from,
+        "tail_to": tail_to,
+    }
 
 
 def resolve_ref(
@@ -44,9 +68,9 @@ def resolve_ref(
         except ValueError as exc:
             raise ReticulaError(BAD_INPUT, f"malformed address {ref!r}") from exc
         row = conn.execute(
-            "SELECT n.* FROM node n WHERE n.address = %s"
-            f" AND n.id IN ({readable_nodes_sql('%s')})",
-            (ref, viewer.id),
+            "SELECT n.* FROM node n WHERE n.address = %(ref)s AND n.id IN"
+            f" ({readable_among_sql('SELECT a.id FROM node a WHERE a.address = %(ref)s')})",
+            {"ref": ref, "viewer": viewer.id},
         ).fetchone()
         if row is None and allow_tombstoned:
             row = conn.execute(
@@ -65,9 +89,12 @@ def resolve_ref(
         )
     rows = conn.execute(
         "SELECT n.* FROM node n"
-        f" WHERE n.id IN ({readable_nodes_sql('%s')})"
-        " AND right(n.address, %s) = %s ORDER BY n.id LIMIT 6",
-        (viewer.id, len(suffix), suffix),
+        " WHERE n.id IN ("
+        + readable_among_sql(
+            f"SELECT a.id FROM node a WHERE {ends_with_sql('a.address')}"
+        )
+        + ") ORDER BY n.id LIMIT 6",
+        {"viewer": viewer.id, **ends_with_params(suffix)},
     ).fetchall()
     if not rows:
         raise ReticulaError(NOT_FOUND, f"no readable note ends in {suffix!r}")

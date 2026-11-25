@@ -13,6 +13,7 @@ import re
 from typing import Any
 
 from reticula_mcp import cli, records
+from reticula_mcp.content import bootstrap
 from reticula_mcp.db import connect
 from tests.auth_support import Assistant, Live, run_mcp, start_live
 
@@ -56,8 +57,9 @@ def test_two_people_share_a_hub_from_sign_up_to_revocation(
             "SELECT count(*) AS n, count(e.node_id) AS embedded FROM node n"
             " LEFT JOIN embedding e ON e.node_id = n.id WHERE n.kind = 'instruction'"
         ).fetchone()
-    # one per file in content/instructions/
-    assert shipped == {"n": 5, "embedded": 5}
+    # one node per shipped file, each with its vector
+    files = len(bootstrap.shipped_instructions())
+    assert shipped == {"n": files, "embedded": files}
 
     with start_live(blank_db_url) as live:
         # An assistant that knows only the URL finds out how to sign in.
@@ -178,7 +180,7 @@ def test_two_people_share_a_hub_from_sign_up_to_revocation(
         paper = call(
             live, at, "put", kind="paper", ext_id="doi:10.1000/XYZ123", title="A paper"
         )
-        assert paper.startswith("saved paper ret:")
+        assert paper.startswith("saved paper ") and '"A paper" (ret:' in paper
         again = call(
             live,
             at,

@@ -20,6 +20,7 @@ from reticula_mcp.errors import (
 from reticula_mcp.graph import access, api
 from reticula_mcp.permissions import readable_nodes_sql
 from reticula_mcp.resolve import resolve_person, resolve_ref
+from reticula_mcp.search import render
 
 Row = dict[str, Any]
 
@@ -31,10 +32,19 @@ PRESETS: dict[str, dict[str, Any]] = {
 }
 
 
-def _label(row: Row) -> str:
-    lines = (row["text"] or "").strip().splitlines()
-    name = (row["title"] or (lines[0] if lines else ""))[:50]
-    return f"{row['kind']} {row['address']}" + (f" ({name!r})" if name else "")
+#: Set on a hub found by its full address that the caller may add to but not
+#: read (``accept: anyone``): its title is not shown to them.
+_UNREAD = "_unreadable"
+
+
+def _name(row: Row) -> str:
+    """A note or hub as the replies name it: the short id that search and get
+    print at the start of a line, the title (or first line) as one quoted line,
+    then the full address in brackets."""
+    ref = render.short_ref(row["address"])
+    if row.get(_UNREAD):
+        return f"{ref} ({row['address']})"
+    return f"{ref} {render.quote(render.label(row))} ({row['address']})"
 
 
 def _preset_payload(preset: str) -> dict[str, Any]:
@@ -62,7 +72,7 @@ def _resolve_hub(conn: Conn, viewer: Account, ref: str, *, adding: bool) -> Row:
                 (ref.strip(),),
             ).fetchone()
             if open_hub is not None:
-                return open_hub
+                return {**open_hub, _UNREAD: True}
         raise
     if row["kind"] != "hub":
         raise ReticulaError(
@@ -166,21 +176,19 @@ def put(
         payload_extra=extra,
     )
     if kind == "paper" and node["author"] != viewer.person_id:
-        return (
-            f"paper already known: {node['address']}\nnext: {_paper_next(node, ext_id)}"
-        )
+        return f"paper already known: {_name(node)}\nnext: {_paper_next(node, ext_id)}"
     if kind == "debug" and hub is None and hub_row is not None:
         # filed by the server, not chosen by the assistant: say so plainly
         if node["audience"] == "private":
             return (
-                f"saved debug note {node['address']}"
+                f"saved debug note {_name(node)}"
                 " (private: only you can read it, the operator does not)"
             )
         return (
-            f"saved debug note {node['address']}"
+            f"saved debug note {_name(node)}"
             " (filed for the operator; only the operator reads it)"
         )
-    where = f" in hub {hub_row['address']}" if hub_row else ""
+    where = f" in hub {_name(hub_row)}" if hub_row else ""
     if debug_unfiled:
         where = " (unfiled: this instance has no debug hub yet)"
     if node["audience"] == "private":
@@ -209,7 +217,7 @@ def put(
             )
     if kind == "paper":
         nxt = f"next: {_paper_next(node, ext_id)}\n{nxt}"
-    return f"saved {node['kind']} {node['address']}{where}\n{nxt}"
+    return f"saved {node['kind']} {_name(node)}{where}\n{nxt}"
 
 
 def edit(
@@ -248,8 +256,11 @@ def edit(
         payload_extra=extra,
     )
     if updated["head_record_id"] == node["head_record_id"]:
-        return f"unchanged {node['address']}"
-    return f"updated {node['kind']} {node['address']} (older versions stay readable by address)"
+        return f"unchanged {_name(node)}"
+    return (
+        f"updated {node['kind']} {_name(updated)}"
+        " (older versions stay readable by address)"
+    )
 
 
 def link(
@@ -267,7 +278,7 @@ def link(
         hub = _resolve_hub(conn, viewer, to, adding=not remove)
         if remove:
             api.remove_membership(conn, viewer, node["id"], hub["id"])
-            return f"removed {node['address']} from hub {hub['address']}"
+            return f"removed {_name(node)} from hub {_name(hub)}"
         _require_can_add(conn, viewer, hub)
         own = node["author"] == viewer.person_id
         if not own and node["kind"] == "hub":
@@ -284,7 +295,7 @@ def link(
         ).fetchone()
         api.add_membership(conn, viewer, node["id"], hub["id"])
         verb = "already filed" if before else "filed"
-        out = f"{verb} {node['address']} under hub {hub['address']}"
+        out = f"{verb} {_name(node)} under hub {_name(hub)}"
         if own:
             return out
         return (
@@ -300,12 +311,41 @@ def link(
             "only the author can add relations to a note",
             hint="write your own note that supersedes or links to it",
         )
+    in_use = (
+        None
+        if remove or rel in api.BUILT_IN_RELS
+        else api.relation_names_in_use(conn, viewer.person_id)
+    )
     updated = api.add_relation(
         conn, viewer, node["id"], rel, target["address"], remove=remove
     )
     changed = updated["head_record_id"] != node["head_record_id"]
     verb = ("removed" if remove else "added") if changed else "no change:"
-    return f"{verb} {rel} {node['address']} -> {target['address']}"
+    out = f"{verb} {rel} {_name(node)} -> {_name(target)}"
+    if changed and in_use is not None:
+        out += _new_rel_line(rel, in_use)
+    return out
+
+
+def _new_rel_line(rel: str, in_use: list[tuple[str, int]]) -> str:
+    """A line when ``rel`` is a name this account has not used and the starting
+    instruction does not recommend: the names in use, and a near one if any."""
+    names = [name for name, _ in in_use]
+    if rel in names or rel in api.KNOWN_RELS:
+        return ""
+    shown = in_use[: api.RELS_SHOWN]
+    listed = (
+        "in use: " + ", ".join(f"{name} ({n})" for name, n in shown)
+        if shown
+        else "no other relation names in use yet"
+    )
+    if len(in_use) > len(shown):
+        listed += f", and {len(in_use) - len(shown)} more"
+    # the recommended names first: a name in use may itself be a wrong one
+    candidates = list(api.KNOWN_RELS) + [n for n in names if n not in api.KNOWN_RELS]
+    near = api.close_relation_name(rel, candidates)
+    line = f'\nnew relation name "{rel}"; {listed}.'
+    return line + (f" Did you mean {near}?" if near else "")
 
 
 def delete(conn: Conn, viewer: Account, *, ref: str) -> str:
@@ -314,7 +354,7 @@ def delete(conn: Conn, viewer: Account, *, ref: str) -> str:
         raise ReticulaError(FORBIDDEN, "only the author can delete a note")
     api.tombstone_atom(conn, viewer, node["id"])
     return (
-        f"deleted {node['address']}: the address stays and answers as deleted,"
+        f"deleted {_name(node)}: the address stays and answers as deleted,"
         " its content is erased"
     )
 
@@ -348,7 +388,7 @@ def _list_access(conn: Conn, viewer: Account, hub: Row) -> str:
     can add to it; anyone else sees the owner and their own entry only (a display
     rule: the permissions are unchanged)."""
     mode = access.shown_access(conn, viewer.person_id, hub["id"])
-    lines = [f"access to {_label(hub)}", f"{_handle(conn, hub['author'])} admin"]
+    lines = [f"access to hub {_name(hub)}", f"{_handle(conn, hub['author'])} admin"]
     if viewer.person_id == hub["author"] or mode == "add":
         rows = conn.execute(
             "SELECT grantee, mode, granted_by FROM hub_grant WHERE hub_node_id = %s"
@@ -427,7 +467,7 @@ def share(
     )
     api.set_grant(conn, viewer, hub_row["id"], grantee.person_id, mode)
     who = f"@{grantee.handle}"
-    where = hub_row["address"]
+    where = _name(hub_row)
     if mode == "none":
         left = access.hub_access(conn, grantee.person_id, hub_row["id"])
         extra = (
