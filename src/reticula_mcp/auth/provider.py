@@ -33,7 +33,7 @@ from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 from psycopg.types.json import Jsonb
 from pydantic import AnyUrl
 
-from reticula_mcp import accounts
+from reticula_mcp import accounts, connection
 from reticula_mcp.auth import config, grants
 from reticula_mcp.config import Settings
 from reticula_mcp.db.pool import Conn, Database
@@ -489,7 +489,13 @@ class ReticulaProvider(
             expires_at=int(info.expires_at.timestamp()) if info.expires_at else None,
             resource=self.resource,
             subject=str(account.id),
-            claims={"iss": self.settings.base_url},
+            claims={
+                "iss": self.settings.base_url,
+                # which connection this is (connection.py), for the tool call
+                connection.CLAIM: connection.key(
+                    grant_id=info.grant_id, token_id=info.token_id
+                ),
+            },
         )
 
     async def revoke_token(self, token: AccessToken | RefreshToken) -> None:

@@ -14,7 +14,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from reticula_mcp import accounts
+from reticula_mcp import accounts, connection
 from reticula_mcp.accounts import Account
 from reticula_mcp.content import bootstrap, people
 from reticula_mcp.db.pool import Conn
@@ -308,8 +308,31 @@ def start(conn: Conn, viewer: Account) -> str:
             " put(text=..., title=...). To share notes later, create a hub with"
             ' put(kind="hub", title=...) and use share.',
         ]
+    out += _onboarding_lines(conn, viewer)
     out.append("next: search(query=...) before you write, then put(...).")
     return "\n".join(out)
+
+
+#: The instruction the first ``start`` of a connection points to.
+ONBOARDING_SLUG = "howto-use-reticula-as-memory"
+
+
+def _onboarding_lines(conn: Conn, viewer: Account) -> list[str]:
+    """Once per connection (connection.py, migration 0351): a pointer to the
+    instruction on using Reticula as the person's memory. Shown, and recorded
+    as shown, by the first ``start`` of the connection; none outside a tool
+    call. The instruction stays findable with search(kind="instruction")."""
+    system = bootstrap.system_account(conn)
+    if system is None:
+        return []
+    node = bootstrap.find_shipped_node(conn, system, ONBOARDING_SLUG)
+    if node is None or not connection.first_onboarding(conn, viewer.id):
+        return []
+    ref = short_id(node["address"])
+    return [
+        f'First time on this connection: read the instruction get(ref="{ref}")'
+        " and follow it once."
+    ]
 
 
 def _key_lines(conn: Conn, viewer: Account) -> list[str]:
