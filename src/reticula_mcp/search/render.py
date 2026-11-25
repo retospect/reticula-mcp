@@ -39,6 +39,25 @@ def quote(text: str, limit: int = 100) -> str:
     return json.dumps(flat, ensure_ascii=False)
 
 
+def cut_end(text: str, start: int, size: int, window: int) -> int:
+    """Where a slice of ``text`` that begins at ``start`` and is at most ``size``
+    characters long should end. When the slice would stop inside the text, it ends
+    after the last line break in the final ``window`` characters, else after the
+    last space there, else it is cut hard. Always greater than ``start`` while
+    text remains."""
+    end = start + size
+    if end >= len(text):
+        return len(text)
+    if text[end - 1].isspace() or text[end].isspace():
+        return end
+    lo = max(start + 1, end - window)
+    seg = text[lo:end]
+    i = seg.rfind("\n")
+    if i < 0:
+        i = seg.rfind(" ")
+    return end if i < 0 else lo + i + 1
+
+
 def label(row: Row) -> str:
     """Title, or the first non-empty line of the text."""
     if row.get("title"):

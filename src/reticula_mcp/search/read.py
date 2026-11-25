@@ -18,12 +18,13 @@ Rules this module keeps:
 from __future__ import annotations
 
 import re
+from collections import deque
+from dataclasses import dataclass
 from typing import Any
 
-from reticula_mcp import records
 from reticula_mcp.accounts import Account
 from reticula_mcp.db.pool import Conn
-from reticula_mcp.errors import NOT_FOUND, ReticulaError
+from reticula_mcp.errors import BAD_INPUT, NOT_FOUND, ReticulaError
 from reticula_mcp.permissions import current_nodes_sql, readable_nodes_sql
 from reticula_mcp.resolve import resolve_ref
 from reticula_mcp.search import render
@@ -31,30 +32,65 @@ from reticula_mcp.search.rows import fetch_rows, visible_subset
 
 Row = dict[str, Any]
 
-MEMBERS_SHOWN = 20
-SUB_MEMBERS_SHOWN = 5
+MEMBERS_SHOWN = 20  # notes per page of a hub, first page and every next page
+SUB_MEMBERS_SHOWN = 5  # notes shown for a sub-hub expanded inside a larger answer
 SUBHUBS_SHOWN = 30
 LINKS_SHOWN = 30
 MAX_DEPTH = 4
+TEXT_SLICE = 8_000  # characters of a note's text per answer
+TEXT_BREAK_WINDOW = 400  # look this far back for a line break or a space to cut at
+HUB_TEXT_SHOWN = 2_000  # characters of a hub's own text
+HUB_TEXT_LINES = 25
+HISTORY_SHOWN = 20  # newest versions listed with history=true
+LINE_BUDGET = 120  # a hub answer stops expanding sub-hubs at about this many lines
+RESERVED_LINES = 2  # kept free for the closing lines
+MAX_OFFSET = 10**12
 _SUFFIX_RE = re.compile(r"^[0-9a-f-]+$")
+_DIGITS_RE = re.compile(r"^[0-9]+$")
+
+
+def _split_offset(ref: str) -> tuple[str, int]:
+    """``<ref>+<n>`` -> (``<ref>``, n). References never contain ``+``, so the
+    suffix is a page offset: a member offset on a hub, a character offset on a
+    note. Anything after the last ``+`` that is not a whole number is refused."""
+    ref = ref.strip()
+    base, plus, tail = ref.rpartition("+")
+    if not plus:
+        return ref, 0
+    tail = tail.strip()
+    if not _DIGITS_RE.fullmatch(tail):
+        raise ReticulaError(
+            BAD_INPUT,
+            f"the offset after + must be a whole number of 0 or more, not {tail[:40]!r}",
+            hint="get(ref='1a2b3c4d+20') reads from the 21st member or character",
+        )
+    return base.strip(), min(int(tail), MAX_OFFSET)
 
 
 def read_ref(
     conn: Conn, viewer: Account, ref: str, *, history: bool, depth: int
 ) -> str:
     depth = max(1, min(int(depth), MAX_DEPTH))
+    base, offset = _split_offset(ref)
+    # The planner prices queries over ``current_nodes()`` above jit_above_cost
+    # although they run in a few milliseconds; Postgres then spends ~60 ms per
+    # query compiling them. A hub read runs dozens. ``SET LOCAL`` ends with the
+    # caller's transaction.
+    conn.execute("SET LOCAL jit = off")
     try:
-        node = resolve_ref(conn, viewer, ref)
+        node = resolve_ref(conn, viewer, base)
     except ReticulaError as exc:
         if exc.code == NOT_FOUND:
-            gone = _withdrawn(conn, viewer, ref)
+            gone = _withdrawn(conn, viewer, base)
             if gone is not None:
                 return _render_withdrawn(gone)
         raise
     row = fetch_rows(conn, viewer, [node["id"]], text_chars=None)[node["id"]]
     if row["kind"] == "hub":
-        return _render_hub(conn, viewer, row, history=history, depth=depth)
-    return _render_note(conn, viewer, row, history=history)
+        return _render_hub(
+            conn, viewer, row, history=history, depth=depth, offset=offset
+        )
+    return _render_note(conn, viewer, row, history=history, offset=offset)
 
 
 # --------------------------------------------------------------------- withdrawn
@@ -107,8 +143,15 @@ def _title(row: Row) -> str:
     return render.quote(render.label(row), 100)
 
 
+def _version_count(conn: Conn, address: str) -> int:
+    found = conn.execute(
+        "SELECT count(*) AS n FROM record WHERE address = %s", (address,)
+    ).fetchone()
+    return int(found["n"]) if found else 0
+
+
 def _byline(conn: Conn, viewer: Account, row: Row) -> str:
-    n = len(records.versions(conn, row["address"]))
+    n = _version_count(conn, row["address"])
     handle = f"@{row['author_handle']}" if row.get("author_handle") else row["author"]
     if row["author"] == viewer.person_id:
         handle += " (you)"
@@ -220,16 +263,31 @@ def _chain_lines(conn: Conn, viewer: Account, node: Row) -> list[str]:
 
 
 def _history_lines(conn: Conn, address: str) -> list[str]:
-    vs = records.versions(conn, address)
-    lines = ["versions (oldest first):"]
-    for i, v in enumerate(vs, 1):
-        lines.append(f"  {i}. {v.version_hash} {render.stamp(v.created_at)} [{v.type}]")
+    """The newest ``HISTORY_SHOWN`` versions, oldest of those first, numbered as
+    in the whole history."""
+    total = _version_count(conn, address)
+    rows = conn.execute(
+        "SELECT version_hash, created_at, type FROM record WHERE address = %s"
+        " ORDER BY id DESC LIMIT %s",
+        (address, HISTORY_SHOWN),
+    ).fetchall()
+    rows.reverse()
+    if total > len(rows):
+        lines = [f"versions (oldest first; newest {len(rows)} of {total}):"]
+    else:
+        lines = ["versions (oldest first):"]
+    for i, v in enumerate(rows, total - len(rows) + 1):
+        lines.append(
+            f"  {i}. {v['version_hash']} {render.stamp(v['created_at'])} [{v['type']}]"
+        )
     return lines
 
 
-def _content(row: Row) -> list[str]:
-    """The node's text, presented according to who wrote it (see ``render``)."""
-    text = (row.get("text") or "").strip("\n")
+def _content(row: Row, text: str) -> list[str]:
+    """``text`` (all of the node's text or one slice of it), presented according
+    to who wrote it (see ``render``). The quoted block's nonce covers exactly the
+    text that is shown."""
+    text = text.strip("\n")
     if not text.strip():
         return []
     ref = render.short_ref(row["address"])
@@ -250,13 +308,44 @@ def _content(row: Row) -> list[str]:
 # -------------------------------------------------------------------------- note
 
 
-def _render_note(conn: Conn, viewer: Account, row: Row, *, history: bool) -> str:
+def _text_part(row: Row, offset: int) -> list[str]:
+    """The note's text from character ``offset`` on, at most ``TEXT_SLICE``
+    characters, cut at a line break or space when one is near; when the note has
+    more, one line outside the quoted block says how much and what to call."""
+    text = row.get("text") or ""
+    total = len(text)
+    if offset == 0 and total <= TEXT_SLICE:
+        return _content(row, text)
+    if offset >= total:
+        return [f"text: no more; the note has {total} characters in all"]
+    ref = render.short_ref(row["address"])
+    end = render.cut_end(text, offset, TEXT_SLICE, TEXT_BREAK_WINDOW)
+    lines = _content(row, text[offset:end])
+    if end < total:
+        lines.append(
+            f"text: characters {offset + 1} to {end} of {total};"
+            f" next part: get(ref='{ref}+{end}')"
+        )
+    else:
+        lines.append(
+            f"text: characters {offset + 1} to {total} of {total}, the last part"
+        )
+    return lines
+
+
+def _render_note(
+    conn: Conn, viewer: Account, row: Row, *, history: bool, offset: int
+) -> str:
     ref = render.short_ref(row["address"])
     head = f"{ref} {row['kind']} {_title(row)}"
     tag = render.trust_tag(row)
     if tag:
         head += f" [{tag}]"
-    lines = [head, f"address: {row['address']}", _byline(conn, viewer, row)]
+    lines = [head, f"address: {row['address']}"]
+    if offset > 0:  # a later part of the text: the head and the text only
+        lines.extend(_text_part(row, offset))
+        return "\n".join(lines)
+    lines.append(_byline(conn, viewer, row))
     if row.get("ext_key"):
         lines.append(f"ext: {render.quote(str(row['ext_key']), 80)}")
     if row["audience"] == "private":
@@ -269,7 +358,7 @@ def _render_note(conn: Conn, viewer: Account, row: Row, *, history: bool) -> str
         lines.append("tags: " + " ".join(render.quote(t, 30) for t in row["tags"][:12]))
     if history:
         lines.extend(_history_lines(conn, row["address"]))
-    lines.extend(_content(row))
+    lines.extend(_text_part(row, 0))
     if row["author"] == viewer.person_id:
         lines.append(
             f"next: edit(ref={ref!r}) to change it; link(ref={ref!r}, to=<hub>) to file it"
@@ -360,93 +449,213 @@ def _access_line(conn: Conn, viewer: Account, hub: Row) -> str | None:
     return "access: " + ", ".join(parts)
 
 
-def _hub_body(
+@dataclass
+class _Sub:
+    row: Row
+    notes: int
+    hubs: int
+    body: _Body | None = None
+
+
+@dataclass
+class _Body:
+    """What one hub shows: its sub-hubs (with counts) and one page of members."""
+
+    hub: Row
+    subs: list[_Sub]
+    sub_total: int
+    members: list[str]  # rendered member lines, no indent
+    total: int  # members the viewer can read (notes, not hubs)
+    offset: int
+
+    @property
+    def cost(self) -> int:
+        """Lines ``_body_lines`` emits for this body, children not counted."""
+        lines = 0
+        if self.subs:
+            lines += 1 + len(self.subs) + (self.sub_total > len(self.subs))
+        if self.members:
+            lines += 1 + len(self.members)
+            lines += self.total > self.offset + len(self.members)
+        elif not self.subs:
+            lines += 1
+        return lines
+
+
+def _load_body(
+    conn: Conn,
+    viewer: Account,
+    hub: Row,
+    *,
+    history: bool,
+    limit: int,
+    offset: int = 0,
+    with_subs: bool = True,
+) -> _Body:
+    params = {"hub": hub["id"], "person": viewer.person_id, "viewer": viewer.id}
+    flt = _members_filter(history)
+    sub_ids: list[int] = []
+    if with_subs:
+        sub_ids = [
+            r["id"]
+            for r in conn.execute(
+                f"SELECT n.id FROM node n WHERE n.kind = 'hub' AND {flt}"
+                " ORDER BY n.created_at DESC, n.id DESC LIMIT %(cap)s",
+                {**params, "cap": SUBHUBS_SHOWN},
+            ).fetchall()
+        ]
+    counts = _counts(conn, viewer, [hub["id"], *sub_ids], history)
+    total, sub_total = counts.get(hub["id"], (0, 0))
+    rows = fetch_rows(conn, viewer, sub_ids, text_chars=100)
+    subs = [_Sub(rows[i], *counts.get(i, (0, 0))) for i in sub_ids if i in rows]
+    ids = [
+        r["id"]
+        for r in conn.execute(
+            f"SELECT n.id FROM node n WHERE n.kind <> 'hub' AND {flt}"
+            " ORDER BY n.created_at DESC, n.id DESC LIMIT %(limit)s OFFSET %(off)s",
+            {**params, "limit": limit, "off": offset},
+        ).fetchall()
+    ]
+    members: list[str] = []
+    if ids:
+        mrows = fetch_rows(conn, viewer, ids, text_chars=200)
+        current = visible_subset(conn, viewer, ids, current=True)
+        members = [
+            render.row_line(
+                mrows[i], viewer.person_id, superseded=i not in current, show_hub=False
+            )
+            for i in ids
+            if i in mrows
+        ]
+    return _Body(hub, subs, sub_total, members, total, offset)
+
+
+def _call(ref: str, offset: int, history: bool) -> str:
+    return f"get(ref='{ref}+{offset}'" + (", history=true)" if history else ")")
+
+
+def _body_lines(body: _Body, indent: str, history: bool) -> list[str]:
+    """Sub-hubs (each followed by its own expansion, when it has one), then the
+    members. Exactly ``body.cost`` lines for this body."""
+    ref = render.short_ref(body.hub["address"])
+    out: list[str] = []
+    if body.subs:
+        out.append(f"{indent}sub-hubs:")
+        for s in body.subs:
+            size = f"{s.notes} notes" + (f", {s.hubs} hubs" if s.hubs else "")
+            out.append(
+                f"{indent}- {render.short_ref(s.row['address'])} hub"
+                f" {_title(s.row)} ({size})"
+            )
+            if s.body is not None:
+                out.extend(_body_lines(s.body, indent + "  ", history))
+        if body.sub_total > len(body.subs):
+            out.append(
+                f"{indent}... {body.sub_total - len(body.subs)} more sub-hubs;"
+                f" find them with search(query=..., kind='hub', hub={ref!r})"
+            )
+    if body.members:
+        shown = len(body.members)
+        out.append(f"{indent}members (newest first, {shown} of {body.total}):")
+        out.extend(indent + line for line in body.members)
+        if body.total > shown:
+            out.append(
+                f"{indent}... {body.total - shown} more;"
+                f" next page: {_call(ref, shown, history)}"
+            )
+    elif not body.subs:
+        out.append(f"{indent}(no members yet)")
+    return out
+
+
+def _expand(
+    conn: Conn, viewer: Account, top: _Body, *, history: bool, depth: int, used: int
+) -> list[_Sub]:
+    """Expand sub-hubs breadth first down to ``depth`` while the answer stays
+    within ``LINE_BUDGET`` lines. Returns the sub-hubs left unexpanded only
+    because of the budget (empty when everything asked for was shown)."""
+    seen = {top.hub["id"]}
+    queue = deque((s, 1) for s in top.subs)
+    skipped: list[_Sub] = []
+    while queue:
+        sub, level = queue.popleft()
+        if level >= depth or sub.row["id"] in seen:
+            continue
+        seen.add(sub.row["id"])
+        body = _load_body(
+            conn, viewer, sub.row, history=history, limit=SUB_MEMBERS_SHOWN
+        )
+        if used + body.cost > LINE_BUDGET:
+            skipped = [sub] + [s for s, lv in queue if lv < depth]
+            break
+        used += body.cost
+        sub.body = body
+        queue.extend((s, level + 1) for s in body.subs)
+    return skipped
+
+
+def _budget_line(skipped: list[_Sub]) -> str:
+    first = render.short_ref(skipped[0].row["address"])
+    return (
+        f"not expanded, to keep this answer short: {len(skipped)} sub-hubs;"
+        f" read one with get(ref=<a sub-hub>), for example get(ref='{first}')"
+    )
+
+
+def _cut_hub_text(row: Row) -> list[str]:
+    text = str(row.get("text") or "")
+    shown = text[:HUB_TEXT_SHOWN]
+    shown = "\n".join(shown.split("\n")[:HUB_TEXT_LINES])
+    lines = _content(row, shown)
+    if len(shown) < len(text):
+        lines.append(f"(hub text cut: {len(shown)} of {len(text)} characters shown)")
+    return lines
+
+
+def _render_hub_page(
+    conn: Conn, viewer: Account, hub: Row, *, history: bool, offset: int
+) -> str:
+    """A page of members past the first: the head and address, then the list."""
+    ref = render.short_ref(hub["address"])
+    lines = [f"{ref} hub {_title(hub)}", f"address: {hub['address']}"]
+    body = _load_body(
+        conn,
+        viewer,
+        hub,
+        history=history,
+        limit=MEMBERS_SHOWN,
+        offset=offset,
+        with_subs=False,
+    )
+    shown = len(body.members)
+    if not shown:
+        lines.append(f"no more members: this hub has {body.total}")
+        return "\n".join(lines)
+    lines.append(
+        f"members (newest first, {offset + 1} to {offset + shown} of {body.total}):"
+    )
+    lines.extend(body.members)
+    rest = body.total - offset - shown
+    if rest > 0:
+        lines.append(
+            f"... {rest} more; next page: {_call(ref, offset + shown, history)}"
+        )
+    else:
+        lines.append(f"last page: {body.total} members in all")
+    return "\n".join(lines)
+
+
+def _render_hub(
     conn: Conn,
     viewer: Account,
     hub: Row,
     *,
     history: bool,
     depth: int,
-    indent: str,
-    top: bool,
-    seen: set[int],
-) -> list[str]:
-    params = {"hub": hub["id"], "person": viewer.person_id, "viewer": viewer.id}
-    flt = _members_filter(history)
-    sub_ids = [
-        r["id"]
-        for r in conn.execute(
-            f"SELECT n.id FROM node n WHERE n.kind = 'hub' AND {flt}"
-            f" ORDER BY n.created_at DESC, n.id DESC LIMIT {SUBHUBS_SHOWN}",
-            params,
-        ).fetchall()
-    ]
-    lines: list[str] = []
-    if sub_ids:
-        counts = _counts(conn, viewer, sub_ids, history)
-        subs = fetch_rows(conn, viewer, sub_ids, text_chars=100)
-        lines.append(f"{indent}sub-hubs:")
-        for sid in sub_ids:
-            s = subs[sid]
-            notes, hubs = counts.get(sid, (0, 0))
-            size = f"{notes} notes" + (f", {hubs} hubs" if hubs else "")
-            lines.append(
-                f"{indent}- {render.short_ref(s['address'])} hub {_title(s)} ({size})"
-            )
-            if depth > 1 and sid not in seen:
-                seen.add(sid)
-                lines.extend(
-                    _hub_body(
-                        conn,
-                        viewer,
-                        s,
-                        history=history,
-                        depth=depth - 1,
-                        indent=indent + "  ",
-                        top=False,
-                        seen=seen,
-                    )
-                )
-    limit = MEMBERS_SHOWN if top else SUB_MEMBERS_SHOWN
-    total_row = conn.execute(
-        f"SELECT count(*) AS c FROM node n WHERE n.kind <> 'hub' AND {flt}", params
-    ).fetchone()
-    total = total_row["c"] if total_row else 0
-    ids = [
-        r["id"]
-        for r in conn.execute(
-            f"SELECT n.id FROM node n WHERE n.kind <> 'hub' AND {flt}"
-            f" ORDER BY n.created_at DESC, n.id DESC LIMIT {limit}",
-            params,
-        ).fetchall()
-    ]
-    if ids:
-        rows = fetch_rows(conn, viewer, ids, text_chars=200)
-        current = visible_subset(conn, viewer, ids, current=True)
-        lines.append(f"{indent}members (newest first, {len(ids)} of {total}):")
-        for i in ids:
-            lines.append(
-                indent
-                + render.row_line(
-                    rows[i],
-                    viewer.person_id,
-                    superseded=i not in current,
-                    show_hub=False,
-                )
-            )
-        if total > len(ids):
-            ref = render.short_ref(hub["address"])
-            lines.append(
-                f"{indent}... {total - len(ids)} more; find them with search(query=..., hub={ref!r})"
-            )
-    elif not sub_ids:
-        lines.append(f"{indent}(no members yet)")
-    return lines
-
-
-def _render_hub(
-    conn: Conn, viewer: Account, hub: Row, *, history: bool, depth: int
+    offset: int = 0,
 ) -> str:
+    if offset > 0:
+        return _render_hub_page(conn, viewer, hub, history=history, offset=offset)
     ref = render.short_ref(hub["address"])
     path = _paths(conn, viewer, hub["id"], own=hub)
     lines = [
@@ -460,19 +669,13 @@ def _render_hub(
         lines.append(access)
     if history:
         lines.extend(_history_lines(conn, hub["address"]))
-    lines.extend(_content(hub))
-    lines.extend(
-        _hub_body(
-            conn,
-            viewer,
-            hub,
-            history=history,
-            depth=depth,
-            indent="",
-            top=True,
-            seen={hub["id"]},
-        )
-    )
+    lines.extend(_cut_hub_text(hub))
+    top = _load_body(conn, viewer, hub, history=history, limit=MEMBERS_SHOWN)
+    used = sum(ln.count("\n") + 1 for ln in lines) + top.cost + RESERVED_LINES
+    skipped = _expand(conn, viewer, top, history=history, depth=depth, used=used)
+    lines.extend(_body_lines(top, "", history))
+    if skipped:
+        lines.append(_budget_line(skipped))
     lines.append(
         f"next: put(text=..., hub={ref!r}) adds a note; history=true shows replaced notes"
     )
