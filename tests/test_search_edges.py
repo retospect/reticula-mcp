@@ -656,21 +656,24 @@ def _big_hub(conn: Conn, who: Account, count: int = 3_000) -> Node:
     return hub
 
 
-def test_a_hub_of_3000_members_answers_fast_with_the_newest_20_and_a_count(
+def test_a_hub_of_3000_members_answers_in_groups_with_bounded_statements(
     conn, make_account, monkeypatch
 ):
+    """A hub of more than 26 notes answers in lettered groups (search/groups.py)
+    in place of its first newest-first page; the pages after it are as they
+    were. Grouping reads each note once (3000 rows, never more than 5000);
+    one statement per member is what would make it slow: rows and statements
+    are counted, not seconds."""
     alice = make_account(handle="alice")
     hub = _big_hub(conn, alice)
     ref = render.short_ref(hub["address"])
     sql = spy_on_sql(monkeypatch)
     out = get(conn, alice, hub["address"])
-    # The call reads 45 rows and runs 12 statements. Reading the 3000 members,
-    # or one statement per member, is what would make it slow: rows and
-    # statements are counted, not seconds.
-    assert sql.rows < 200 and len(sql.statements) < 100
-    assert "members (newest first, 20 of 3000):" in out
-    assert titles(out) == [f"Note {i}" for i in range(1, 21)]
-    assert f"... 2980 more; next page: get(ref='{ref}+20')" in out
+    assert sql.rows < 3_200 and len(sql.statements) < 100
+    assert "3000 notes in 26 groups by subject" in out
+    assert f'the newest notes first: search(query="", hub="{ref}")' in out
+    page = get(conn, alice, f"{ref}+20")  # pages as before
+    assert titles(page) == [f"Note {i}" for i in range(21, 41)]
 
 
 def test_the_next_page_continues_in_the_same_order(conn, make_account):
@@ -693,7 +696,9 @@ def test_following_the_next_page_line_walks_every_member_once(conn, make_account
     alice = make_account(handle="alice")
     hub = _big_hub(conn, alice, count=95)
     seen: list[str] = []
-    call = hub["address"]
+    # the first answer of a hub this big is its groups; the pages start after
+    # the first 20 (every note once through the letters: test_groups_hub.py)
+    call = f"{render.short_ref(hub['address'])}+20"
     for _ in range(10):
         out = get(conn, alice, call)
         seen.extend(titles(out))
@@ -702,7 +707,7 @@ def test_following_the_next_page_line_walks_every_member_once(conn, make_account
             assert "last page" in out or len(seen) <= 20
             break
         call = step.group(1)
-    assert seen == [f"Note {i}" for i in range(1, 96)]
+    assert seen == [f"Note {i}" for i in range(21, 96)]
 
 
 def test_the_last_page_says_it_is_the_last(conn, make_account):
