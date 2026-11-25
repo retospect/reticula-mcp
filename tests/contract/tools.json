@@ -53,6 +53,17 @@
    "include_superseded": {
     "default": false,
     "type": "boolean"
+   },
+   "since": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
    }
   },
   "required": [

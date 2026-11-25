@@ -238,6 +238,14 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
                 " (default false)."
             ),
         ] = False,
+        since: Annotated[
+            str | None,
+            Field(
+                description="Only what was written or changed since then: `7d`,"
+                " `36h`, `2w` or a date (`2026-11-20`). With an empty query it"
+                " lists what is new, by you and by other people, newest first."
+            ),
+        ] = None,
         *,
         ctx: Context,
     ) -> str:
@@ -255,6 +263,7 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
             kind=kind,
             limit=limit,
             include_superseded=include_superseded,
+            since=since,
         )
 
     @mcp.tool(structured_output=False)
