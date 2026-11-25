@@ -111,7 +111,10 @@ def test_a_wide_deep_tree_is_read_in_bounded_time(conn, make_account):
         f"\n585 hubs: depth 1 {times[1]:.3f}s, depth 2 {times[2]:.3f}s,"
         f" depth 4 (read as 2) {times[4]:.3f}s, {len(out.splitlines())} lines"
     )
-    assert max(times.values()) < 5.0
+    # Wall clock on a shared machine: a read takes under 1 s alone and took
+    # over 5 s once with two other suites running. 15 s still fails the
+    # 20.9 s this test is here for.
+    assert max(times.values()) < 15.0
     assert len(out.splitlines()) <= read.LINE_BUDGET + 5
 
 
