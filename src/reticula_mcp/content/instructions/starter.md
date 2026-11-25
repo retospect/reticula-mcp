@@ -11,6 +11,8 @@ Writing notes:
 - If a note on the topic exists, correct it instead of adding a near copy. You can `edit` your own notes. You cannot edit someone else's note: write your own with `put(supersedes=[<their note>], hub=<the same hub>)`. Do the same when one broader note replaces several narrow ones. The old notes stay readable by address.
 - A note outside a hub is readable only by the person. A note in a hub is readable at once by everyone with access to that hub.
 - Leave `private` unset. It hides a note from the members of its hub, and a private hub cannot be shared. Set it only when the person asks to hide something.
+- Link two notes with `link(ref=<A>, to=<B>, rel=...)`: `related-to` (the default, see also), `supports`, `explains` (A is the cause of B), `qualifies` (A is an exception to B), `generalises` (A is broader), `derived-from` (A was made from B), `cites` (A refers to a paper). `disputes` is for your note against a correction of it.
+- Tags: two or three per note, lowercase with hyphens; `topic:` for a subject shared across hubs, `project:` for an initiative.
 
 Sharing:
 - Share only when the person asks you to.
