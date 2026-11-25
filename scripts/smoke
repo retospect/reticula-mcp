@@ -454,13 +454,14 @@ async def mcp_steps(run: Run, session: ClientSession) -> None:
     run.ok(f"{info.name} {info.version}, {len(names)} tools")
 
     run.begin("start")
+    # The wording of the reply may change between versions; the handle is in it.
     reply = await call(run, session, "start")
-    who = re.search(r"You are @([a-z0-9_-]+)", reply)
+    who = re.search(r"@([a-z0-9_-]{3,32})", reply)
     if not who:
-        fail("reply does not contain 'You are @'")
-    if not run.existing and who.group(1) != run.handle:
-        fail(f"you are @{who.group(1)}, expected @{run.handle}")
-    run.ok(f"You are @{who.group(1)}")
+        fail("reply names no @handle")
+    if not run.existing and f"@{run.handle}" not in reply:
+        fail(f"reply names @{who.group(1)}, expected @{run.handle}")
+    run.ok(f"account @{run.handle if not run.existing else who.group(1)}")
 
     run.begin("put")
     title = f"Smoke test {run.marker[-12:]}"
