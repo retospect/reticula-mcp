@@ -1,0 +1,52 @@
+# One Reticula instance: Postgres with pgvector, and the MCP server from PyPI.
+#
+#   cp .env.example .env      # then set RETICULA_DB_PASSWORD (and RETICULA_PUBLIC_URL)
+#   docker compose up -d --build
+#
+# The server listens on 127.0.0.1 only. Put a tunnel or reverse proxy that
+# terminates TLS in front of it and set RETICULA_PUBLIC_URL to that address.
+name: reticula
+
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: reticula
+      POSTGRES_PASSWORD: ${RETICULA_DB_PASSWORD:?set RETICULA_DB_PASSWORD in .env}
+      POSTGRES_DB: reticula
+    volumes:
+      - reticula-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U reticula -d reticula"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  app:
+    build:
+      context: .
+      args:
+        RETICULA_VERSION: ${RETICULA_VERSION:?set RETICULA_VERSION in .env}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      RETICULA_DATABASE_URL: postgresql://reticula:${RETICULA_DB_PASSWORD}@db:5432/reticula
+      RETICULA_PUBLIC_URL: ${RETICULA_PUBLIC_URL:-}
+      RETICULA_HOST: 0.0.0.0
+      RETICULA_PORT: "8787"
+      RETICULA_SIGNUP: ${RETICULA_SIGNUP:-open}
+      RETICULA_SIGNUP_RATE: ${RETICULA_SIGNUP_RATE:-5/hour}
+      RETICULA_EMBEDDER: ${RETICULA_EMBEDDER:-auto}
+      RETICULA_TRUSTED_PROXIES: ${RETICULA_TRUSTED_PROXIES:-}
+    ports:
+      - "127.0.0.1:${RETICULA_PORT:-8787}:8787"
+    volumes:
+      # The embedding model is downloaded once and kept here.
+      - reticula-models:/home/reticula/.cache
+
+volumes:
+  reticula-db:
+  reticula-models:
