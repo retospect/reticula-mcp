@@ -409,13 +409,15 @@ app-1  | applied 0301_title_words.sql
 - `0203_shared_rules` defines three SQL functions and changes no table.
 - `0301_title_words` adds one index on the note table, over the words of each title. No column is added and no row is changed. The index is built at that start, before the server answers. On a test database with 30,041 notes the build took 36 to 83 milliseconds.
 
-0.2.0 adds no migration to those of 0.1.1. A switch from 0.1.1 to 0.2.0 applies none, and 0.1.1 started again on the same database finds no migration it does not know, so the check described under "Go back to the older version" does not refuse. That is read from the migration files of the two releases, which are the same 14. It has not been run yet.
+0.2.0 adds no migration to those of 0.1.1. The files under `deploy/` are the same in both releases, except for the version in `.env.example`.
 
 The drill went from 0.1.0 to 0.1.1, both installed from PyPI. Building the image of 0.1.1 took 22 seconds with no step taken from Docker's build cache. With the image built, the command of step 3 took 7 to 8 seconds. The server was away for one to two seconds: `/healthz` was asked every 0.1 seconds during the switches, and the longest time without an answer was 1.1 and 1.5 seconds in the two switches that applied both migrations, and 1.4 seconds in one that had nothing to apply.
 
 Tokens issued before the upgrade worked after it: the access and refresh tokens of a sign-in, and a token minted with `reticula-mcp token`. An account signed in with the password it had before. The smoke test of 0.1.1 passed.
 
 Notes written before the upgrade read back. Of 112 recorded replies of `start`, `profile`, `search`, `get` and `share`, 98 were the same before and after. The other 14 differed in one or two lines each, and all of those are lines that 0.1.1 words differently on purpose: who reads a hub through the hub above it, who has access to a hub that you can add to, and how the notes of a hub are counted. The release notes of 0.1.1 describe the three changes. No table other than the migration ledger had a different row count after the upgrade.
+
+A second drill went from 0.1.1 to 0.2.0, both installed from PyPI. The server logged no `applied` line and the ledger stayed at 14 migrations. Building the image of 0.2.0 took 20 seconds with no step taken from Docker's build cache. The command of step 3 took 7 seconds with the first steps of the image taken from the cache, and `/healthz` was without an answer for 1.4 and 1.3 seconds in two such switches. Every table had the row counts from before. Tokens issued under 0.1.1 worked, a refresh token among them, and the smoke test of 0.2.0 passed. Of the 112 replies 83 were the same. The other 29 are searches with one result: their first line says `1 result` where 0.1.1 says `1 results`.
 
 Migrations only move forward and each file runs in its own transaction. A migration file that has already been applied is never edited; changes arrive as new files. If the server reports that an applied file has changed, you are running mismatched code and database: do not continue.
 
@@ -463,6 +465,8 @@ That is safe only when the release notes of the newer version say that its migra
 0.1.0 has no such check: it starts on a newer schema and says nothing. So 0.1.0 starts on a database that 0.1.1 has migrated, with the two migrations listed under Upgrade.
 
 In the drill 0.1.0 from PyPI ran on a database that 0.1.1 from PyPI had migrated, with 0203 and 0301 in the ledger. It gave the same 112 replies as 0.1.0 on its own schema with the same data: the replies were recorded under 0.1.0, the stack went to 0.1.1 and back with nothing written in between, and none of the 112 differed afterwards. Its smoke test passed there. Notes written under 0.1.1 read back under 0.1.0, tokens issued under 0.1.1 worked, and a link written under 0.1.0 on the migrated database was there under 0.1.1 again. The switch back left the server without an answer for 1.5 seconds. That is a measurement for 0.1.0 and these two migrations, not a promise for any other pair of versions.
+
+0.1.1 from PyPI started on a database that 0.2.0 had run on, and its check did not refuse: 0.2.0 adds no migration, so the ledger held none that 0.1.1 does not know. With nothing written in between, none of the 112 replies recorded under 0.1.1 before the switch differed afterwards. Notes written under 0.2.0 read back under 0.1.1, tokens minted and refreshed under 0.2.0 worked, and the smoke test of 0.1.1 passed. The two switches back left the server without an answer for 1.3 and 1.9 seconds.
 
 ## Back up
 
