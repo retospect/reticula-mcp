@@ -81,7 +81,11 @@ def authorize_grant(
     if hub["kind"] != "hub" or hub["tombstoned_at"] is not None:
         raise ReticulaError(BAD_INPUT, "that is not a live hub")
     if hub["audience"] != "hub":
-        raise ReticulaError(BAD_INPUT, "a private hub cannot be shared")
+        raise ReticulaError(
+            BAD_INPUT,
+            "a private hub cannot be shared",
+            hint=f"edit(ref={hub['address'][-8:]}, private=false), then share again",
+        )
     admin = hub["author"]
     if grantee == admin:
         raise ReticulaError(

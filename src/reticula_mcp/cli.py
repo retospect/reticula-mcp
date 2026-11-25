@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import getpass
 import importlib
+import logging
 import sys
 from collections.abc import Sequence
 from dataclasses import replace
@@ -41,6 +42,21 @@ def _migrate(settings: Settings) -> int:
     return 0
 
 
+class _NoQueryString(logging.Filter):
+    """Access log lines without the query string.
+
+    ``/signin?req=...`` and ``/authorize?...&state=...`` carry values that must
+    not be kept in a log. uvicorn passes (peer, method, path with query, HTTP
+    version, status) as the arguments of an access record.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if isinstance(args, tuple) and len(args) == 5 and isinstance(args[2], str):
+            record.args = (*args[:2], args[2].partition("?")[0], *args[3:])
+        return True
+
+
 def _serve(settings: Settings, auto_migrate: bool) -> int:
     import uvicorn
 
@@ -58,6 +74,12 @@ def _serve(settings: Settings, auto_migrate: bool) -> int:
             f"{len(todo)} migration(s) pending (e.g. {todo[0].path.name})",
             hint="run `reticula-mcp migrate` or start with `serve --migrate`",
         )
+    # Added before uvicorn configures logging: that replaces the logger's
+    # handlers and keeps its filters.
+    logging.getLogger("uvicorn.access").addFilter(_NoQueryString())
+    # The SDK logs every request at INFO and httpx every model download request.
+    logging.getLogger("mcp").setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     # proxy_headers off: uvicorn would otherwise believe X-Forwarded-For from any
     # loopback peer. Whose header is believed is RETICULA_TRUSTED_PROXIES' job.
     uvicorn.run(
