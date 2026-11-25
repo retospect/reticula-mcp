@@ -39,7 +39,7 @@ from reticula_mcp.permissions import (
     readable_nodes_sql,
 )
 from reticula_mcp.resolve import resolve_ref
-from reticula_mcp.search import render
+from reticula_mcp.search import groups, render
 from reticula_mcp.search.rows import fetch_rows, visible_subset
 
 Row = dict[str, Any]
@@ -82,7 +82,13 @@ def _split_offset(ref: str) -> tuple[str, int]:
 
 
 def read_ref(
-    conn: Conn, viewer: Account, ref: str, *, history: bool, depth: int
+    conn: Conn,
+    viewer: Account,
+    ref: str,
+    *,
+    history: bool,
+    depth: int,
+    part: str | None = None,
 ) -> str:
     asked = int(depth)
     depth = max(1, min(asked, MAX_DEPTH))
@@ -96,6 +102,8 @@ def read_ref(
                 return _render_withdrawn(gone)
         raise
     row = fetch_rows(conn, viewer, [node["id"]], text_chars=None)[node["id"]]
+    if part is not None:
+        return _render_part(conn, viewer, row, part, history=history, offset=offset)
     if row["kind"] == "hub":
         return _render_hub(
             conn, viewer, row, history=history, depth=depth, asked=asked, offset=offset
@@ -957,6 +965,58 @@ def _render_hub_page(
     return "\n".join(lines)
 
 
+def _grouped(conn: Conn, viewer: Account, top: _Body) -> list[str] | None:
+    """The lettered groups (search/groups.py) when the hub and its sub-hubs
+    hold more than ``groups.FLAT`` notes the viewer may read, else None. The
+    counts already read rule out most small hubs without another statement."""
+    deeper = top.sub_total > len(top.subs) or any(s.hubs for s in top.subs)
+    if not deeper and top.total + sum(s.notes for s in top.subs) <= groups.FLAT:
+        return None
+    notes, total = groups.load(conn, viewer, top.hub["id"])
+    if len(notes) <= groups.FLAT:
+        return None
+    tree = groups.build(notes)
+    return groups.overview(tree, render.short_ref(top.hub["address"]), total)
+
+
+def _render_part(
+    conn: Conn, viewer: Account, row: Row, part: str, *, history: bool, offset: int
+) -> str:
+    """``get(ref=<hub>, part="AB")``: one lettered group of a big hub."""
+    if row["kind"] != "hub":
+        raise ReticulaError(
+            BAD_INPUT,
+            f"part is for a hub; {render.short_ref(row['address'])} is a {row['kind']}",
+        )
+    if offset or history:
+        raise ReticulaError(
+            BAD_INPUT,
+            "part lists a group of the current notes: not with a page in ref"
+            " or history=true",
+        )
+    ref = render.short_ref(row["address"])
+    notes, _total = groups.load(conn, viewer, row["id"])
+    tree = groups.build(notes)
+    group = groups.find_part(tree, part)
+    parent = tree.find(group.path[:-1])
+    siblings = len(parent.children) if parent else 0
+    lines = [
+        f"{ref} hub {_title(row)}",
+        f"address: {row['address']}",
+        groups.part_head(group, siblings),
+    ]
+    members: list[str] = []
+    if not group.children:
+        rows = fetch_rows(conn, viewer, list(group.ids), text_chars=200)
+        members = [
+            render.row_line(rows[i], viewer.person_id, show_hub=False)
+            for i in group.ids
+            if i in rows
+        ]
+    lines += groups.part_lines(group, ref, members)
+    return "\n".join(lines)
+
+
 def _render_hub(
     conn: Conn,
     viewer: Account,
@@ -984,9 +1044,14 @@ def _render_hub(
         lines.extend(_history_lines(conn, hub["address"]))
     lines.extend(_cut_hub_text(hub))
     top = _load_body(conn, viewer, hub, history=history, limit=MEMBERS_SHOWN)
+    grouped = None if history else _grouped(conn, viewer, top)
+    if grouped is not None:
+        top.members = []  # the groups take the place of the newest-first page
     used = sum(ln.count("\n") + 1 for ln in lines) + top.cost + RESERVED_LINES
     skipped = _expand(conn, viewer, top, history=history, depth=depth, used=used)
-    lines.extend(_body_lines(top, "", history))
+    if grouped is None or top.subs:
+        lines.extend(_body_lines(top, "", history))
+    lines.extend(grouped or [])
     if skipped:
         lines.append(_budget_line(skipped))
     if asked is not None and asked > MAX_DEPTH:

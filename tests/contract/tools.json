@@ -82,6 +82,17 @@
    "depth": {
     "default": 1,
     "type": "integer"
+   },
+   "part": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
    }
   },
   "required": [

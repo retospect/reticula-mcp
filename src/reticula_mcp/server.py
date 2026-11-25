@@ -292,6 +292,14 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
                 description="How many link steps around the note to show (default 1)."
             ),
         ] = 1,
+        # Draft text, for the trial. `part` stays the last parameter.
+        part: Annotated[
+            str | None,
+            Field(
+                description="A hub with many notes shows them in lettered groups:"
+                ' the letters of one, such as "B" or "BC", list it.'
+            ),
+        ] = None,
         *,
         ctx: Context,
     ) -> str:
@@ -302,7 +310,7 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
         Deleted notes answer with their address only.
         """
         return await run(
-            ctx, search_handlers.get, ref=ref, history=history, depth=depth
+            ctx, search_handlers.get, ref=ref, history=history, depth=depth, part=part
         )
 
     @mcp.tool(structured_output=False)

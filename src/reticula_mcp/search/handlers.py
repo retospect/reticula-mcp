@@ -328,5 +328,6 @@ def get(
     ref: str,
     history: bool = False,
     depth: int = 1,
+    part: str | None = None,
 ) -> str:
-    return read_ref(conn, viewer, ref, history=history, depth=depth)
+    return read_ref(conn, viewer, ref, history=history, depth=depth, part=part)
