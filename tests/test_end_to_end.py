@@ -177,7 +177,7 @@ def test_two_people_share_a_hub_from_sign_up_to_revocation(
         paper = call(
             live, at, "put", kind="paper", ext_id="doi:10.1000/XYZ123", title="A paper"
         )
-        assert paper.startswith("saved paper ret:")
+        assert paper.startswith("saved paper ") and '"A paper" (ret:' in paper
         again = call(
             live,
             at,

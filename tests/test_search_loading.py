@@ -37,7 +37,7 @@ from tests.search_support import (
 
 LOADING = handlers.KEYWORDS_ONLY["loading"]
 UNAVAILABLE = handlers.KEYWORDS_ONLY["off"]
-_ADDRESS = re.compile(r"ret:\S+")
+_ADDRESS = re.compile(r"ret:p[a-z2-7]{26}/[0-9a-f-]{36}")
 
 
 def address(out: str) -> str:

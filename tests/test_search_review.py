@@ -373,7 +373,7 @@ def test_hub_filter_does_not_match_through_an_unreadable_sub_hub(conn, make_acco
     hidden = graph.put(
         conn, z, text="h", kind="hub", title="secret circle", hub=top, private=True
     )
-    hidden = hidden[hidden.index("ret:") :].split()[0]
+    hidden = hidden[hidden.index("ret:") :].split()[0].rstrip(")")
     note = mk_note(conn, z, "zebra finding", hub=other)
     graph.link(conn, z, ref=note, to=hidden)  # also filed in the private sub-hub
     assert not can_read(conn, v, hidden) and can_read(conn, v, note)
