@@ -26,7 +26,7 @@ uv run reticula-mcp serve [--migrate] [--host H] [--port P]  # default 127.0.0.1
 
 `scripts/test` starts `pgvector/pgvector:pg17` on a random localhost port, sets `RETICULA_TEST_DATABASE_URL`, removes the container afterwards. If that variable is already set (CI service container) nothing is started. Tests use a REAL Postgres, never mocks.
 
-Environment: `RETICULA_DATABASE_URL`, `RETICULA_PUBLIC_URL` (external base URL, no trailing slash; OAuth issuer/resource later; also added to the allowed Host/Origin list), `RETICULA_HOST` (127.0.0.1), `RETICULA_PORT` (8787), `RETICULA_EMBEDDER` (`auto|hash|fastembed`), `RETICULA_SIGNUP` (`open|closed`), `RETICULA_SIGNUP_RATE` (`5/hour` per IP). Parsed in `config.py` (`Settings.from_env()`, `parse_rate`).
+Environment: `RETICULA_DATABASE_URL`, `RETICULA_PUBLIC_URL` (external base URL, no trailing slash; OAuth issuer/resource later; also added to the allowed Host/Origin list), `RETICULA_HOST` (127.0.0.1), `RETICULA_PORT` (8787), `RETICULA_EMBEDDER` (`auto|hash|fastembed`), `RETICULA_SIGNUP` (`open|closed`), `RETICULA_SIGNUP_RATE` (`5/hour` per IP), `RETICULA_TRUSTED_PROXIES` (comma-separated IPs/CIDRs whose `X-Forwarded-For` is believed; empty = trust nobody; `Settings.trusted_proxies`), `RETICULA_EMBED_MODEL` (`Settings.embed_model`), `RETICULA_STATELESS_HTTP` (default `true`: no server-side MCP sessions). Parsed in `config.py` (`Settings.from_env()`, `parse_rate`).
 
 ## Layout and ownership
 
@@ -101,11 +101,23 @@ Foundation 0001-0099, sign-in 0100-0199, graph 0200-0299, search 0300-0399, cont
 7. **Resolvers** (`resolve.py`): `resolve_ref(conn, viewer, ref, *, allow_tombstoned=False) -> node row (dict)`; ambiguity raises `Conflict` listing candidates. `resolve_person(conn, "@handle" | person_id) -> Account`.
 8. **Erasure path**: `record` is append-only (trigger). The ONLY exception is SQL `blank_record_content(record_id)`, which empties envelope and signature of one non-tombstone version of an address that already has a tombstone record (keeps hash, address, parents, times). The graph lane decides when to call it (the `derived` flag etc.); `records.check_record` reports blanked versions as unverifiable.
 
+9. **CLI subcommands**: `cli.py` is frozen, but each lane may add `src/reticula_mcp/<lane>/cli.py` with `register(sub)`; it adds parsers to the argparse subparsers object and gives each `set_defaults(func=run)` where `run(settings: Settings, args: argparse.Namespace) -> int`. `cli.py` imports `auth.cli`, `graph.cli`, `search.cli`, `content.cli` when they exist. Top-level command names must not collide: sign-in uses `connections`, search uses `reindex`, content uses `debug-notes`, graph uses `rebuild`.
+10. **Graph API for other lanes** (`graph/api.py`, built by the graph lane; the content lane's bootstrap is bound to it at integration, so these names are fixed): `create_atom(conn, author, *, kind, text, title=None, tags=None, hub_node_id=None, private=False, supersedes=(), ext_id=None, anchor=None, model=None, payload_extra=None) -> dict` (node row), `update_atom(conn, author, node_id, *, text=None, title=None, tags=None, private=None, payload_extra=None) -> dict`, `add_membership(conn, actor, node_id, hub_node_id) -> None`, `set_grant(conn, actor, hub_node_id, grantee_person_id, mode) -> None`. Handlers are thin wrappers over this API.
+
+Coordinator decisions (25 Nov 2026):
+* Hub presets at the tool level are `group` (payload `preset: group`, `invite: members`), `moderated` (`preset: group`, `invite: admins`) and `personal` (`preset: personal`). `accept: anyone` is set only through `payload_extra` (the instance debug hub).
+* Deleting an atom tombstones it AND blanks the content of every earlier version (`blank_record_content`); blanked versions are unverifiable by design, their hashes stay.
+* Edits are serialised: a new version's `parents` is exactly `[head]` (take a row lock on the node). Forks arrive with a second device or instance.
+* Identity records carry `audience: "public"`.
+* `node.author_account_id` is set from the `account` table by person ID, also on rebuild.
+* `create_account` raising `Conflict` for a known e-mail is accepted in "create account" mode (sign-ups are rate-limited); the sign-in mode must not reveal whether an e-mail exists.
+* A lane that needs a new dependency adds it to `pyproject.toml`, runs `uv lock` in its worktree, and says so in its report; the coordinator re-locks at merge.
+
 Other facts: `records.sign_and_append` enforces local-write rules (own address, first version has no parents, parents exist and share the address, nothing after a tombstone, identity signed by `root`, everything else by `k1`); `records.append_signed(conn, envelope, signature)` is the lower-level ingest path (also the federation entry later) and stores bytes verbatim. `records.head` = newest row by log id.
 
 ## The tools (frozen: names, parameters, defaults)
 
-`start()`; `profile(handle=None)`; `search(query, hub=None, kind=None, limit=10, include_superseded=False)`; `get(ref, history=False, depth=1)`; `put(text, kind="note", hub=None, title=None, tags=None, private=False, supersedes=None, ext_id=None, anchor=None, preset=None, model=None)`; `edit(ref, text=None, title=None, tags=None, private=None)`; `link(ref, to, rel="part-of", remove=False)`; `delete(ref)`; `share(hub, person=None, mode="add")`. Schemas are pinned in `tests/contract/tools.json`. `ref`/`hub`/`to` accept a full address or a unique 6+ hex suffix of the UUID among readable nodes; `person` accepts `@handle` or a person ID. Stubs return `[error:NotImplemented]` naming the owning lane.
+`start()`; `profile(handle=None)`; `search(query, hub=None, kind=None, limit=10, include_superseded=False)`; `get(ref, history=False, depth=1)`; `put(text, kind="note", hub=None, title=None, tags=None, private=False, supersedes=None, ext_id=None, anchor=None, preset=None, model=None)`; `edit(ref, text=None, title=None, tags=None, private=None, preset=None)`; `link(ref, to, rel="part-of", remove=False)`; `delete(ref)`; `share(hub, person=None, mode="add")`. Schemas are pinned in `tests/contract/tools.json`. `ref`/`hub`/`to` accept a full address or a unique 6+ hex suffix of the UUID among readable nodes; `person` accepts `@handle` or a person ID. Stubs return `[error:NotImplemented]` naming the owning lane.
 
 ## Phase-one acceptance lines
 

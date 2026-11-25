@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import importlib
 import sys
 from collections.abc import Sequence
 from dataclasses import replace
 from datetime import timedelta
+from typing import Any
 
 from reticula_mcp import __version__
 from reticula_mcp.config import Settings
@@ -113,13 +115,37 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument(
         "--password", help="omit to be prompted (or to read one line from stdin)"
     )
+    _register_lane_commands(sub)
     return parser
+
+
+_LANES = ("auth", "graph", "search", "content")
+
+
+def _register_lane_commands(sub: Any) -> None:
+    """Let each lane add subcommands from its own ``<lane>/cli.py``.
+
+    A lane module defines ``register(sub)``: it adds parsers to ``sub`` and
+    gives each one ``set_defaults(func=run)`` where ``run(settings, args) -> int``.
+    """
+    for lane in _LANES:
+        name = f"reticula_mcp.{lane}.cli"
+        try:
+            module = importlib.import_module(name)
+        except ModuleNotFoundError as exc:
+            if exc.name != name:
+                raise
+            continue
+        module.register(sub)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         settings = Settings.from_env()
+        func = getattr(args, "func", None)
+        if func is not None:
+            return int(func(settings, args))
         if args.command == "serve":
             if args.host:
                 settings = replace(settings, host=args.host)

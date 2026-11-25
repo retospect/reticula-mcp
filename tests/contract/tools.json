@@ -240,6 +240,17 @@
      }
     ],
     "default": null
+   },
+   "preset": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
    }
   },
   "required": [

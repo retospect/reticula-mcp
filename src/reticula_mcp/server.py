@@ -89,6 +89,7 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
         host=settings.host,
         port=settings.port,
         streamable_http_path=MCP_PATH,
+        stateless_http=settings.stateless_http,
         transport_security=_transport_security(settings),
     )
 
@@ -265,13 +266,18 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
         anchor: Annotated[
             str | None,
             Field(
-                description="Where in a source this comes from"
-                " (page, section, quote id)."
+                description="For a note about a paper: the first few words of"
+                " the passage, so a reader can find the spot in their own copy."
             ),
         ] = None,
         preset: Annotated[
             str | None,
-            Field(description="For kind=hub: 'group' (members share) or 'personal'."),
+            Field(
+                description="For kind=hub: 'group' (default: members read and add,"
+                " any member may invite), 'moderated' (members read and add, only"
+                " the hub's admin invites) or 'personal' (only you add, others"
+                " read)."
+            ),
         ] = None,
         model: Annotated[
             str | None,
@@ -325,6 +331,13 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
                 " omit to keep."
             ),
         ] = None,
+        preset: Annotated[
+            str | None,
+            Field(
+                description="For a hub you administer: switch to 'group',"
+                " 'moderated' or 'personal' (omit to keep)."
+            ),
+        ] = None,
         *,
         ctx: Context,
     ) -> str:
@@ -341,6 +354,7 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
             title=title,
             tags=tags,
             private=private,
+            preset=preset,
         )
 
     @mcp.tool()

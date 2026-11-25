@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -40,6 +41,12 @@ class Settings:
     embedder: str = "auto"  # auto | hash | fastembed
     signup: str = "open"  # open | closed
     signup_rate: str = "5/hour"  # per IP
+    # Peers whose X-Forwarded-For is believed (IPs or CIDRs); empty = trust nobody.
+    trusted_proxies: tuple[str, ...] = ()
+    embed_model: str | None = None  # model name for the fastembed embedder
+    # Stateless streamable HTTP: no server-side MCP sessions, so a restart or a
+    # second worker never strands a connected assistant.
+    stateless_http: bool = True
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
@@ -57,6 +64,14 @@ class Settings:
             embedder=get("EMBEDDER", "auto") or "auto",
             signup=get("SIGNUP", "open") or "open",
             signup_rate=get("SIGNUP_RATE", "5/hour") or "5/hour",
+            trusted_proxies=tuple(
+                part.strip()
+                for part in (get("TRUSTED_PROXIES") or "").split(",")
+                if part.strip()
+            ),
+            embed_model=get("EMBED_MODEL"),
+            stateless_http=(get("STATELESS_HTTP", "true") or "true").lower()
+            not in ("0", "false", "no", "off"),
         )
         settings.validate()
         return settings
@@ -69,6 +84,14 @@ class Settings:
         if self.signup not in ("open", "closed"):
             raise ReticulaError(BAD_INPUT, "RETICULA_SIGNUP must be open|closed")
         parse_rate(self.signup_rate)
+        for proxy in self.trusted_proxies:
+            try:
+                ipaddress.ip_network(proxy, strict=False)
+            except ValueError as exc:
+                raise ReticulaError(
+                    BAD_INPUT,
+                    f"RETICULA_TRUSTED_PROXIES: {proxy!r} is not an IP or CIDR",
+                ) from exc
 
     @property
     def base_url(self) -> str:

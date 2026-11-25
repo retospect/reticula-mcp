@@ -40,8 +40,12 @@ Format v0 is FROZEN. Changes go in a new format version, never in v0.
 * **Version hash**: `"sha256:" + hex(sha256(envelope_bytes))`. Because `parents`
   is inside the envelope, a version hash covers its whole ancestry.
 * **Content hash**: `"sha256:" + hex(sha256(salt_bytes + payload_bytes))`, where
-  `payload_bytes` is the UTF-8 encoding of the envelope's `payload` string and
-  `salt_bytes` is empty while `salt` is `"none"`.
+  `payload_bytes` is the UTF-8 encoding of the PLAINTEXT payload and
+  `salt_bytes` is empty while `salt` is `"none"`. While `enc` is `"none"` the
+  plaintext payload is the envelope's `payload` string itself. Once hubs are
+  encrypted the hash stays a hash of the plaintext, salted from the hub key, so
+  members can match identical content and outsiders cannot test a guess; v0
+  defines no such scheme and rejects any `enc` other than `"none"`.
 
 ## 3. The envelope
 

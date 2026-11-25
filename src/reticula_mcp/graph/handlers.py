@@ -39,6 +39,7 @@ def edit(
     title: str | None = None,
     tags: list[str] | None = None,
     private: bool | None = None,
+    preset: str | None = None,
 ) -> str:
     raise not_implemented("graph", "edit")
 
