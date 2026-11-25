@@ -36,12 +36,13 @@ def run_list(settings: Settings, args: argparse.Namespace) -> int:
         print(f"@{account.handle} has no connected assistants")
     else:
         print(f"@{account.handle}: {len(rows)} connection(s)")
-        print("id  status   created           last used         assistant")
+        # client: what the request log prints as client= for this connection
+        print("id  status   created           last used         client      assistant")
         for c in rows:
             status = "live" if c.live else "revoked"
             print(
                 f"{c.id:<3} {status:<8} {_when(c.created_at):<17} "
-                f"{_when(c.last_used_at):<17} {c.label}"
+                f"{_when(c.last_used_at):<17} {c.client_id[:10]:<11} {c.label}"
             )
     if tokens:
         print()

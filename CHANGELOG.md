@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Request log: a refused sign-in says why in a fixed word, for example `reason="signin: bad_credentials"`, `signin: throttled`, `signin: signup_rate` or `signin: link_gone`. A request refused for its `Host` or `Origin` header has `reason="Invalid Host header"` or `reason="Invalid Origin header"` on its line. The other lines of the log, such as a library's warning, now begin with the time in UTC.
+- `reticula-mcp connections list` has a `client` column. It holds what the request log prints as `client=` for that connection.
+
 ## 0.1.1 (2026-11-25)
 
 - Access to a hub covers the hubs filed under it. That is so in 0.1.0 too; its entry below does not say it.

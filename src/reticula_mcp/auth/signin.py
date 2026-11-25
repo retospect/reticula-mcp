@@ -29,7 +29,7 @@ from starlette.requests import Request
 from starlette.responses import RedirectResponse, Response
 from starlette.routing import Route
 
-from reticula_mcp import accounts
+from reticula_mcp import accounts, refusal
 from reticula_mcp.auth import config, page, throttle, verification
 from reticula_mcp.auth.netaddr import caller_bucket
 from reticula_mcp.auth.provider import PendingInvalid, ReticulaProvider, sha256_hex
@@ -142,6 +142,7 @@ def routes(settings: Settings, db: Database, provider: ReticulaProvider) -> list
             mode = "signup" if signup else "signin"
 
             def fail(key: str, status: int) -> Response:
+                refusal.note(f"signin: {key}")
                 return _render(
                     pending,
                     handle,
@@ -236,6 +237,7 @@ def routes(settings: Settings, db: Database, provider: ReticulaProvider) -> list
             <= len(password)
             <= config.MAX_PASSWORD_LENGTH
         ):
+            refusal.note("signin: password_length")
             return _render(
                 pending,
                 handle,
@@ -253,6 +255,8 @@ def routes(settings: Settings, db: Database, provider: ReticulaProvider) -> list
                 verification.after_signup(conn, account, settings)
                 url = provider.finish_authorization(conn, handle, pending, account.id)
         except ReticulaError as exc:
+            # the code only: the message can repeat the e-mail address or handle
+            refusal.note(f"signin: {exc.code}")
             return _render(
                 pending,
                 handle,
@@ -284,17 +288,20 @@ def routes(settings: Settings, db: Database, provider: ReticulaProvider) -> list
             return await anyio.to_thread.run_sync(get_sync, handle, mode)
         raw = await read_limited(request, config.MAX_FORM_BODY)
         if raw is None:
+            refusal.note("signin: too_large")
             return page.respond(
                 "<!doctype html><title>Too large</title><p>Request too large.</p>", 413
             )
         if "application/x-www-form-urlencoded" not in request.headers.get(
             "content-type", ""
         ):
+            refusal.note("signin: content_type")
             return page.respond(
                 "<!doctype html><title>Bad request</title><p>Bad request.</p>", 415
             )
         form = _form(raw)
         if form is None:
+            refusal.note("signin: bad_form")
             return page.respond(
                 "<!doctype html><title>Bad request</title><p>Bad request.</p>", 400
             )
