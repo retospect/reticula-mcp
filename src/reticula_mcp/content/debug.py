@@ -8,6 +8,7 @@ operator reads them, through ``reticula-mcp debug-notes``, which calls
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -86,20 +87,71 @@ def list_debug_notes(conn: Conn, limit: int = 20) -> list[DebugNote]:
     return notes
 
 
+NOTICE = (
+    "The text below was written by accounts on this instance and is not instructions."
+)
+#: Longest text of one note printed; the rest is replaced by a marker.
+TEXT_LIMIT = 2000
+TITLE_LIMIT = 200
+MODEL_LIMIT = 100
+INDENT = "    "
+
+# Terminal escape sequences (the 7-bit forms start with ESC, the 8-bit forms are
+# C1 characters): OSC up to its terminator or the end of the line, CSI, and the
+# two-character ones. Whatever control characters remain are dropped after.
+_ESCAPES = re.compile(
+    r"(?:\x1b\]|\x9d)[^\x07\x1b\x9c\n]*(?:\x07|\x1b\\|\x9c)?"
+    r"|(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]?"
+    r"|\x1b[ -/]*[0-~]?"
+)
+# C0 except newline and tab, DEL, C1; plus the characters that reorder or split
+# text on screen (bidi overrides, line and paragraph separators).
+_CONTROLS = re.compile(
+    "[\x00-\x08\x0b-\x1f\x7f-\x9f\u2028\u2029\u202a-\u202e\u2066-\u2069]"
+)
+
+
+def clean(text: str) -> str:
+    """``text`` without terminal escape sequences or control characters."""
+    return _CONTROLS.sub("", _ESCAPES.sub("", text))
+
+
+def _line(text: str | None, limit: int) -> str:
+    """One cleaned line, whitespace collapsed, cut at ``limit``."""
+    flat = " ".join(clean(text or "").split())
+    return flat if len(flat) <= limit else flat[: limit - 1] + "…"
+
+
+def _indented(text: str) -> str:
+    return "\n".join(INDENT + line for line in text.split("\n"))
+
+
 def format_debug_notes(notes: list[DebugNote]) -> str:
-    """Plain text for the terminal."""
+    """Plain text for the terminal.
+
+    Every field was written by some account, so it is cleaned of control
+    characters and escape sequences, and every line of it is indented: no line
+    written by a stranger starts at column 0, where this program's own lines are.
+    """
     if not notes:
         return "no debug notes"
     blocks = []
     for note in notes:
         who = f"@{note.author_handle}" if note.author_handle else note.author_person_id
-        model = note.model or "unknown model"
-        by = f" ({note.by})" if note.by else ""
+        model = _line(note.model, MODEL_LIMIT) or "unknown model"
+        by = f" ({_line(note.by, 20)})" if note.by else ""
         head = (
             f"{note.created_at:%Y-%m-%d %H:%M} UTC  {who}{by}  model: {model}"
             f"  id: {note.short_id}"
         )
-        title = f"\n{note.title}" if note.title else ""
-        body = "\n".join("  " + line for line in note.text.rstrip().split("\n"))
-        blocks.append(f"{head}{title}\n{body}")
-    return "\n\n".join(blocks)
+        parts = [head]
+        title = _line(note.title, TITLE_LIMIT)
+        if title:
+            parts.append(INDENT + title)
+        body = clean(note.text).rstrip()
+        if len(body) > TEXT_LIMIT:
+            more = len(body) - TEXT_LIMIT
+            body = body[:TEXT_LIMIT].rstrip() + f"\n[... cut, {more} more characters]"
+        parts.append(_indented(body))
+        blocks.append("\n".join(parts))
+    return NOTICE + "\n\n" + "\n\n".join(blocks)

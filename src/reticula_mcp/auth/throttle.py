@@ -9,6 +9,7 @@ from reticula_mcp.db.pool import Conn
 SIGNIN_IP = "signin_ip"
 SIGNIN_EMAIL = "signin_email"
 REGISTER_IP = "register_ip"
+WRITE_ACCOUNT = "write_account"  # one event per write tool call, per account
 
 
 def _seconds(window: timedelta | int) -> float:
@@ -115,6 +116,37 @@ def acquire_many(
         assert row is not None
         ids.append(int(row["id"]))
     return ids
+
+
+def trim(conn: Conn, kind: str, subject: str, window: timedelta | int) -> None:
+    """Drop this key's events that have left the window (they no longer count)."""
+    conn.execute(
+        "DELETE FROM auth_event WHERE kind = %s AND subject = %s"
+        " AND created_at <= now() - make_interval(secs => %s)",
+        (kind, subject, _seconds(window)),
+    )
+
+
+def seconds_until_free(
+    conn: Conn, kind: str, subject: str, limit: int, window: timedelta | int
+) -> int | None:
+    """Whole seconds until one more event would be allowed (0 when it is now).
+
+    None when it never would be (a limit of zero).
+    """
+    if limit <= 0:
+        return None
+    used = count(conn, kind, subject, window)
+    if used < limit:
+        return 0
+    row = conn.execute(
+        "SELECT ceil(extract(epoch FROM created_at + make_interval(secs => %s)"
+        " - now())) AS wait FROM auth_event WHERE kind = %s AND subject = %s"
+        " AND created_at > now() - make_interval(secs => %s)"
+        " ORDER BY created_at OFFSET %s LIMIT 1",
+        (_seconds(window), kind, subject, _seconds(window), used - limit),
+    ).fetchone()
+    return max(int(row["wait"]), 1) if row else 0
 
 
 def forget(conn: Conn, ids: list[int]) -> None:

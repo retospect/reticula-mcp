@@ -227,11 +227,20 @@ def _candidate_handles(base: str):
         yield f"{base}{secrets.token_hex(3)}"
 
 
-def _handle_taken(conn: Conn, handle: str) -> bool:
-    return handle in RESERVED_HANDLES or (
-        conn.execute("SELECT 1 FROM account WHERE handle = %s", (handle,)).fetchone()
-        is not None
-    )
+def _handle_taken(conn: Conn, handle: str, person_id: str | None = None) -> bool:
+    """In use, reserved, or given up by someone other than ``person_id``.
+
+    A released handle is refused exactly like one in use, so a refusal does not
+    tell the caller which of the two it ran into.
+    """
+    if handle in RESERVED_HANDLES:
+        return True
+    if conn.execute("SELECT 1 FROM account WHERE handle = %s", (handle,)).fetchone():
+        return True
+    released = conn.execute(
+        "SELECT person_id FROM released_handle WHERE handle = %s", (handle,)
+    ).fetchone()
+    return released is not None and released["person_id"] != person_id
 
 
 # --- creation ---------------------------------------------------------------
@@ -411,11 +420,14 @@ def ensure_system_account(conn: Conn) -> Account:
 
 
 def set_handle(conn: Conn, account: Account, handle: str) -> Account:
-    """Rename: updates the account and appends a new identity version."""
+    """Rename: updates the account and appends a new identity version.
+
+    The old handle is recorded as released: only this person may take it back.
+    """
     handle = validate_handle(handle)
     if handle == account.handle:
         return account
-    if _handle_taken(conn, handle):
+    if _handle_taken(conn, handle, account.person_id):
         raise ReticulaError(CONFLICT, f"handle {handle!r} is taken")
     try:
         with conn.transaction():
@@ -424,6 +436,11 @@ def set_handle(conn: Conn, account: Account, handle: str) -> Account:
                 f" RETURNING {_ACCOUNT_COLUMNS}",
                 (handle, account.id),
             ).fetchone()
+            conn.execute(
+                "INSERT INTO released_handle (handle, person_id) VALUES (%s, %s)"
+                " ON CONFLICT (handle) DO NOTHING",
+                (account.handle, account.person_id),
+            )
     except psycopg.errors.UniqueViolation as exc:
         raise ReticulaError(CONFLICT, f"handle {handle!r} is taken") from exc
     if row is None:

@@ -20,6 +20,7 @@ from typing import Annotated, Any
 from urllib.parse import urlsplit
 
 import anyio.to_thread
+import psycopg.errors
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import Field
@@ -28,12 +29,12 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from reticula_mcp import __version__
-from reticula_mcp.auth import build_auth
-from reticula_mcp.config import Settings
+from reticula_mcp.auth import build_auth, throttle
+from reticula_mcp.config import Settings, parse_rate
 from reticula_mcp.content import handlers as content_handlers
 from reticula_mcp.context import access_token_from_context, viewer_for_token
-from reticula_mcp.db.pool import Database
-from reticula_mcp.errors import INTERNAL, ReticulaError
+from reticula_mcp.db.pool import Conn, Database
+from reticula_mcp.errors import INTERNAL, RATE_LIMITED, UNAVAILABLE, ReticulaError
 from reticula_mcp.graph import handlers as graph_handlers
 from reticula_mcp.seams import AuthWiring
 from reticula_mcp.search import handlers as search_handlers
@@ -78,6 +79,21 @@ def _transport_security(settings: Settings) -> TransportSecuritySettings:
     )
 
 
+def _wait_text(seconds: int) -> str:
+    if seconds < 90:
+        return f"{seconds} s"
+    if seconds < 5400:
+        return f"{round(seconds / 60)} min"
+    return f"{round(seconds / 3600)} h"
+
+
+def _timeout_error(db: Database) -> ReticulaError:
+    """What a statement cancelled by the server's time limit looks like to the caller."""
+    limit = db.statement_timeout
+    took = f"longer than {limit:g} s" if limit else "too long"
+    return ReticulaError(UNAVAILABLE, f"the request took {took} and was stopped")
+
+
 def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
     """Build the FastMCP instance with every tool registered."""
     wiring = build_auth(settings, db)
@@ -102,16 +118,46 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
     # Every tool is registered with structured_output=False: the tools answer in
     # text. Otherwise FastMCP derives an output schema from `-> str` and clients
     # hand the model a JSON-escaped {"result": "..."} instead of the lines.
-    async def run(ctx: Context, handler: Callable[..., str], **params: Any) -> str:
+    write_limit, write_window = parse_rate(settings.write_rate)
+
+    def limit_writes(conn: Conn, account_id: int) -> None:
+        """Count one write for the account, or refuse with the time to wait.
+
+        Runs in the handler's transaction: a write that fails does not count.
+        """
+        subject = str(account_id)
+        kind = throttle.WRITE_ACCOUNT
+        throttle.trim(conn, kind, subject, write_window)
+        if throttle.acquire(conn, kind, subject, write_limit, write_window):
+            return
+        wait = throttle.seconds_until_free(
+            conn, kind, subject, write_limit, write_window
+        )
+        again = (
+            f"try again in {_wait_text(wait)}"
+            if wait is not None
+            else "writing is switched off on this instance"
+        )
+        raise ReticulaError(
+            RATE_LIMITED, f"write limit reached ({settings.write_rate}); {again}"
+        )
+
+    async def run(
+        ctx: Context, handler: Callable[..., str], *, write: bool = False, **params: Any
+    ) -> str:
         token = access_token_from_context(ctx)
 
         def work() -> str:
             try:
                 with db.connection() as conn:
                     viewer = viewer_for_token(conn, token)
+                    if write:
+                        limit_writes(conn, viewer.id)
                     return handler(conn, viewer, **params)
             except ReticulaError as exc:
                 return exc.render()
+            except psycopg.errors.QueryCanceled:
+                return _timeout_error(db).render()
             except Exception:
                 log.exception("tool %s failed", getattr(handler, "__name__", "?"))
                 return ReticulaError(
@@ -314,6 +360,7 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
         return await run(
             ctx,
             graph_handlers.put,
+            write=True,
             text=text,
             kind=kind,
             hub=hub,
@@ -364,6 +411,7 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
         return await run(
             ctx,
             graph_handlers.edit,
+            write=True,
             ref=ref,
             text=text,
             title=title,
@@ -400,7 +448,13 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
         added to your note's own links as a new version.
         """
         return await run(
-            ctx, graph_handlers.link, ref=ref, to=to, rel=rel, remove=remove
+            ctx,
+            graph_handlers.link,
+            write=True,
+            ref=ref,
+            to=to,
+            rel=rel,
+            remove=remove,
         )
 
     @mcp.tool(structured_output=False)
@@ -414,7 +468,7 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
         The address stays and answers as deleted, with no content. Only the
         author can delete.
         """
-        return await run(ctx, graph_handlers.delete, ref=ref)
+        return await run(ctx, graph_handlers.delete, write=True, ref=ref)
 
     @mcp.tool(structured_output=False)
     async def share(
@@ -441,7 +495,14 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
         `add` lets them read and add, `read` only read, `none` revokes. Access to a
         hub covers the hubs under it. Without `person`, lists who has access.
         """
-        return await run(ctx, graph_handlers.share, hub=hub, person=person, mode=mode)
+        return await run(
+            ctx,
+            graph_handlers.share,
+            write=person is not None,  # listing who has access is a read
+            hub=hub,
+            person=person,
+            mode=mode,
+        )
 
     return mcp, wiring
 

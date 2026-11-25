@@ -52,7 +52,8 @@ def test_debug_note_lands_in_the_instance_debug_hub(conn, make_account):
     )
     out = handlers.put(conn, alice, text="it broke", kind="debug", model="some-model")
     note = addr(out)
-    assert debug_hub in out
+    assert out.startswith(f"saved debug note {note} (filed for the operator;")
+    assert debug_hub not in out  # the assistant is not told where it was filed
     member = conn.execute(
         "SELECT h.address FROM membership m JOIN node h ON h.id = m.hub_node_id"
         " JOIN node n ON n.id = m.node_id WHERE n.address = %s AND NOT m.withdrawn",
