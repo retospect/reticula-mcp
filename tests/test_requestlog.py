@@ -35,6 +35,13 @@ def test_the_reason_is_the_servers_own_error_text():
     page = Headers({"content-type": "text/html; charset=utf-8"})
     assert reason_of(401, page, b"<html>wrong e-mail or password</html>") == ""
     assert reason_of(404, Headers({"content-type": "text/plain"}), b"Not Found") == ""
+    # the MCP package's fixed answers, and no other text: it could be an echo
+    plain = Headers({"content-type": "text/plain; charset=utf-8"})
+    assert reason_of(421, plain, b"Invalid Host header") == "Invalid Host header"
+    assert reason_of(403, Headers(), b"Invalid Origin header") == (
+        "Invalid Origin header"
+    )
+    assert reason_of(421, plain, b"Invalid Host header: evil.example") == ""
     assert reason_of(400, JSON, b"not json") == ""
 
 
@@ -126,3 +133,84 @@ def test_a_signed_in_request_names_its_connection_and_a_bad_one_says_why(lines):
     for secret in (tokens["access_token"], tokens["refresh_token"], PASSWORD):
         assert secret not in everything
     assert "code=" not in everything and "state=" not in everything
+
+
+def test_connections_list_shows_what_the_log_prints_as_client(lines, capsys):
+    import argparse
+
+    from reticula_mcp.auth import cli as auth_cli
+
+    live, read = lines
+    with connect(live.db_url) as conn:
+        accounts.create_account(conn, "match@example.com", PASSWORD)
+        conn.commit()
+    assistant = Assistant(live)
+    try:
+        assistant.connect("signin", "match@example.com")
+        assert assistant.mcp_status() == 200
+    finally:
+        assistant.close()
+    (served,) = [line for line in read() if line.startswith("POST /mcp 200 ")]
+    logged = served.split(" client=")[1].split()[0]
+    auth_cli.run_list(live.settings, argparse.Namespace(email="match@example.com"))
+    listing = capsys.readouterr().out.splitlines()
+    assert listing[1].split()[-2:] == ["client", "assistant"]
+    assert logged in listing[2].split()
+
+
+def test_the_other_lines_of_the_log_get_the_time_too():
+    from reticula_mcp.cli import _time_on_other_lines
+
+    root = logging.getLogger()
+    plain = logging.StreamHandler()
+    plain.setFormatter(logging.Formatter("%(message)s"))
+    root.addHandler(plain)
+    try:
+        _time_on_other_lines()
+        record = logging.LogRecord("mcp", 30, "", 0, "Invalid Host header: x", (), None)
+        assert plain.format(record).endswith("Z Invalid Host header: x")
+        assert plain.format(record)[:2] == "20"
+    finally:
+        root.removeHandler(plain)
+
+
+def test_a_refused_sign_in_and_a_wrong_host_say_why_in_fixed_words(lines):
+    live, read = lines
+    with connect(live.db_url) as conn:
+        accounts.create_account(conn, "page@example.com", PASSWORD)
+        conn.commit()
+    assistant = Assistant(live)
+    try:
+        assistant.register()
+        wrong = assistant.sign_in("signin", "page@example.com", "not-the-password")
+        assert wrong.status_code == 401
+        gone = live.http().post(
+            "/signin", data={"req": "no-such-request", "csrf": "x", "email": "a@b.c"}
+        )
+        assert gone.status_code == 400
+        tokens = assistant.connect("signin", "page@example.com")
+        host = live.http().post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+            headers={
+                "Host": "other.example",
+                "Accept": "application/json, text/event-stream",
+                "Authorization": f"Bearer {tokens['access_token']}",
+            },
+        )
+        assert host.status_code == 421
+    finally:
+        assistant.close()
+    got = read()
+    (refused,) = [line for line in got if line.startswith("POST /signin 401 ")]
+    assert refused.endswith(' reason="signin: bad_credentials"')
+    (expired,) = [line for line in got if line.startswith("POST /signin 400 ")]
+    assert expired.endswith(' reason="signin: link_gone"')
+    # a reason is said once per request and does not stay for the next one
+    assert all("signin:" not in line for line in got if " /signin " not in line)
+    everything = "\n".join(got)
+    assert "page@example.com" not in everything
+    assert "not-the-password" not in everything
+    (bad,) = [line for line in got if line.startswith("POST /mcp 421 ")]
+    assert bad.endswith(' reason="Invalid Host header"')
+    assert "other.example" not in bad
