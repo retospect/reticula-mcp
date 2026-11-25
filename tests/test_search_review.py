@@ -434,6 +434,19 @@ def test_a_correction_in_a_common_hub_hides_the_original_until_it_is_disputed(
         conn, c, ref=fix
     )
     assert ref(original) not in handlers.search(conn, c, query="meeting")
+    # search leads ann to the correction, not to her own note: the same step is
+    # offered there, to her only
+    there = (
+        f"next: link(ref={ref(original)!r}, to={ref(fix)!r}, rel='disputes')"
+        " shows your note again beside this one, if you do not accept the correction"
+    )
+    found = handlers.search(conn, a, query="meeting")
+    assert ref(fix) in found and ref(original) not in found
+    on_fix = handlers.get(conn, a, ref=fix)
+    assert f'supersedes: {ref(original)} note "Meeting" by you' in on_fix
+    assert there in on_fix.splitlines()
+    for other in (b, c):
+        assert "disputes" not in handlers.get(conn, other, ref=fix)
 
     graph.link(conn, a, ref=original, to=fix, rel="disputes")
     assert not any(said_superseded(conn, who, original) for who in (a, b, c))
@@ -444,6 +457,9 @@ def test_a_correction_in_a_common_hub_hides_the_original_until_it_is_disputed(
     assert f'corrected by you: {ref(fix)} note "Fix"' in handlers.get(
         conn, b, ref=original
     )
+    on_fix = handlers.get(conn, a, ref=fix)
+    assert there not in on_fix and "shows your note again" not in on_fix
+    assert f"link disputes <- {ref(original)} note" in on_fix
     newer = handlers.get(conn, c, ref=fix)
     assert f'corrects: {ref(original)} note "Meeting" by @ann' in newer
     assert "supersedes:" not in newer

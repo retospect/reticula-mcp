@@ -19,6 +19,8 @@ dimension: rows of any other model in the ``embedding`` table are never read.
 from __future__ import annotations
 
 import logging
+import re
+import string
 from dataclasses import dataclass
 from typing import Any
 
@@ -51,6 +53,32 @@ TRIGRAM_MIN = 0.25
 # match when no note has all of them (see _lexical). 0 keeps any note with one
 # of the words; 1 means every word, that is no second try at all.
 LOOSE_MIN_SHARE = 0.5
+# Words that name what is kept here rather than what a note says. "kiln notes"
+# asks for the notes about kilns, and those need not contain "notes": such a
+# word is never required of a note (see content_words). A note that has it
+# still comes before one that has not.
+REQUEST_WORDS = frozenset(
+    [
+        "note",
+        "notes",
+        "hub",
+        "hubs",
+        "paper",
+        "papers",
+        "instruction",
+        "instructions",
+        "entry",
+        "entries",
+        "memo",
+        "memos",
+        "stuff",
+        "info",
+        "information",
+        "everything",
+        "anything",
+    ]
+)
+_QUERY_PART = re.compile(r'-?"[^"]*"?|\S+')
 # Weight of each leg in the fusion (see rank_fusion.py).
 LEG_WEIGHTS: dict[str, float] = {
     "identifier": 1.0,
@@ -186,30 +214,63 @@ def _exact(
     return [(r["id"], float(r["score"])) for r in rows]
 
 
+def content_words(query: str) -> str:
+    """The query without its REQUEST_WORDS: "kiln notes" is "kiln". A quoted
+    phrase and an excluded word (``-notes``) stay as written. The query comes
+    back unchanged when nothing else would be left, and when it has an ``or``
+    (dropping one side of an ``or`` would narrow the search, not widen it)."""
+    kept: list[str] = []
+    content = dropped = False
+    for part in _QUERY_PART.findall(query):
+        if part.lower() == "or":
+            return query
+        if part.startswith(("-", '"')):
+            kept.append(part)
+            content = content or part.startswith('"')
+        elif part.strip(string.punctuation).lower() in REQUEST_WORDS:
+            dropped = True
+        else:
+            kept.append(part)
+            content = True
+    return " ".join(kept) if dropped and content else query
+
+
 def _lexical(
     conn: Conn, query: str, where: str, params: dict[str, Any], pool: int
 ) -> list[tuple[int, float]]:
-    base = {**params, "q": query, "pool": pool}
-    # A query with no positive term (only negations such as "-zebra") has
-    # nothing to require: "!zebra" would match every note without the word.
-    positive = conn.execute(
-        "SELECT querytree(websearch_to_tsquery('english', %(q)s)) <> 'T' AS ok", base
+    # ``q`` is what a note must have, ``every`` is all that was typed
+    base = {**params, "q": content_words(query), "every": query, "pool": pool}
+    # A query with no positive term (only negations such as "-zebra", or only
+    # stop words) has nothing to require: "!zebra" would match every note
+    # without the word.
+    trees = conn.execute(
+        "SELECT querytree(websearch_to_tsquery('english', %(q)s)) AS q,"
+        " querytree(websearch_to_tsquery('english', %(every)s)) AS every",
+        base,
     ).fetchone()
-    if not positive or not positive["ok"]:
+    nothing = ("", "T")
+    if trees is None or trees["every"] in nothing:
         return []
+    if trees["q"] in nothing:  # "the notes": the request word is all there is
+        base["q"] = query
+    # Notes with every word typed first, then those with every content word.
     strict = conn.execute(
         f"""
-        SELECT n.id, ts_rank_cd(n.fts, qq.qq, 32) AS score
-        FROM node n, websearch_to_tsquery('english', %(q)s) AS qq(qq)
+        SELECT n.id, (n.fts @@ eq.eq) AS every,
+               ts_rank_cd(
+                   n.fts, CASE WHEN n.fts @@ eq.eq THEN eq.eq ELSE qq.qq END, 32
+               ) AS score
+        FROM node n, websearch_to_tsquery('english', %(q)s) AS qq(qq),
+             websearch_to_tsquery('english', %(every)s) AS eq(eq)
         WHERE n.fts @@ qq.qq AND {where}
-        ORDER BY score DESC, n.id DESC LIMIT %(pool)s
+        ORDER BY every DESC, score DESC, n.id DESC LIMIT %(pool)s
         """,
         base,
     ).fetchall()
     if strict:
         return [(r["id"], float(r["score"])) for r in strict]
-    # No note has every word: retry with the words OR-ed, and keep a note only
-    # when it has at least LOOSE_MIN_SHARE of the query's distinct words (one
+    # No note has every content word: retry with those words OR-ed, and keep a
+    # note only when it has at least LOOSE_MIN_SHARE of the distinct ones (one
     # common word such as "work" or "day" is not a match). Most words first.
     loose = conn.execute(
         f"""
