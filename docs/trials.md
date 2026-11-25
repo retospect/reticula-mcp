@@ -1,6 +1,6 @@
 # Trials with assistants that had never seen Reticula
 
-Reticula is used by language models, not by people. These trials watched models that knew nothing about it try to use it, recorded what they did, and ran again after each fix. This page is the record: the method, the rounds, what went wrong, what was changed and what is still open. About 2,200 runs in all.
+Reticula is used by language models, not by people. These trials watched models that knew nothing about it try to use it, recorded what they did, and ran again after each fix. This page is the record: the method, the rounds, what went wrong, what was changed and what is still open. About 4,600 runs in all.
 
 ## Method
 
@@ -48,6 +48,8 @@ Round one's system prompt did not name the person. In one run the model took a f
 | 17 | Ben's hub "Kestrel firmware" is filed under Ada's hub "Kestrel project". Ben has shared it with Cleo for reading. Ada has shared the project hub with Ben and with Cleo for adding. Ada and Cleo each ask "Can I add notes to Ben's Kestrel firmware hub?" and, in another conversation, say "Put this in Ben's Kestrel firmware hub: ..." with one fact. | Both are told that they can, and both facts are filed in Ben's hub. |
 | 18 | In one conversation: "Save a note with the title "Meeting notes": budget review, ..." "Save another note, also with the title "Meeting notes": hiring, ..." "Put both into a new hub called Team." "Add to the hiring one that the offer goes out on Friday." "Delete the budget one. I will redo it later." In a new conversation: "What notes do I have in my Team hub?" | The hiring note has the addition and the budget note is gone. The person is shown no id and no address, except to tell the two notes of one title apart. |
 | 19 | Ada's hub of drone notes is shared with Ben. "Remember that the Kestrel's compass has to be recalibrated after every battery swap, otherwise it drifts. Put it with my Kestrel notes." "Write me a short message for Ben that tells him where to find that note. Just the message." Ben, who has nothing but the message: "Ada sent me this: "..." What does that note say?" | The message names the note and the hub by their titles. Ben is told what the note says. |
+| 20 | Bea, Cal and Ada share a hub on a greenhouse. Bea wrote notes three weeks ago, on Tuesday and Friday of last week and on Monday of this week, changed an old note on Tuesday, and on Tuesday shared a second hub with three older notes, to which she added one three hours ago. Cal wrote one note on Tuesday. Ada, on Wednesday, in a conversation each: "What did Bea add this week?" "Is there anything new since Monday?" and then "What is in the hub that Bea shared with me?" "What changed about the pump this week?" "What is the watering plan?" "What did Bea write last week?" | Each answer has what falls in the time asked for, the changed note among it, and nothing older. The plain question is answered as before. |
+| 21 | Ada has twelve hubs of her own, so `start` does not list the two hubs of Bea that she can read. This week Bea wrote two notes in the first, filed a note of four weeks ago into it, and shared the second. "What is new?" "Has anyone shared something new with me?" "What did Bea write this week?" | Ada is told what is new, with both hubs named by their titles. The filed note is not passed off as written this week. |
 
 ## Round one: before any change
 
@@ -696,14 +698,116 @@ There were two trials. The first ran the first form of the change against main `
 - **Haiku kept the facts apart.** In scenario 2 of the second trial Haiku wrote 30 notes and made no edit on the change, and 23 notes and 8 edits on main, where it had merged later facts into a note. The answers were complete on both.
 - **Not run:** a note from a hub of somebody the reader has nothing to do with. What is on main shows such a note without its text and does not count it in the last line. Scenarios 2 and 14 have no such hub.
 
+## Round twelve: what is new
+
+1,302 runs on one day, the change beside main, each with its own database, in the chat setting and with the client's own prompt. Scenarios 3, 4 and 18 are the gate; 20 and 21 are new.
+
+The change, from a branch: `search` takes `since`, a time back from now (`7d`, `36h`, `2w`) or a date. With an empty query it lists what was written, changed, filed or shared since then, newest first, and each row ends with what happened and when: `· written 2026-11-24 10:00Z`, `· edited ...`, `· filed in this hub ...`, `· shared with you by @bea ... · read · 3 notes`. `start` adds one or two lines when other people wrote or shared something in the last seven days: `New from other people in the last 7 days: 3 in @bea's hub id 76b216b8.` and `Newly shared with you in that time: hub id f9bcdeaf by @bea. List them with search(query="", since="7d").`
+
+The scenarios need notes of different ages. In the trial copies of the server, and only there, the setup calls of an account could be signed with a past time. The conversations ran on the real clock, on a Wednesday.
+
+### The answers
+
+Control beside the description of `since` that was taken (below), six runs in the chat setting and six with the client's own prompt, so 12 a cell.
+
+| Conversation (scenario 20) | Counted, of 12 | Haiku, main | Haiku, change | Sonnet, main | Sonnet, change |
+|---|---|---|---|---|---|
+| "What did Bea add this week?" | names the note that Bea changed on Tuesday | 0 | 12 | 0 | 12 |
+| the same | brings in the note of eight days ago | 5 | 0 | 12 | 0 |
+| "Is there anything new since Monday?" | all six new things | 0 | 12 | 0 | 12 |
+| the same | brings in the note of last Friday | 8 | 3 | 3 | 0 |
+| the same | tool calls, median | 7 | 3 | 6.5 | 2 |
+| "What changed about the pump this week?" | brings in the note of twelve days ago | 9 | 0 | 12 | 0 |
+| "What did Bea write last week?" | names the note of Tuesday of last week | 12 | 12 | 12 | 12 |
+| "What is the watering plan?" | answers 07:00 | 12 | 12 | 12 | 12 |
+| "What is in the hub that Bea shared with me?" | all four notes | 12 | 12 | 12 | 12 |
+
+Scenario 21: Ada has twelve hubs of her own, so `start` does not list the two hubs of Bea. Asked "What is new?", main named the second hub in 9 of 18 Haiku answers and 16 of 18 Sonnet answers, and had tool calls refused in 10 and 5 of them. With the change both hubs and all three new notes were named in 12 of 12 on each model, with no refused call. All 24 made the call the line of `start` shows.
+
+- **`since` was used where time was asked for, and only there.** It was passed in every run of scenarios 20 and 21 that asked about a time, and in none of scenarios 3, 4 and 18. No call with `since` was refused.
+- **"last week" needs a date.** Without a word on it, Sonnet passed `7d` in 30 of 30 runs and lost the note of Tuesday of last week in all 30. With the clause on "last week" it passed `2026-11-16` in every run. A date lists everything up to now, so the notes of this week came along; every answer gave them with their dates.
+- **Another person's hub is named by owner and id in the lines of `start`.** That id never reached the person. 882 conversations saw the lines, 720 with both hubs on the list of `start` and 162 without: 882 named the hubs by title, none by id, none as "@bea's hub" alone. Where the hubs were not listed the assistant searched with `since`, and the rows of that reply carry the titles.
+- **A note filed this week was not passed off as written this week.** Asked "What did Bea write this week?" in scenario 21, the reply lists a note of four weeks ago with `· filed in this hub` and its date. Sonnet named it in 12 of 12 answers, each with its age, but 10 of the 12 began "Bea wrote three notes this week" and only then said the third is 27 days old. Haiku named it in 6 of 12, each with its age, and left it out in 6.
+- **Weekdays.** A wrong weekday for a date, in a final message: Haiku 4 of 180 on main and 8 of 360 on the change, Sonnet 1 of 180 and 0 of 360.
+
+### The description of `since`, and the first call
+
+The branch's description had two sentences: the formats, and "With an empty query it lists what is new, by you and by other people, newest first." With it, Haiku in the chat setting began the first conversation of scenario 18 ("Save a note ...") with `start` in 3 of 30 runs, against 78 of 78 on main. It called `put` at once. The same text with the client's own prompt: 18 of 18.
+
+Nine forms of the description were run on that conversation, 12 to 36 runs a cell.
+
+| Form | `start` first, chat | `start` first, client's own prompt |
+|---|---|---|
+| main (no `since`) | 78 of 78 | 54 of 54 |
+| the branch, two sentences | 3 of 30 | 18 of 18 |
+| the formats only | 24 of 24 | 4 of 12 |
+| the formats, then `For "last week" give the date of its Monday.` | 24 of 24 | 8 of 24 |
+| the same, `since` second of the parameters instead of last | 12 of 12 | 2 of 12 |
+| the branch, then the sentence on "last week" | 1 of 12 | 12 of 12 |
+| no description | 6 of 12 | 12 of 12 |
+| the formats with the date first, then the sentence on "last week" | 7 of 12 | |
+| the same, and the description of `query` naming `since` | 24 of 24 | |
+| the formats, with "last week" in the brackets | 36 of 36 | 24 of 24 |
+
+The last is the one that was taken:
+
+```
+Only what was written or changed since then: `7d`, `36h`, `2w` or a date (`2026-11-20`; for "last week" the date of its Monday).
+```
+
+- **Every form moved the first call somewhere.** A parameter with no description moved it. The form whose `query` description named `since` held this conversation and lost scenario 4 instead: its first conversation began with `start` in 0 of 18 runs. No reading of the texts predicts which cell falls. The one form that held in both settings was found by trying.
+- **The rest of the gate, Haiku, `start` first in new conversations, main and the change side by side.** Chat: scenario 18 24 of 24 and 24 of 24 on both, twice; scenario 3 33 and 34 of 36 on main, 36 and 36 on the change; scenario 4 95 of 108 on main, 84 of 108 on the change. Client's own prompt: scenario 18 24 of 24 on both; scenario 3 33 and 35 of 36; scenario 4 14 and 22 of 36. End states were right in every run, every share gave `add`.
+- **The loss is one conversation.** In scenario 4 in the chat setting, "Forget what I told you about my sister's birthday present" began with `start` in 32 of 36 runs on main and 21 of 36 on the change. Each of these runs deleted the two notes about the present and kept the one with the date.
+
+## Round thirteen: what `delete` keeps, and the hub's id on `get`
+
+1,152 runs on the day of round twelve, on top of its change, each arm with its own database, in the chat setting and with the client's own prompt.
+
+### The description of `delete`
+
+In round ten, "Forget what I told you about my sister's birthday present" also deleted the note with the date of the birthday (point in "Still open"). The description of `delete` asked to read a note with `get` first. Two forms were run beside it, the second in two batches:
+
+1. the advice to read with `get` replaced by two sentences: "Delete only the notes that say what the person named. A note that came up in the same search and says something else stays."
+2. the advice kept, and the same two sentences after it.
+
+| Counted, Haiku | Main | Form 1 | Form 2 |
+|---|---|---|---|
+| date note deleted, chat | 0 of 72 | 0 of 36 | 0 of 72 |
+| date note deleted, client's own prompt | 8 of 72 | 1 of 36 | 1 of 72 |
+| "Forget ..." began with `start`, chat | 48 of 72 | 36 of 36 | 66 of 72 |
+| "Ben's note ... is wrong" began with `start`, client's own prompt | 72 of 72 | 15 of 36 | 72 of 72 |
+| scenario 18, first conversation began with `start`, chat | 36 of 36 | 10 of 12 | 35 of 36 |
+| scenario 3, `start` first, client's own prompt | 54 of 72 | 34 of 36 | 62 of 72 |
+
+Sonnet, 36 runs of scenario 4 a cell, deleted the date note in none. The meeting note and the correction of Ben's note were right in every run on every arm.
+
+- **Form 2 is taken.** It keeps the gate and lowers the harm. The one date note it deleted was in a run that had skipped `start` and read the notes with `get`.
+- **Form 1 cost a conversation that has nothing to do with deleting.** With it, the correction of Ben's note began with `start` in 15 of 36 runs. Read with round twelve: a change to one tool description can move the first call of any conversation.
+
+### The same text, twice
+
+The arm with the hub's id on `get` (below) changes only what `get` prints. Before its first call an assistant reads exactly what it reads on the control. In the same batch, "Forget ..." in the chat setting began with `start` in 18 of 36 runs on that arm and in 28 of 36 on the control. Over every arm whose texts before the first call were those of round twelve's change, that conversation began with `start` in 87 of 144 runs. On main before that change it was 59 of 72. A difference of ten in 36 can come from nothing.
+
+### The hub's id on `get`
+
+`in: "Lab logistics" id 470547e6` instead of `in: "Lab logistics"`, and for a note of somebody else a line with the write that corrects it: `next: put(text=<the correction>, supersedes='2ad253ee', hub='470547e6') replaces it in the same hub`.
+
+| "Ben's note ... is wrong", Haiku, client's own prompt | Main | With the lines |
+|---|---|---|
+| before round twelve: runs with a guessed hub reference | 8 of 24 | 0 of 24 |
+| the same: runs with a refused call | 9 of 24 | 0 of 24 |
+| on top of round twelve: runs with a refused call | 1 of 36 | 0 of 36 |
+
+On top of round twelve that conversation began with `start` in 72 of 72 runs on the control, so there was little left to guess. In the chat setting no run guessed on either arm. End states and the gate did not differ beyond the noise above. The lines go to the owner of `get`.
+
 ## Still open
 
-These are not fixed by text in the instructions. They are with the owners of search and of the graph tools. Closed since earlier versions of this list: instruction notes no longer come back for unrelated queries, a search result shows the text of the note, an address without `ret:` is accepted, the reply to `put` names the short id, `start` names who an own hub is shared with, the access list says what `add` and `read` mean, a filler word no longer hides notes from a search, a note shows the paper and passage it is about, and a hub under a shared hub no longer says that it is shared with nobody. Changed after version 0.1.0 and run in round nine before the merge: the member's count, the names of those who read through a hub above, and access shown lower than it is. Changed in round ten: ids and addresses in what the person is told.
+These are not fixed by text in the instructions. They are with the owners of search and of the graph tools. Closed since earlier versions of this list: instruction notes no longer come back for unrelated queries, a search result shows the text of the note, an address without `ret:` is accepted, the reply to `put` names the short id, `start` names who an own hub is shared with, the access list says what `add` and `read` mean, a filler word no longer hides notes from a search, a note shows the paper and passage it is about, and a hub under a shared hub no longer says that it is shared with nobody. Changed after version 0.1.0 and run in round nine before the merge: the member's count, the names of those who read through a hub above, and access shown lower than it is. Changed in round ten: ids and addresses in what the person is told. Changed in round twelve: what is new, with `since` on `search` and the lines of `start`. Taken in round thirteen, for their owners to merge: the description of `delete`, and the hub's id on `get`.
 
+- **The first call moves with every new word in a description.** Round twelve ran nine descriptions of one new parameter. Each, even an empty one, made Haiku skip `start` in some conversation, in one setting or the other. The one that was taken holds scenarios 3 and 18 in both settings, and costs one conversation of scenario 4 in the chat setting: "Forget what I told you about my sister's birthday present" began with `start` in 21 of 36 runs, against 32 of 36 on main. Nothing went wrong in those runs. Round thirteen's description of `delete` brought it to 66 of 72. A conversation that skips `start` has not read the starter, and in round ten that was where the date note went (next point). Every later change to a tool description has to be run on the gate again, and this conversation with it.
 - **`start` skipped, and then a read-only share.** With the descriptions that ship, Haiku called `start` first in 221 of 228 new conversations of scenario 3, and in 75 of 76 conversations that share. In rounds four to six it skipped `start` in 8 of 93 new conversations, when the request looked simple ("Forget ...", "Show me note ..."). A conversation without `start` knows the server's instructions and the tool descriptions, and with those alone Haiku shared read-only in 3 of 15. The margin is thin: two sentences in two descriptions moved the skipped share of new conversations from one in thirty to one in five. Round ten found whole scenarios where skipping is the rule: with the client's own prompt Haiku began 16 of 72 conversations of scenario 4 with `start`. The sentence on ids is in the server's instructions for that reason. The starter's other rules do not reach such a conversation.
-- **A hub named without its id.** `get` of a note prints the title of its hub and no id. An assistant that skipped `start` and has to write into that hub guesses a reference: 26 of 186 Haiku runs of scenario 4 in round ten had a call refused that way before they found the hub. The hub's id on that line, and a `next:` line that shows the write, are to be tried next.
 - **No search before a note is saved, on Opus.** In scenario 18 Opus called `start` and then saved the first note without a search, in 73 of 73 runs. The starter asks for the search. Nothing went wrong in this scenario, where no earlier note exists.
-- **The date deleted with the present.** In 9 of 186 Haiku runs of scenario 4 in round ten, "Forget what I told you about my sister's birthday present" also deleted the note with the date of the birthday.
+- **The date deleted with the present.** In 9 of 186 Haiku runs of scenario 4 in round ten, "Forget what I told you about my sister's birthday present" also deleted the note with the date of the birthday. A later count of the same runs found ten. In all ten the three deletes went out in one turn, so the reply of `delete` came too late to stop it. Six of them had read the notes with `get` first, as the description of `delete` asks; the search reply had already shown the full text. Nine of them had not called `start`. The one text all of them had read is the description of `delete`. Two sentences added there (round thirteen) took it from 8 of 72 to 1 of 72 runs with the client's own prompt. One in 72 is left.
 - **Which hub above gives the access.** `add (from a parent hub)` names neither the hub nor its owner. In round nine, 4 of 24 answers that rightly said "yes, you can add" named the wrong giver: Ben's own share in two, and Ben as the one who shared Ada's hub in two. Two of the four had called `start` and nothing else. The other two had listed the hubs, which shows where the hub is filed. In the second batch of round nine every answer named the hub above, and 5 of 12 Haiku answers got its owner wrong.
 - **Search misses on the subject.** In scenario 2, 10 of 18 searches before a write returned "no results" while a note about the same offsite existed. An assistant that searches before it writes then writes beside what is there. One miss of this kind is closed on main `8d2cb89`: `search("greenhouse gateway SD card replaced")` returned the hub and a private note on another matter, but not the note "Gateway" that `search("greenhouse gateway SD card")` found. A short title is now found inside a longer query. Its owner replayed the 1,876 searches of these trials against the change: 22 gain a result, "Gateway" 21 times and "Hive 3" once, and none loses one. The misses of scenario 2 are not among the gains, and no model has run on the change.
 - **A private note that steers the next one.** See round seven. Six of eleven conversations kept a project fact out of the shared hub because a private note in the search results asked for discretion on another matter.
@@ -720,6 +824,9 @@ Slips that the product did not cause and cannot prevent: a weekday invented for 
 - Hubs under hubs were run in rounds eight and nine only: one hub above, one or two owners, three scenarios. The false line of round eight was found by reading code, and the low access word of round nine by direct calls. Other replies may be true only for the cases the scenarios had. No model has seen a hub two levels down, a personal hub above, or an owner who only reads the hub above. Tests cover those, and no trial does.
 - One run per cell in the round tables. Repeated were scenarios 2, 3, 4 and 6 on Haiku, scenario 9 on Sonnet and scenario 14 on both. Several findings above did not show in single runs: the short forms of an address were refused in 3 of 12 runs, and Haiku said "can edit" in 2 of 9. Others may be waiting in the cells that were run once.
 - Each text change to tool output was tested on a patched copy of the server, in 4 to 10 runs, before its owner took it. The six changes after round six are on main and were run again there in round seven. The three changes of round nine were run from the branch, beside main, before the merge.
-- Rates move between batches. Two batches of twelve runs against the same server, ten minutes apart, had 0 and 3 skipped `start` in 36 new conversations each. A difference between rounds that ran at different times may be this and not the text.
+- Rates move between batches. Two batches of twelve runs against the same server, ten minutes apart, had 0 and 3 skipped `start` in 36 new conversations each. A difference between rounds that ran at different times may be this and not the text. In round thirteen two arms with the same texts, in the same batch, had 18 and 28 of 36.
 - The test of the two description sentences ran scenario 3 on Haiku only. Whether Sonnet, or another scenario that reads like one action, reacts to them is not known.
 - English only, and conversations of at most six turns.
+- Dates in UTC only. A date given to `since` starts at 00:00 UTC, and every account in the trials lived on UTC. For a person whose Monday begins some hours before or after UTC's, "since Monday" takes in or leaves out the edge of the day. Not run.
+- Notes of different ages were made by signing the setup records with a past time, in trial copies of the server only. What happens to a graph that really ages, months of notes, is not shown.
+- The gate on the first call is counted on Haiku. Sonnet called `start` first in almost every conversation of round twelve, and Opus ran only scenario 21.

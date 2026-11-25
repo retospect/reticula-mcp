@@ -20,7 +20,7 @@ def test_start_gives_a_fresh_account_the_starter_instruction_and_an_empty_graph_
     # the starter instruction itself, from the shipped file
     starter = bootstrap.starter_instruction()
     assert starter.text.strip() in out
-    assert "Reticula is a shared memory graph" in out
+    assert "Reticula is the person's own long-term memory" in out
     # nothing saved yet: say so and say what to do first
     assert "Your hubs: none yet." in out
     assert "Nothing is saved on this account yet" in out

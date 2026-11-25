@@ -250,11 +250,87 @@ Each statement about Tailscale below is one of two kinds. "Measured" was seen on
 
 What else to know:
 
-- Ports. A port other than 443 works only for assistants that connect from your own machines, such as Claude Code. Claude's custom connectors (claude.ai, the desktop and mobile apps) connect from Anthropic's servers and accept port 443 only: "Claude can't connect to a URL that specifies another port" (Claude support, "Get started with custom connectors using remote MCP", read on 2026-11-25). For those, run Reticula on a machine whose port 443 is free, or put a reverse proxy with a name of its own in front. On a machine that already uses Funnel on 443, a second service goes on 8443 or 10000, and `RETICULA_PUBLIC_URL` must then carry that port.
+- Ports. A port other than 443 works only for assistants that connect from your own machines, such as Claude Code. Claude's custom connectors (claude.ai, the desktop and mobile apps) connect from Anthropic's servers and accept port 443 only: "Claude can't connect to a URL that specifies another port" (Claude support, "Get started with custom connectors using remote MCP", read on 2026-11-25). For those, run Reticula on a machine whose port 443 is free, or give it a name of its own: a Tailscale node in a container, under [Tailscale Funnel from a container](#tailscale-funnel-from-a-container), or a reverse proxy. On a machine that already uses Funnel on 443, a second service goes on 8443 or 10000, and `RETICULA_PUBLIC_URL` must then carry that port.
 - Client addresses. Measured: in its HTTPS mode Funnel writes `X-Forwarded-For` itself and replaces a value sent by the client. A request with a made-up header was counted under the caller's real address. With `tailscaled` on the host this is the first row of the settings table under [A tunnel or proxy on the same host](#a-tunnel-or-proxy-on-the-same-host): trust the gateway address. Its TCP modes add no header (read from the Tailscale source, not measured): leave `RETICULA_TRUSTED_PROXIES` empty for those.
 - The `Host` header. Measured: Funnel passes the header on with its port, which is what `/mcp` expects when `RETICULA_PUBLIC_URL` carries the port.
-- Turning it off. To stop one tunnel, run its command again with `off` at the end. `tailscale funnel reset` clears the whole Funnel configuration of the machine, not one tunnel (both Tailscale documentation).
+- Turning it off. To stop one tunnel, run its command again with `off` at the end. Measured: a tunnel started with `sudo` needs `sudo` to turn off as well, for example `sudo tailscale funnel --https=8443 off`. After `sudo tailscale set --operator=$USER` once, your own user can change the configuration without `sudo` (that form was not run). `tailscale funnel reset` clears the whole Funnel configuration of the machine, not one tunnel (both Tailscale documentation).
 - `tailscale serve` is the same tunnel for the machines of your tailnet only, without the public internet. Tailscale's pages on Serve do not say whether it writes `X-Forwarded-For`, and it was not measured here. Set `RETICULA_TRUSTED_PROXIES` to the gateway address, run [Check the setting](#check-the-setting), and keep the value only if the table there says it is correct.
+
+### Tailscale Funnel from a container
+
+When port 443 of the machine is taken, [`compose.tailscale.yaml`](../deploy/compose.tailscale.yaml) adds a Tailscale node of its own in a container beside the server. The node has its own name, `<name>.<tailnet>.ts.net`, and its own port 443, which is what Claude's custom connectors need. Funnel on that node forwards to the server over the compose network. Nothing is published on the host, and Tailscale on the host is not needed and not touched.
+
+The container runs `tailscale/tailscale:v1.104.7` with userspace networking: no `NET_ADMIN`, no `/dev/net/tun`, no published port. Its identity is kept in the volume `reticula-tailscale`. The serve configuration is [`tailscale/serve.json`](../deploy/tailscale/serve.json): HTTPS on 443, everything proxied to `http://app:8787`, Funnel on.
+
+"Measured" below means one of two things. On the running instance of 2026-11-25: the whole list, from the sign-in to requests from outside the tailnet. On a throwaway stack without a sign-in: the container up and waiting, its restarts, and the files. "Tailscale documentation" was read on 2026-11-25 and not tried. "Tailscale source" is the code of version 1.104.7.
+
+1. In the admin console (Tailscale documentation, except where marked):
+
+   - MagicDNS on, and HTTPS certificates on: on the DNS page, "Enable HTTPS" under "HTTPS Certificates". Machine names and the tailnet's DNS name are then published in the public Certificate Transparency ledger, so choose a name that gives nothing away.
+   - The `funnel` node attribute for the new node, in the policy file on the "Access controls" page. By default it targets `autogroup:member`. A node signed in with a tag is not a member. Measured: such a node got no Funnel until its tag was added to the target, and the permission arrived within seconds of saving.
+
+   ```
+   "nodeAttrs": [
+     { "target": ["autogroup:member", "tag:server"], "attr": ["funnel"] }
+   ]
+   ```
+
+2. Add to `.env`:
+
+   ```
+   COMPOSE_FILE=compose.yaml:compose.tailscale.yaml
+   TS_HOSTNAME=<name>
+   TS_EXTRA_ARGS=--advertise-tags=tag:server
+   ```
+
+   `COMPOSE_FILE` makes every `docker compose` command of this guide include the Tailscale container. Measured with `docker compose config`: the services are `db`, `app` and `tailscale`, and without the line `db` and `app`. `TS_HOSTNAME` is the first part of the public name. Use the name the admin console shows for the node in the steps below.
+
+   The tag is optional. Use one that your policy file already has. Tailscale documentation: a tagged node has key expiry disabled by default. An untagged node's key expires after 180 days by default, and its connections then stop. On the "Machines" page, the menu of the node has "Disable Key Expiry".
+
+3. Start the container. This leaves the server container as it is (measured).
+
+   ```
+   docker compose up -d tailscale
+   docker compose logs tailscale
+   ```
+
+   The log has a link after the line `To authenticate, visit:`. Open it and sign in. Measured: the sign-in worked the first time. A start that gets no sign-in ends after 15 minutes (`TS_BOOT_TIMEOUT` in the file), and the container starts again with a new link: 24 times in 6 hours on the throwaway stack. With the image's default of 60 seconds there was a new link every minute.
+
+   Instead of the link, an auth key can be put in `.env` as `TS_AUTHKEY`. It is used for the first sign-in only. This was not run. Tailscale documentation: keys are made on the "Keys" page with "Generate auth key" and last at most 90 days, and a node stays signed in after its key expires. Do not use an ephemeral key: such a node comes back as a new node after a restart.
+
+   Measured on the throwaway stack: the identity survives `docker compose up -d --force-recreate tailscale`, because it lives in the volume. `docker compose down -v` deletes it, and the database with it.
+
+4. Check that the node may use Funnel.
+
+   ```
+   docker compose exec tailscale tailscale status --json
+   ```
+
+   The output must have the key `funnel` under `Self`, `CapMap`. Measured: without the node attribute, `tailscale funnel status` in the container still said "Funnel on", and the public name had no DNS record. Tailscale documentation: a new public DNS record can take up to 10 minutes.
+
+5. Set the public URL and trust the container. Every assistant that is connected has to be added again after this step: the server answers for the new name only. Measured: Claude Code reported that the protected resource does not match, at once.
+
+   ```
+   RETICULA_PUBLIC_URL=https://<name>.<tailnet>.ts.net
+   RETICULA_TRUSTED_PROXIES=172.31.88.250
+   ```
+
+   `172.31.88.250` is the fixed address of the Tailscale container. With another `RETICULA_SUBNET`, set `RETICULA_TAILSCALE_ADDRESS` in `.env` to an address high in that subnet, and trust that address instead. Then apply:
+
+   ```
+   docker compose up -d --wait
+   ```
+
+6. Check the result, from a machine outside the tailnet.
+
+   ```
+   curl -s https://<name>.<tailnet>.ts.net/healthz
+   ../scripts/smoke https://<name>.<tailnet>.ts.net
+   ```
+
+   Measured: `/healthz` answered with status 200 and a valid certificate, and `/mcp` without a token with status 401. The smoke test was not run through the node yet. It must print 14 lines that start with `ok`, and the `authorize` line must end with `cookie Secure`. It signs up a throwaway account, so with sign-ups closed give it an existing account with `--email` and the password in `SMOKE_PASSWORD`. Then run [Check the setting](#check-the-setting). Measured: before the container was trusted, the request log said `from=172.31.88.250` for every request. After, it gave the caller's public address. Tailscale source: the proxy replaces `X-Forwarded-For` with the address the request came from, and passes the `Host` header on as the client sent it.
+
+To take the public name down, run `docker compose stop tailscale`. This was not run. The node's identity stays in the volume for the next `docker compose up -d`.
 
 ## Limits
 
@@ -674,13 +750,19 @@ Mint a token for a client that cannot do the sign-in flow. A token here is a bea
 docker compose exec app reticula-mcp token --email someone@example.com --label laptop --ttl-days 90
 ```
 
-Claude Code is a client that takes such a header. This form of its command was run against a running instance on 2026-11-25. `reticula` is the name the server gets in Claude Code, and the address is the one the client reaches the server under, with `/mcp` at the end.
+Claude Code is a client that takes such a header, and this is how it connects on a machine without a browser. `reticula` is the name the server gets in Claude Code, and the address is the one the client reaches the server under, with `/mcp` at the end. The label says where the token is used.
 
 ```
-claude mcp add --transport http reticula http://127.0.0.1:8787/mcp --header "Authorization: Bearer <token>"
+docker compose exec app reticula-mcp token --email someone@example.com --label "<where it is used>" --ttl-days 90
+claude mcp add --transport http reticula https://<name>.<tailnet>.ts.net/mcp --header "Authorization: Bearer <token>"
+claude mcp list
 ```
 
-List what an account has. Connected assistants come first, operator tokens minted with `reticula-mcp token` in a second block. Each row has an id.
+Measured on 2026-11-25, on a machine without a browser and through the public address of the Tailscale node of [Tailscale Funnel from a container](#tailscale-funnel-from-a-container): `claude mcp list` said `Connected`. The same command with `http://127.0.0.1:8787/mcp` was run on the machine of the server. Claude Code keeps the header, token included, in plain text in its configuration for the scope the server was added in. Its documentation, read on 2026-11-25: the default scope `local` and the scope `user` are kept in `~/.claude.json`, and `project` in `.mcp.json` in the project, which is meant to be committed. Do not add a server with a token with `--scope project`.
+
+Claude Code 2.1.323 also has `claude mcp login --no-browser <name>`: it prints the sign-in address to open on another machine, and asks for the address the browser was sent back to. That was not tried.
+
+List what an account has. Connected assistants come first, operator tokens minted with `reticula-mcp token` in a second block headed `operator tokens`, with the expiry of each. Each row has an id.
 
 ```
 docker compose exec app reticula-mcp connections list --email someone@example.com
@@ -772,6 +854,7 @@ A search compares the query with every vector the account may read, as long as t
 | Embedding model | the volume `reticula_reticula-models`, downloaded again when missing |
 | Settings and the database password | `deploy/.env`, which git ignores |
 | Backups written by `backup.sh` | `deploy/backups/`, encrypted. The key that opens them is not on this machine |
+| The identity of the Tailscale node of `compose.tailscale.yaml` | Docker volume `reticula_reticula-tailscale` |
 | Shipped instruction texts | inside the installed package; copied into the database when migrations run |
 
 ## Without Docker

@@ -7,7 +7,9 @@ whose title or tag is the query (``_exact``).
 Candidate rule (the only visibility rule here): a node is a candidate only if it
 is in ``current_nodes(viewer)`` (or ``readable_nodes(viewer)`` with
 ``include_superseded``). Every leg embeds that subquery, so no leg can rank,
-count or surface anything the viewer may not read.
+count or surface anything the viewer may not read. A search inside given ids
+(``only_ids``) asks the same function once about those ids, and every leg then
+embeds the ids that passed (see ``scope``).
 
 The vector leg is optional by design. It runs only when the embedder can
 answer without a long wait (``embedder.is_ready``); otherwise the search asks
@@ -21,6 +23,7 @@ from __future__ import annotations
 import logging
 import re
 import string
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -49,6 +52,7 @@ from reticula_mcp.search.embedder import (
     warm,
 )
 from reticula_mcp.search.rank_fusion import reciprocal_rank_fusion
+from reticula_mcp.search.rows import visible_subset
 
 log = logging.getLogger("reticula_mcp.search")
 
@@ -148,6 +152,9 @@ SEMANTIC_ON = "on"  # the vector leg ran
 SEMANTIC_LOADING = "loading"  # the model is still loading: keywords only
 SEMANTIC_OFF = "off"  # no model, or it failed: keywords only
 
+# A search inside given ids: the ids that passed the check of ``scope``.
+ONLY_IDS_SQL = "n.id = ANY(%(only_ids)s::bigint[])"
+
 
 def subtree_sql() -> str:
     """All members of the hub subtree, as this viewer may see it: the hub's
@@ -215,12 +222,18 @@ def scope(
     hub_node_id: int | None,
     kind: str | None,
     include_superseded: bool,
+    only_ids: Sequence[int] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """What a search or a listing may return at all, as a condition on ``node
     n`` and its parameters: what the viewer may read (without the notes a
     readable newer note replaces, unless ``include_superseded``), of ``kind``
     if given, no debug note unless that kind is asked for, and inside the hub
     ``hub_node_id`` if given (:func:`subtree_sql`).
+
+    ``only_ids``: nothing outside these node ids. The caller need not have
+    checked them: which of them the viewer may read (and which are current) is
+    asked here, once, and the condition then names the ids that passed, so the
+    statements built on it do not ask again. An empty list finds nothing.
 
     The params always hold ``viewer`` (account id), ``person`` (person id),
     ``kind`` and ``hubs`` (``permissions.readable_hub_ids``, for statements
@@ -229,7 +242,7 @@ def scope(
     """
     visible = readable_nodes_sql if include_superseded else current_nodes_sql
     where = [
-        f"n.id IN ({visible('%(viewer)s')})",
+        f"n.id IN ({visible('%(viewer)s')})" if only_ids is None else ONLY_IDS_SQL,
         "n.tombstoned_at IS NULL",
         "(%(kind)s::text IS NULL OR n.kind = %(kind)s::text)",
         # debug notes only when asked for by kind
@@ -241,6 +254,10 @@ def scope(
         "kind": kind,
         "hubs": readable_hub_ids(conn, viewer),
     }
+    if only_ids is not None:
+        params["only_ids"] = sorted(
+            visible_subset(conn, viewer, list(only_ids), current=not include_superseded)
+        )
     if hub_node_id is not None:
         where.append(f"n.id IN ({subtree_sql()})")
         params["hub"] = hub_node_id
@@ -905,18 +922,27 @@ def hybrid_search(
     limit: int = 10,
     include_superseded: bool = False,
     settings: Settings | None = None,
+    only_ids: Sequence[int] | None = None,
 ) -> Found:
     """Ranked hits (best first) among the nodes ``viewer`` may read, whether
     the vector leg took part, and, when the hits are few, the notes that have
     only some of the query's words (``Found.partial``, see ``_partial``) and
     how many more of those there are (``Found.more``). Hits and partial
-    matches together are at most ``limit``."""
+    matches together are at most ``limit``.
+
+    ``only_ids``: the search runs inside these node ids only (see
+    :func:`scope`); hits, partial matches and ``Found.more`` are all among
+    them. For a caller that has its own set, such as the notes changed since
+    a day: asking for many matches and dropping those outside the set misses
+    what ranks below the cut. How common a word is (``_partial``) is counted
+    among the ids, as it is counted inside a hub with ``hub_node_id``."""
     where, params = scope(
         conn,
         viewer,
         hub_node_id=hub_node_id,
         kind=kind,
         include_superseded=include_superseded,
+        only_ids=only_ids,
     )
     pool = max(POOL_MIN, limit * 5)
     words, minus = counted_words(conn, query)
