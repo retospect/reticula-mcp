@@ -9,6 +9,7 @@ passes when the defence holds. The one attack that worked is covered in
 from __future__ import annotations
 
 import time
+from typing import Any
 
 import pytest
 
@@ -388,8 +389,13 @@ def test_ok_fuzzed_queries_never_raise_or_stall(conn, make_account):
         for _ in range(100)
     ]
     assert all(sum(p in q for q in queries) >= 3 for p in pieces)
-    variants = ({}, {"kind": "note"}, {"hub": hub}, {"include_superseded": True})
-    worst = (0.0, "", {})
+    variants: tuple[dict[str, Any], ...] = (
+        {},
+        {"kind": "note"},
+        {"hub": hub},
+        {"include_superseded": True},
+    )
+    worst: tuple[float, str, dict[str, Any]] = (0.0, "", {})
     for q in queries:
         for kw in variants:
             started = time.perf_counter()
