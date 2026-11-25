@@ -200,3 +200,32 @@ def test_a_private_note_is_withdrawn_only_for_its_author(conn, make_account):
     with pytest.raises(ReticulaError) as exc:
         handlers.get(conn, bob, ref=note)
     assert exc.value.code == "NotFound"
+
+
+# ------------------------------------------------- the hub a result is shown in
+
+
+def test_a_result_names_only_a_hub_the_viewer_may_read(conn, make_account):
+    """A note filed in two hubs, the first of them not shared. The one who reads
+    it through the second hub is shown the second and nothing of the first."""
+    alice, bob = make_account(handle="alice"), make_account(handle="bob")
+    ledger = address(graph.put(conn, alice, kind="hub", title="Ledger"))
+    kiln = address(graph.put(conn, alice, kind="hub", title="Kiln"))
+    note = address(
+        graph.put(conn, alice, text="cone 6 glaze fires at 1222 C", hub=ledger)
+    )
+    graph.link(conn, alice, ref=note, to=kiln, rel="part-of")
+    graph.share(conn, alice, hub=kiln, person="@bob", mode="read")
+
+    hers = handlers.search(conn, alice, query="glaze")
+    assert '· in "Ledger"' in hers  # the hub it was filed in first
+
+    for his in (
+        handlers.search(conn, bob, query="glaze"),
+        handlers.search(conn, bob, query="", kind="note"),
+        handlers.get(conn, bob, ref=note),
+        handlers.get(conn, bob, ref=kiln),
+    ):
+        assert "1222" in his and "Kiln" in his
+        assert "Ledger" not in his and ledger not in his
+    assert '· in "Kiln"' in handlers.search(conn, bob, query="glaze")

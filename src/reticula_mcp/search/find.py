@@ -33,7 +33,12 @@ from reticula_mcp.content.bootstrap import SHIPPED_TAG
 from reticula_mcp.db.pool import Conn
 from reticula_mcp.errors import ReticulaError
 from reticula_mcp.graph.paper import normalize_ext_id
-from reticula_mcp.permissions import current_nodes_sql, readable_nodes_sql
+from reticula_mcp.permissions import (
+    current_nodes_sql,
+    readable_hub_ids,
+    readable_hub_sql,
+    readable_nodes_sql,
+)
 from reticula_mcp.search import index
 from reticula_mcp.search.embedder import (
     Embedder,
@@ -144,9 +149,14 @@ SEMANTIC_LOADING = "loading"  # the model is still loading: keywords only
 SEMANTIC_OFF = "off"  # no model, or it failed: keywords only
 
 
-def _subtree(viewer_sql: str) -> str:
+def subtree_sql() -> str:
     """All members of the hub subtree, as this viewer may see it: the hub's
-    members, and (transitively) the members of every sub-hub.
+    members, and (transitively) the members of every sub-hub. A query of one
+    column, ``node_id``, to embed as ``n.id IN (<this>)``.
+
+    It reads three parameters, all of which :func:`scope` puts into its
+    params when a hub is given: ``hub`` (the hub's node id), ``person`` (the
+    viewer's person id) and ``hubs`` (``permissions.readable_hub_ids``).
 
     The walk goes only through sub-hubs the viewer can read, and counts only
     the filings the viewer may see (not withdrawn; made for the hub's readers,
@@ -165,7 +175,7 @@ def _subtree(viewer_sql: str) -> str:
             JOIN node h ON h.id = m.node_id AND h.kind = 'hub'
             WHERE NOT m.withdrawn
               AND (m.audience = 'hub' OR m.author = %(person)s)
-              AND h.id IN ({readable_nodes_sql(viewer_sql)})
+              AND {readable_hub_sql("h.id")}
         )
         SELECT m.node_id FROM membership m
         WHERE NOT m.withdrawn
@@ -198,13 +208,25 @@ class Found:
     more: int = 0  # notes near the viewer like those in ``partial``, not in it
 
 
-def _scope(
+def scope(
+    conn: Conn,
     viewer: Account,
     *,
     hub_node_id: int | None,
     kind: str | None,
     include_superseded: bool,
 ) -> tuple[str, dict[str, Any]]:
+    """What a search or a listing may return at all, as a condition on ``node
+    n`` and its parameters: what the viewer may read (without the notes a
+    readable newer note replaces, unless ``include_superseded``), of ``kind``
+    if given, no debug note unless that kind is asked for, and inside the hub
+    ``hub_node_id`` if given (:func:`subtree_sql`).
+
+    The params always hold ``viewer`` (account id), ``person`` (person id),
+    ``kind`` and ``hubs`` (``permissions.readable_hub_ids``, for statements
+    that test a hub with ``permissions.readable_hub_sql``), and ``hub`` when a
+    hub is given. A caller adds its own conditions and parameters to both.
+    """
     visible = readable_nodes_sql if include_superseded else current_nodes_sql
     where = [
         f"n.id IN ({visible('%(viewer)s')})",
@@ -217,9 +239,10 @@ def _scope(
         "viewer": viewer.id,
         "person": viewer.person_id,
         "kind": kind,
+        "hubs": readable_hub_ids(conn, viewer),
     }
     if hub_node_id is not None:
-        where.append(f"n.id IN ({_subtree('%(viewer)s')})")
+        where.append(f"n.id IN ({subtree_sql()})")
         params["hub"] = hub_node_id
     return " AND ".join(where), params
 
@@ -777,10 +800,9 @@ def _partial(
                   AND w.author = %(person)s)
         ), used AS (
             -- and can still read: that a note stands in a hub the viewer has
-            -- lost is not theirs to see. Who may read is worked out only when
-            -- one of the hubs is somebody else's.
+            -- lost is not theirs to see
             SELECT m.id FROM mine m
-            WHERE m.own OR m.id IN ({readable_nodes_sql("%(viewer)s")})
+            WHERE m.own OR {readable_hub_sql("m.id")}
         ), few AS (
             -- per word: no more than PARTIAL_COMMON of these notes have it
             SELECT ARRAY[{few}] AS few FROM c
@@ -851,7 +873,8 @@ def list_scope(
     """What a search without words lists: everything in scope that the viewer
     may read, newest first; when hubs are asked for, the viewer's own before the
     others. Returns the first ``limit`` ids and how many there are in all."""
-    where, params = _scope(
+    where, params = scope(
+        conn,
         viewer,
         hub_node_id=hub_node_id,
         kind=kind,
@@ -888,7 +911,8 @@ def hybrid_search(
     only some of the query's words (``Found.partial``, see ``_partial``) and
     how many more of those there are (``Found.more``). Hits and partial
     matches together are at most ``limit``."""
-    where, params = _scope(
+    where, params = scope(
+        conn,
         viewer,
         hub_node_id=hub_node_id,
         kind=kind,

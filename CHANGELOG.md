@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `get` and `search` are faster in a big account. A call now works out once which hubs the account may read. Before, each statement that showed a hub or walked through one worked it out again. At 30,000 notes `get` of a note takes 50 ms instead of 104, `get` of a note that stands three hubs deep in two places 53 ms instead of 224, and `get` of a hub 224 ms instead of 329. A search inside a hub (`hub=`) takes a quarter less time; a search without `hub=` gains little. What a call shows is unchanged.
+- Migrations: `0204_readable_hubs` adds the SQL function `readable_hubs` and redefines `readable_nodes` on top of it. No table, no index and no row is changed, and who may read which note is the same before and after.
+
 ## 0.2.0 (2026-11-25)
 
 - Request log: a refused sign-in says why in a fixed word, for example `reason="signin: bad_credentials"`, `signin: throttled`, `signin: signup_rate` or `signin: link_gone`. A request refused for its `Host` or `Origin` header has `reason="Invalid Host header"` or `reason="Invalid Origin header"` on its line. The other lines of the log, such as a library's warning, now begin with the time in UTC.

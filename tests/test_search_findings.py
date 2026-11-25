@@ -373,8 +373,8 @@ def test_an_empty_listing_and_a_wrong_kind_say_so(conn, make_account):
 
 def keyword_matches(conn, viewer, query: str) -> list[str]:
     """The addresses the keyword leg alone returns for ``query``, best first."""
-    where, params = find._scope(
-        viewer, hub_node_id=None, kind=None, include_superseded=False
+    where, params = find.scope(
+        conn, viewer, hub_node_id=None, kind=None, include_superseded=False
     )
     ids = [i for i, _ in find._lexical(conn, query, where, params, 50)]
     found = conn.execute(
@@ -647,8 +647,8 @@ def test_a_passage_cannot_forge_a_line(conn, reading_group):
 
 def title_matches(conn, viewer, query: str) -> list[str]:
     """The addresses the title leg alone returns for ``query``, best first."""
-    where, params = find._scope(
-        viewer, hub_node_id=None, kind=None, include_superseded=False
+    where, params = find.scope(
+        conn, viewer, hub_node_id=None, kind=None, include_superseded=False
     )
     ids = [i for i, _ in find._trigram(conn, query, where, params, 50)]
     found = conn.execute(
@@ -821,8 +821,8 @@ def test_titles_are_not_looked_for_inside_a_pasted_text(conn, greenhouse):
 def every_title(conn, viewer, query: str) -> set[str]:
     """What the title leg has to find: every readable title compared with
     the query, without the leg's indexes and bounds."""
-    where, params = find._scope(
-        viewer, hub_node_id=None, kind=None, include_superseded=False
+    where, params = find.scope(
+        conn, viewer, hub_node_id=None, kind=None, include_superseded=False
     )
     words, _ = find.counted_words(conn, query)
     args = {

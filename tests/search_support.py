@@ -98,10 +98,33 @@ class SqlSpy:
     def __init__(self) -> None:
         self.statements: list[str] = []
         self.rows = 0
+        self.rows_by: list[int] = []  # rows read, per statement
+        self._last: dict[int, int] = {}  # cursor -> its last statement
 
     def reset(self) -> None:
         self.statements.clear()
         self.rows = 0
+        self.rows_by.clear()
+        self._last.clear()
+
+    def rows_of(self, part: str) -> int:
+        """The rows read back from the statements that contain ``part``."""
+        return sum(
+            n
+            for sql, n in zip(self.statements, self.rows_by, strict=True)
+            if part in sql
+        )
+
+    def _ran(self, cursor: Any, query: Any) -> None:
+        self._last[id(cursor)] = len(self.statements)
+        self.statements.append(str(query))
+        self.rows_by.append(0)
+
+    def _read(self, cursor: Any, rows: int) -> None:
+        self.rows += rows
+        at = self._last.get(id(cursor))
+        if at is not None:
+            self.rows_by[at] += rows
 
 
 def spy_on_sql(monkeypatch: pytest.MonkeyPatch) -> SqlSpy:
@@ -115,27 +138,27 @@ def spy_on_sql(monkeypatch: pytest.MonkeyPatch) -> SqlSpy:
     iterate = psycopg.Cursor.__iter__
 
     def counted_execute(self: Any, query: Any, *args: Any, **kwargs: Any) -> Any:
-        spy.statements.append(str(query))
+        spy._ran(self, query)
         return execute(self, query, *args, **kwargs)
 
     def counted_fetchone(self: Any) -> Any:
         row = fetchone(self)
-        spy.rows += row is not None
+        spy._read(self, int(row is not None))
         return row
 
     def counted_fetchmany(self: Any, *args: Any, **kwargs: Any) -> Any:
         rows = fetchmany(self, *args, **kwargs)
-        spy.rows += len(rows)
+        spy._read(self, len(rows))
         return rows
 
     def counted_fetchall(self: Any) -> Any:
         rows = fetchall(self)
-        spy.rows += len(rows)
+        spy._read(self, len(rows))
         return rows
 
     def counted_iter(self: Any) -> Any:
         for row in iterate(self):
-            spy.rows += 1
+            spy._read(self, 1)
             yield row
 
     monkeypatch.setattr(psycopg.Cursor, "execute", counted_execute)
