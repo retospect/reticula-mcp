@@ -12,6 +12,7 @@ and goes first in ``routes`` (so it wins over any SDK route of the same path):
 
     /.well-known/oauth-authorization-server    discovery (advertises auth method none)
     /.well-known/oauth-protected-resource[/mcp] discovery
+    /authorize                                 SDK handler, wrapped (caller address)
     /register                                  dynamic client registration, public clients
     /revoke                                    RFC 7009 for public clients
     /signin                                    the one sign-in / create-account page
@@ -27,6 +28,10 @@ page), ``metadata``, ``throttle`` + ``netaddr`` (rate limits, client address),
 
 from __future__ import annotations
 
+import ipaddress
+import logging
+from urllib.parse import urlsplit
+
 from mcp.server.auth.settings import (
     AuthSettings,
     ClientRegistrationOptions,
@@ -34,7 +39,7 @@ from mcp.server.auth.settings import (
 )
 from pydantic import AnyHttpUrl
 
-from reticula_mcp.auth import config, metadata, registration, signin
+from reticula_mcp.auth import authorize, config, metadata, registration, signin
 from reticula_mcp.auth.provider import DEFAULT_CLIENT_ID, ReticulaProvider
 from reticula_mcp.config import Settings
 from reticula_mcp.db.pool import Database
@@ -42,10 +47,44 @@ from reticula_mcp.seams import AuthWiring
 
 __all__ = ["DEFAULT_CLIENT_ID", "AuthWiring", "build_auth"]
 
+log = logging.getLogger("reticula_mcp.auth")
+
+
+def reached_through_a_proxy(settings: Settings) -> bool:
+    """True when the public URL says clients do not connect to us directly."""
+    parts = urlsplit(settings.base_url)
+    if parts.scheme == "https":
+        return True
+    host = parts.hostname or ""
+    if host == "localhost":
+        return False
+    try:
+        return not ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return True
+
+
+def warn_if_proxy_untrusted(settings: Settings) -> bool:
+    """Log one loud warning when every client would share one throttle bucket."""
+    if settings.trusted_proxies or not reached_through_a_proxy(settings):
+        return False
+    log.warning(
+        "RETICULA_PUBLIC_URL is %s but RETICULA_TRUSTED_PROXIES is empty: behind a"
+        " reverse proxy or tunnel every client appears to come from the proxy, so"
+        " ALL clients share ONE rate-limit bucket (sign-ups, failed sign-ins,"
+        " client registrations, pending authorizations): a handful of requests from"
+        " anyone locks everyone else out. Set RETICULA_TRUSTED_PROXIES to the"
+        " proxy's address (e.g. 127.0.0.1 for a local tunnel).",
+        settings.base_url,
+    )
+    return True
+
 
 def build_auth(settings: Settings, db: Database) -> AuthWiring:
+    warn_if_proxy_untrusted(settings)
     provider = ReticulaProvider(settings, db)
     routes = [
+        *authorize.routes(settings, provider),
         *metadata.routes(settings),
         *registration.routes(settings, db, provider),
         *signin.routes(settings, db, provider),

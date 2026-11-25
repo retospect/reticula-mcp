@@ -13,6 +13,7 @@ those paths do their work, leave the ``with`` block, then raise.
 
 from __future__ import annotations
 
+import contextvars
 import re
 import secrets
 from typing import Any
@@ -41,6 +42,14 @@ DEFAULT_CLIENT_ID = "reticula-token"  # operator tokens (CLI, tests) have no cli
 
 _CHALLENGE = re.compile(r"[A-Za-z0-9_-]{43}\Z")
 _SHAPE = re.compile(r"[A-Za-z0-9_-]{20,200}\Z")
+
+
+#: The throttle bucket of the browser that called /authorize, set by
+#: ``auth/authorize.py`` around the SDK handler (which does not pass the request
+#: on to the provider).
+caller_bucket_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "reticula_caller_bucket", default=None
+)
 
 
 def sha256_hex(text: str) -> str:
@@ -144,15 +153,21 @@ class ReticulaProvider(
             )
         if params.state is not None and len(params.state) > config.MAX_STATE_LENGTH:
             raise AuthorizeError("invalid_request", "state is too long")
-        handle = await anyio.to_thread.run_sync(self._park, client.client_id, params)
+        handle = await anyio.to_thread.run_sync(
+            self._park, client.client_id, params, caller_bucket_var.get()
+        )
         if handle is None:
             raise AuthorizeError(
                 "temporarily_unavailable", "too many pending sign-ins; retry later"
             )
         return f"{self.settings.base_url}/signin?req={handle}"
 
-    def _park(self, client_id: str, params: AuthorizationParams) -> str | None:
-        """The page handle, or None when the client has too many parked requests."""
+    def _park(
+        self, client_id: str, params: AuthorizationParams, bucket: str | None
+    ) -> str | None:
+        """The page handle, or None when the client or the address has too many
+        parked requests (the address cap stops one caller from using up the
+        client's quota, which every user of a public client shares)."""
         handle = secrets.token_urlsafe(32)
         with self.db.connection() as conn:
             grants.purge_stale(conn)
@@ -162,9 +177,15 @@ class ReticulaProvider(
             ).fetchone()
             if row and row["n"] >= config.MAX_PENDING_PER_CLIENT:
                 return None
+            if bucket is not None:
+                row = conn.execute(
+                    "SELECT count(*) AS n FROM oauth_pending WHERE ip = %s", (bucket,)
+                ).fetchone()
+                if row and row["n"] >= config.MAX_PENDING_PER_ADDRESS:
+                    return None
             conn.execute(
-                "INSERT INTO oauth_pending (id, client_id, params, expires_at)"
-                " VALUES (%s, %s, %s, now() + %s)",
+                "INSERT INTO oauth_pending (id, client_id, params, expires_at, ip)"
+                " VALUES (%s, %s, %s, now() + %s, %s)",
                 (
                     sha256_hex(handle),
                     client_id,
@@ -178,6 +199,7 @@ class ReticulaProvider(
                         }
                     ),
                     config.PENDING_TTL,
+                    bucket,
                 ),
             )
         return handle
@@ -360,7 +382,9 @@ class ReticulaProvider(
                 "SELECT account_id, grant_id, scopes, resource,"
                 " extract(epoch FROM expires_at) AS exp FROM oauth_token"
                 " WHERE token_hash = %s AND kind = 'refresh' AND client_id = %s"
-                " AND revoked_at IS NULL AND expires_at > now()",
+                " AND revoked_at IS NULL AND expires_at > now()"
+                " AND EXISTS (SELECT 1 FROM oauth_grant g"
+                "   WHERE g.grant_id = oauth_token.grant_id AND g.revoked_at IS NULL)",
                 (sha256_hex(raw), client_id),
             ).fetchone()
         if row is None or not row["grant_id"]:
@@ -392,7 +416,19 @@ class ReticulaProvider(
     def _exchange_refresh(
         self, client_id: str, token: StoredRefresh, scopes: list[str]
     ) -> OAuthToken | None:
+        replayed = False
         with self.db.connection() as conn:
+            # The grant row is authoritative and is locked FIRST (revoking
+            # updates it first), so a rotation and a revocation serialise: the
+            # rotation either sees the grant revoked and refuses, or it commits
+            # its new pair before the revocation proceeds, and the revocation's
+            # next statement sees and revokes that pair.
+            grant = conn.execute(
+                "SELECT revoked_at FROM oauth_grant WHERE grant_id = %s FOR SHARE",
+                (token.grant_id,),
+            ).fetchone()
+            if grant is None or grant["revoked_at"] is not None:
+                return None
             row = conn.execute(
                 "SELECT id, label, consumed_at, scopes, resource FROM oauth_token"
                 " WHERE token_hash = %s AND kind = 'refresh' AND client_id = %s"
@@ -403,24 +439,31 @@ class ReticulaProvider(
                 return None
             if row["consumed_at"] is not None:
                 # A rotated refresh token came back: someone holds a stale copy.
-                # Kill the whole grant (committed on leaving the block).
+                replayed = True
+            else:
+                account = accounts.get_account(conn, token.account_id)
+                if account is None or account.status not in ("active", "provisional"):
+                    return None
+                conn.execute(
+                    "UPDATE oauth_token SET consumed_at = now() WHERE id = %s",
+                    (row["id"],),
+                )
+                return grants.issue_pair(
+                    conn,
+                    account_id=account.id,
+                    client_id=client_id,
+                    grant_id=token.grant_id,
+                    label=row["label"] or "an assistant",
+                    scopes=[s for s in scopes if s in row["scopes"]]
+                    or list(row["scopes"]),
+                    resource=row["resource"],
+                )
+        if replayed:
+            # Kill the whole grant, in its own transaction: the share lock above
+            # is released, so two concurrent replays cannot deadlock upgrading it.
+            with self.db.connection() as conn:
                 grants.revoke_grant_key(conn, token.grant_id)
-                return None
-            account = accounts.get_account(conn, token.account_id)
-            if account is None or account.status not in ("active", "provisional"):
-                return None
-            conn.execute(
-                "UPDATE oauth_token SET consumed_at = now() WHERE id = %s", (row["id"],)
-            )
-            return grants.issue_pair(
-                conn,
-                account_id=account.id,
-                client_id=client_id,
-                grant_id=token.grant_id,
-                label=row["label"] or "an assistant",
-                scopes=[s for s in scopes if s in row["scopes"]] or list(row["scopes"]),
-                resource=row["resource"],
-            )
+        return None
 
     # --- bearer tokens ---------------------------------------------------------
 

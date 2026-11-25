@@ -48,9 +48,19 @@ def cookie_name(handle: str) -> str:
     return "rc_" + sha256_hex(handle)[:16]
 
 
-def _form(raw: bytes) -> dict[str, str]:
-    """First value of each field (at most 12 fields, 2 KiB per value)."""
-    parsed = parse_qs(raw.decode("utf-8", "replace"), max_num_fields=12)
+def _form(raw: bytes) -> dict[str, str] | None:
+    """First value of each field (2 KiB per value), or None for a malformed form.
+
+    Malformed: more than 12 fields, or a NUL byte anywhere (PostgreSQL text
+    cannot hold one, and no honest browser sends one).
+    """
+    text = raw.decode("utf-8", "replace")
+    try:
+        parsed = parse_qs(text, max_num_fields=12)
+    except ValueError:
+        return None
+    if any("\x00" in k or any("\x00" in v for v in vs) for k, vs in parsed.items()):
+        return None
     return {k: v[0][:2048] for k, v in parsed.items() if v}
 
 
@@ -85,6 +95,7 @@ def routes(settings: Settings, db: Database, provider: ReticulaProvider) -> list
             client_name=client.client_name or "an assistant",
             redirect_uri=pending["params"]["redirect_uri"],
             signups_open=settings.signup == "open",
+            known_hosts=config.known_clients(settings),
             error=error,
             email=email,
             handle_value=handle_value,
@@ -157,29 +168,41 @@ def routes(settings: Settings, db: Database, provider: ReticulaProvider) -> list
         password: str,
         fail: Any,
     ) -> Response:
-        email_key = email.lower()[: config.MAX_EMAIL_LENGTH]
-        if throttle.locked(
+        # The counter is per (e-mail, address): someone elsewhere cannot lock
+        # the owner out by guessing. The attempt is recorded BEFORE the argon2
+        # check, under advisory locks on both keys, and committed, so parallel
+        # guesses see each other (check-then-verify-then-record let 24 parallel
+        # requests through a limit of 6). A success takes its own record back.
+        # The pooled connection is held during the argon2 check exactly as
+        # accounts.authenticate needs it; the locks are not (transaction ends here).
+        email_key = f"{email.lower()[: config.MAX_EMAIL_LENGTH]}|{bucket}"
+        provisional = throttle.acquire_many(
             conn,
-            throttle.SIGNIN_EMAIL,
-            email_key,
-            config.FAILURES_PER_EMAIL,
-            config.FAILURE_WINDOW,
-        ) or throttle.locked(
-            conn,
-            throttle.SIGNIN_IP,
-            bucket,
-            config.FAILURES_PER_IP,
-            config.FAILURE_WINDOW,
-        ):
+            [
+                (
+                    throttle.SIGNIN_EMAIL,
+                    email_key,
+                    config.FAILURES_PER_EMAIL,
+                    config.FAILURE_WINDOW,
+                ),
+                (
+                    throttle.SIGNIN_IP,
+                    bucket,
+                    config.FAILURES_PER_IP,
+                    config.FAILURE_WINDOW,
+                ),
+            ],
+        )
+        conn.commit()
+        if provisional is None:
             return fail("throttled", 429)
         account = None
         if email and password and len(password) <= config.MAX_PASSWORD_LENGTH:
             account = accounts.authenticate(conn, email, password)
         if account is None:
-            throttle.record(conn, throttle.SIGNIN_EMAIL, email_key)
-            throttle.record(conn, throttle.SIGNIN_IP, bucket)
             throttle.purge(conn)
             return fail("bad_credentials", 401)
+        throttle.forget(conn, provisional)
         conn.execute(
             "DELETE FROM auth_event WHERE kind = %s AND subject = %s",
             (throttle.SIGNIN_EMAIL, email_key),
@@ -271,6 +294,10 @@ def routes(settings: Settings, db: Database, provider: ReticulaProvider) -> list
                 "<!doctype html><title>Bad request</title><p>Bad request.</p>", 415
             )
         form = _form(raw)
+        if form is None:
+            return page.respond(
+                "<!doctype html><title>Bad request</title><p>Bad request.</p>", 400
+            )
         cookie = request.cookies.get(cookie_name(form.get("req", "")))
         bucket = caller_bucket(request, settings)
 
