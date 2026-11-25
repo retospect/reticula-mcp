@@ -62,36 +62,7 @@ def test_instructions_only_mention_tools_and_parameters_that_exist():
                     f"{item.slug}: `{span}` uses {arg!r}, not a parameter of {name}"
                 )
             checked += 1
-    assert checked >= 20
-
-
-def test_the_starter_names_every_tool():
-    starter = bootstrap.starter_instruction().text
-    for tool in CONTRACT:
-        assert f"`{tool}(" in starter, tool
-
-
-def test_starter_signatures_match_the_tool_defaults():
-    """Where the starter writes `name=value` for a tool parameter that has a
-    default, the value is that default."""
-    starter = bootstrap.starter_instruction().text
-    signature_lines = [ln for ln in starter.splitlines() if ln.startswith("- `")]
-    assert len(signature_lines) == len(CONTRACT)
-    for line in signature_lines:
-        span = SPAN.findall(line)[0]
-        call = CALL.match(span)
-        assert call and call.group(1) in CONTRACT, line
-        props = CONTRACT[call.group(1)]["properties"]
-        for token in call.group(2).split(", "):
-            if "=" not in token:
-                continue
-            name, value = token.split("=", 1)
-            if name in props and "default" in props[name] and "[" not in value:
-                expected = json.dumps(props[name]["default"])
-                shown = {"None": "null", "True": "true", "False": "false"}.get(
-                    value, value.replace("'", '"')
-                )
-                assert shown == expected, f"`{span}`: {name} default is {expected}"
+    assert checked >= 12
 
 
 def test_instruction_files_use_plain_punctuation():

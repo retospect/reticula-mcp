@@ -6,9 +6,9 @@ import argparse
 import getpass
 import importlib
 import logging
+import os
 import sys
 from collections.abc import Sequence
-from dataclasses import replace
 from datetime import timedelta
 from typing import Any
 
@@ -178,15 +178,18 @@ def _register_lane_commands(sub: Any) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        settings = Settings.from_env()
+        env = dict(os.environ)
+        if args.command == "serve":
+            # Before validation, so an error names the address really used.
+            if args.host:
+                env["RETICULA_HOST"] = args.host
+            if args.port:
+                env["RETICULA_PORT"] = str(args.port)
+        settings = Settings.from_env(env)
         func = getattr(args, "func", None)
         if func is not None:
             return int(func(settings, args))
         if args.command == "serve":
-            if args.host:
-                settings = replace(settings, host=args.host)
-            if args.port:
-                settings = replace(settings, port=args.port)
             return _serve(settings, args.migrate)
         if args.command == "migrate":
             return _migrate(settings)

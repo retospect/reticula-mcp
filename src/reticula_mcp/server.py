@@ -273,8 +273,10 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
         ext_id: Annotated[
             str | None,
             Field(
-                description="External id for papers, e.g. doi:10.1000/x or"
-                " arxiv:2401.00001."
+                description="The paper: doi:10.1000/x or arxiv:2401.00001. With"
+                " kind=paper it identifies the stub. On a note it says which paper"
+                " the note is about: give it on every note about a paper, together"
+                " with `anchor`."
             ),
         ] = None,
         anchor: Annotated[

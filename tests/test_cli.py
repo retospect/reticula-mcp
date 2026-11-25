@@ -54,3 +54,12 @@ def test_a_public_url_must_be_https_or_this_machine(monkeypatch, capsys):
         cli.main(["migrate"]) == 1
     )  # past the URL check, stopped by the missing database
     assert "RETICULA_DATABASE_URL" in capsys.readouterr().err
+
+
+def test_a_start_up_error_names_the_port_given_on_the_command_line(monkeypatch, capsys):
+    monkeypatch.setenv("RETICULA_HOST", "192.0.2.5")
+    monkeypatch.delenv("RETICULA_PUBLIC_URL", raising=False)
+    assert cli.main(["serve", "--port", "18793"]) == 1
+    err = capsys.readouterr().err
+    assert "18793" in err
+    assert "8787" not in err
