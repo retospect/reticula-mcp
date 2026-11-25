@@ -616,11 +616,10 @@ def _access_line(conn: Conn, viewer: Account, hub: Row) -> str | None:
     not there are others (every account reads the shipped instructions hub, so
     the full list there would name every handle on the instance).
     """
-    # add inherited into a personal hub (only its owner adds) counts as read
+    # shown_access, not hub_access: add inherited into a personal hub (only its
+    # owner adds) counts as read
     mode_row = conn.execute(
-        "SELECT CASE WHEN hub_access(%(person)s, %(hub)s) = 'add'"
-        " AND NOT can_add_person(%(person)s, %(hub)s) THEN 'read'"
-        " ELSE hub_access(%(person)s, %(hub)s) END AS mode",
+        "SELECT shown_access(%(person)s, %(hub)s) AS mode",
         {"person": viewer.person_id, "hub": hub["id"]},
     ).fetchone()
     mode = mode_row["mode"] if mode_row else None
