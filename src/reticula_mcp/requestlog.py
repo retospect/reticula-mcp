@@ -19,10 +19,12 @@ What a line holds, and what it never holds:
 * ``agent``: the ``User-Agent`` header, printable ASCII, cut;
 * ``mcp``: the ``MCP-Protocol-Version`` header, when sent;
 * ``client``: the start of the connection's client id, when the request carried
-  a valid token (``reticula-mcp connections list`` names the connections);
+  a valid token. All requests of one connection carry the same value
+  (``reticula-mcp connections list`` does not show it);
 * ``reason``, for a status of 400 and above: the server's OWN error text, taken
   from the answer (``error`` and ``error_description`` of a sign-in error, the
   message of a protocol error, the ``error`` of a ``WWW-Authenticate`` header).
+  An answer that is a page (a refused sign-in) has no reason on its line.
 
 Never: a request body, a token, a note, a tool's arguments or reply. A tool that
 fails answers with status 200 and its error as text, so it has no reason here.
@@ -79,10 +81,13 @@ def reason_of(status: int, headers: Headers, body: bytes) -> str:
                 detail = data.get("error_description")
                 said = f"{error}: {detail}" if isinstance(detail, str) else error
     if not said:
-        found = _CHALLENGE_ERROR_RE.search(headers.get("www-authenticate", ""))
+        challenge = headers.get("www-authenticate", "")
+        found = _CHALLENGE_ERROR_RE.search(challenge)
         if found:
             said = found.group(1)
-        elif status == 401:
+        elif status == 401 and challenge:
+            # a bare challenge. Not every 401: the sign-in page answers a wrong
+            # password with one, and that is not a missing token.
             said = "no token"
     for mark in _ECHO_MARKS:
         said = said.partition(mark)[0]

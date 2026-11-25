@@ -54,6 +54,15 @@ TRIGRAM_MIN = 0.25
 # title exactly as written. 0.8 forgives a plural in a title of several words;
 # a one-word title has to be there letter for letter.
 TITLE_INSIDE_MIN = 0.8
+# A query with more counted words than this is a pasted text, not a question:
+# titles are not looked for inside it. Many short titles stand somewhere in a
+# long text, and the comparison costs more with every character of the query.
+TITLE_INSIDE_WORDS = 16
+# Up to this many characters of query the comparison of title and query as
+# wholes goes through the trigram index. The index looks up every trigram of
+# the query, so it costs with the query's length; a longer query is compared
+# only with the titles long enough to resemble it (see _trigram).
+TITLE_BY_INDEX = 100
 # The share of the query's distinct words a note must have to be a keyword
 # match when no note has all of them (see _lexical). 0 keeps any note with one
 # of the words; 1 means every word, that is no second try at all.
@@ -261,6 +270,56 @@ def content_words(query: str) -> str:
     return " ".join(kept) if dropped and content else query
 
 
+def counted_words(conn: Conn, query: str) -> tuple[list[str], str]:
+    """The words of the query that say what is looked for, as they were typed
+    and in that order, each stem once; and the part of the query that excludes
+    (``-word``). A word counts when a stem of it passes ``_COUNTS``: "SD", "3",
+    "notes" and stop words do not. The words of a quoted phrase count one by
+    one."""
+    words: list[str] = []
+    minus: list[str] = []
+    for part in _QUERY_PART.findall(content_words(query)):
+        if part.startswith("-"):
+            minus.append(part)
+            continue
+        for token in part.strip('"').split():
+            word = token.strip(string.punctuation)
+            if word:
+                words.append(word)
+    if not words:
+        return [], " ".join(minus)
+    rows = conn.execute(
+        f"""
+        SELECT t.word, to_tsvector('english', t.word)::text AS stems
+        FROM unnest(%(words)s::text[]) WITH ORDINALITY AS t(word, ord)
+        WHERE EXISTS (
+            SELECT 1
+            FROM unnest(tsvector_to_array(to_tsvector('english', t.word))) w
+            WHERE {_COUNTS})
+        ORDER BY t.ord
+        """,
+        {"words": words, "request": _REQUEST_TEXT},
+    ).fetchall()
+    seen: set[str] = set()
+    counted: list[str] = []
+    for row in rows:
+        if row["stems"] not in seen:
+            seen.add(row["stems"])
+            counted.append(row["word"])
+    return counted, " ".join(minus)
+
+
+def _word_terms(words: list[str], args: dict[str, Any]) -> list[str]:
+    """One text-search query per word, as SQL over parameters added to
+    ``args``. Each is a constant to the planner, so ``n.fts @@ (a || b)`` can
+    use the index on ``fts``."""
+    terms = []
+    for i, word in enumerate(words):
+        args[f"word{i}"] = word
+        terms.append(f"plainto_tsquery('english', %(word{i})s)")
+    return terms
+
+
 def _lexical(
     conn: Conn, query: str, where: str, params: dict[str, Any], pool: int
 ) -> list[tuple[int, float]]:
@@ -279,6 +338,11 @@ def _lexical(
         return []
     if trees["q"] in nothing:  # "the notes": the request word is all there is
         base["q"] = query
+    # Both statements are planned for the words at hand each time
+    # (prepare=False). A connection that has run one of them a few times
+    # otherwise keeps one plan for any words, made without knowing how many
+    # notes have them: measured at 6,000 notes, the second try then took 117 ms
+    # instead of 22 for five words, and 12 s for a 1,000-character query.
     # Notes with every word typed first, then those with every content word.
     strict = conn.execute(
         f"""
@@ -292,6 +356,7 @@ def _lexical(
         ORDER BY every DESC, score DESC, n.id DESC LIMIT %(pool)s
         """,
         base,
+        prepare=False,
     ).fetchall()
     if strict:
         return [(r["id"], float(r["score"])) for r in strict]
@@ -318,54 +383,111 @@ def _lexical(
         ORDER BY shared.n DESC, score DESC, n.id DESC LIMIT %(pool)s
         """,
         {**base, "share": LOOSE_MIN_SHARE},
+        prepare=False,
     ).fetchall()
     return [(r["id"], float(r["score"])) for r in loose]
 
 
 def _trigram(
-    conn: Conn, query: str, where: str, params: dict[str, Any], pool: int
+    conn: Conn,
+    query: str,
+    where: str,
+    params: dict[str, Any],
+    pool: int,
+    words: list[str] | None = None,
 ) -> list[tuple[int, float]]:
     # A title matches when it resembles the whole query (TRIGRAM_MIN), or when
     # it stands inside the query as written (TITLE_INSIDE_MIN). The second is
     # for a long query and a short title: every further word of the query
     # lowers the similarity of the two as wholes, so "Gateway" was found for
-    # four words and lost for five. It needs a title with a word that says
-    # something (_COUNTS): "Notes", "To do" or "3" inside a query is no match.
+    # four words and lost for five. It needs a title that has one of the
+    # query's counted words (``words``, see counted_words): "Notes", "To do"
+    # or "3" inside a query is no match.
     # Of two titles that match equally the viewer's own comes first, so that
     # titles other people chose cannot take the leg from the viewer's notes.
-    # Exact scan of the (already visibility-restricted) titles. When the corpus
-    # grows, use the GIN index node_title_trgm with `n.title % q` instead.
-    rows = conn.execute(
-        f"""
-        SELECT y.id, greatest(y.whole, y.inside) AS score
-        FROM (
-            SELECT x.id, x.own, x.whole,
-                   CASE WHEN x.inside >= %(inside)s AND EXISTS (
-                            SELECT 1
-                            FROM unnest(tsvector_to_array(
-                                to_tsvector('english', x.title))) w
-                            WHERE {_COUNTS})
-                        THEN x.inside ELSE 0 END AS inside
-            FROM (
-                SELECT n.id, n.title, n.author = %(person)s AS own,
-                       similarity(n.title, %(q)s) AS whole,
-                       strict_word_similarity(n.title, %(q)s) AS inside
-                FROM node n
-                WHERE n.title IS NOT NULL AND {where}
-            ) x
-        ) y
-        WHERE y.whole >= %(min)s OR y.inside > 0
-        ORDER BY score DESC, y.own DESC, y.id DESC LIMIT %(pool)s
-        """,
-        {
-            **params,
-            "q": query,
-            "min": TRIGRAM_MIN,
-            "inside": TITLE_INSIDE_MIN,
-            "request": _REQUEST_TEXT,
-            "pool": pool,
-        },
-    ).fetchall()
+    #
+    # Neither comparison is computed for every title: each costs time with
+    # every character of the query (at 6,000 titles and a 1,000-character
+    # query 0.4 s the first and 0.9 s the second, row by row).
+    #
+    # The first goes through the trigram index on the title (`%` with the
+    # threshold set to TRIGRAM_MIN for this transaction) for a query of up to
+    # TITLE_BY_INDEX characters. A longer one is compared only with the titles
+    # long enough: two texts share at most the trigrams of the shorter, so a
+    # title with fewer than TRIGRAM_MIN times the query's trigrams cannot
+    # resemble it, and a title has at most one trigram more than it has
+    # characters. The CASE makes that test come first whatever the plan.
+    # The second runs over the titles that have one of the counted words (the
+    # index of migration 0301), and not at all for a query of more than
+    # TITLE_INSIDE_WORDS counted words.
+    #
+    # The titles are found first and who may read them is decided after
+    # (MATERIALIZED keeps the planner from turning that around). Left to
+    # choose, it walks every readable note and compares title by title: it
+    # takes the readable notes for 200 rows however many they are.
+    if words is None:
+        words, _ = counted_words(conn, query)
+    args: dict[str, Any] = {
+        **params,
+        "q": query,
+        "min": TRIGRAM_MIN,
+        "inside": TITLE_INSIDE_MIN,
+        "pool": pool,
+    }
+    if len(query) <= TITLE_BY_INDEX:
+        whole = "t.title %% %(q)s AND similarity(t.title, %(q)s) >= %(min)s"
+    else:
+        whole = """
+            CASE WHEN char_length(lower(t.title)) + 1
+                      >= %(min)s * cardinality(show_trgm(%(q)s))
+                 THEN similarity(t.title, %(q)s) >= %(min)s
+                 ELSE false END
+        """
+    inside = ""
+    if words and len(words) <= TITLE_INSIDE_WORDS:
+        any_word = " || ".join(_word_terms(words, args))
+        inside = f"""
+          UNION ALL
+            SELECT t.id, strict_word_similarity(t.title, %(q)s) AS score
+            FROM node t
+            WHERE to_tsvector('english', coalesce(t.title, '')) @@ ({any_word})
+              AND strict_word_similarity(t.title, %(q)s) >= %(inside)s
+        """
+    with conn.transaction():
+        # `%` compares with a setting of the session. It is set for this
+        # statement and put back after, since a setting made in a transaction
+        # outlives this block. On a connection that has not used the trigram
+        # extension yet the setting does not exist: that reads as NULL, and
+        # NULL puts back the default.
+        previous = conn.execute(
+            "SELECT current_setting('pg_trgm.similarity_threshold', true) AS was"
+        ).fetchone()
+        conn.execute(
+            "SELECT set_config('pg_trgm.similarity_threshold', %s, true)",
+            (str(TRIGRAM_MIN),),
+        )
+        rows = conn.execute(
+            f"""
+            WITH found AS MATERIALIZED (
+                SELECT t.id, similarity(t.title, %(q)s) AS score
+                FROM node t
+                WHERE {whole}
+                {inside}
+            )
+            SELECT n.id, max(f.score) AS score
+            FROM found f JOIN node n ON n.id = f.id
+            WHERE {where}
+            GROUP BY n.id
+            ORDER BY score DESC, (n.author = %(person)s) DESC, n.id DESC
+            LIMIT %(pool)s
+            """,
+            args,
+            prepare=False,
+        ).fetchall()
+        conn.execute(
+            "SELECT set_config('pg_trgm.similarity_threshold', %s::text, true)",
+            (previous["was"] if previous else None,),
+        )
     return [(r["id"], float(r["score"])) for r in rows]
 
 

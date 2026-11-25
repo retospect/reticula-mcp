@@ -29,7 +29,11 @@ def test_the_reason_is_the_servers_own_error_text():
         {"www-authenticate": 'Bearer error="invalid_token", error_description="x"'}
     )
     assert reason_of(401, challenge, b"") == "invalid_token"
-    assert reason_of(401, Headers(), b"") == "no token"
+    assert reason_of(401, Headers({"www-authenticate": "Bearer"}), b"") == "no token"
+    # the sign-in page answers a wrong password with 401 and a page: no token
+    # is not what happened there, so the line says nothing
+    page = Headers({"content-type": "text/html; charset=utf-8"})
+    assert reason_of(401, page, b"<html>wrong e-mail or password</html>") == ""
     assert reason_of(404, Headers({"content-type": "text/plain"}), b"Not Found") == ""
     assert reason_of(400, JSON, b"not json") == ""
 
