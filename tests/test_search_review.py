@@ -542,6 +542,135 @@ def test_an_author_superseding_their_own_note_is_not_named(conn, make_account):
     assert f'supersedes: {ref(original)} note "One"' in handlers.get(conn, a, ref=newer)
 
 
+# ------------------------------------- the pair rule is one function (0203)
+
+
+def pair_hides(conn, original: str, newer: str) -> bool | None:
+    """What ``supersession_hides`` says of the pair; None when it has no row."""
+    row = conn.execute(
+        "SELECT p.hides FROM supersession_hides(%s, %s) p",
+        (sql_node_id(conn, original), sql_node_id(conn, newer)),
+    ).fetchone()
+    return None if row is None else bool(row["hides"])
+
+
+def test_the_pair_rule_decides_each_case_and_current_nodes_follows_it(
+    conn, make_account
+):
+    a, b = make_account(handle="ann"), make_account(handle="ben")
+    hub = mk_hub(conn, a, "common")
+    share(conn, a, hub, b, "add")
+    his = mk_hub(conn, b, "ben's own")
+    share(conn, b, his, a, "read")
+
+    def corrected(by, where: str | None, **kw) -> tuple[str, str]:
+        original = mk_note(conn, a, "the meeting is on Monday", hub=hub, **kw)
+        return original, mk_note(
+            conn, by, "no, on Tuesday", hub=where, supersedes=[original]
+        )
+
+    same_author = corrected(a, hub)
+    common_hub = corrected(b, hub)
+    no_common_hub = corrected(b, his)
+    instruction = corrected(b, hub, kind="instruction")
+    disputed = corrected(b, hub)
+    graph.link(conn, a, ref=disputed[0], to=disputed[1], rel="disputes")
+    withdrawn = corrected(b, hub)
+    conn.execute(
+        "UPDATE membership SET withdrawn = true WHERE node_id = %s",
+        (sql_node_id(conn, withdrawn[1]),),
+    )
+
+    assert pair_hides(conn, *same_author) is True
+    assert pair_hides(conn, *common_hub) is True
+    assert pair_hides(conn, *no_common_hub) is False
+    assert pair_hides(conn, *instruction) is False
+    assert pair_hides(conn, *disputed) is False
+    assert pair_hides(conn, *withdrawn) is False  # the correction left the hub
+    # the rule is about a pair of nodes that exist
+    missing = conn.execute(
+        "SELECT count(*) AS n FROM supersession_hides(%s, -1)",
+        (sql_node_id(conn, hub),),
+    ).fetchone()
+    assert missing["n"] == 0
+
+    # current_nodes hides an original exactly when the rule says so and the
+    # viewer can read the newer note; get words it the same way
+    pairs = (same_author, common_hub, no_common_hub, instruction, disputed, withdrawn)
+    for who in (a, b):
+        now = current(conn, who)
+        for original, newer in pairs:
+            hidden = bool(pair_hides(conn, original, newer)) and can_read(
+                conn, who, newer
+            )
+            assert (original not in now) == hidden
+            assert said_superseded(conn, who, original) == hidden
+
+
+def test_the_pair_rule_is_written_once_and_the_planner_inlines_it(conn, make_account):
+    # current_nodes calls the function and no longer spells the rule out
+    body = conn.execute(
+        "SELECT prosrc FROM pg_proc WHERE proname = 'current_nodes'"
+    ).fetchone()["prosrc"]
+    assert "supersession_hides(" in body and "disputes" not in body
+    # and so does the read side
+    assert "supersession_hides(" in read._PAIRS and not hasattr(read, "_HIDES")
+    # a table function in FROM becomes part of the calling query: no function
+    # scan, so current_nodes keeps the plan it had with the rule inline
+    a = make_account()
+    first = mk_note(conn, a, "one")
+    mk_note(conn, a, "two", supersedes=[first])
+    plan = conn.execute(
+        "EXPLAIN SELECT s.old_node_id FROM supersedes s"
+        " CROSS JOIN LATERAL supersession_hides(s.old_node_id, s.new_node_id) p"
+        " WHERE p.hides"
+    ).fetchall()
+    text = "\n".join(r["QUERY PLAN"] for r in plan)
+    assert "Function Scan" not in text and "supersession_hides" not in text
+
+
+# ----------------------------- the access a person is shown is one function
+
+
+def test_shown_access_is_read_where_add_is_inherited_into_a_personal_hub(
+    conn, make_account
+):
+    owner, bob, carol, dan, eve = (
+        make_account(handle=h) for h in ("owner", "bob", "carol", "dan", "eve")
+    )
+    parent = mk_hub(conn, owner, "Parent")
+    share(conn, owner, parent, bob, "add")
+    share(conn, owner, parent, carol, "add")
+    share(conn, owner, parent, dan, "read")
+    diary = mk_hub(conn, bob, "Bobs diary", parent=parent, preset="personal")
+    plans = mk_hub(conn, bob, "Bobs plans", parent=parent)
+
+    def modes(who, hub: str) -> tuple[str | None, str | None]:
+        row = conn.execute(
+            "SELECT hub_access(%(p)s, %(h)s) AS raw, shown_access(%(p)s, %(h)s) AS shown",
+            {"p": who.person_id, "h": sql_node_id(conn, hub)},
+        ).fetchone()
+        return row["raw"], row["shown"]
+
+    # the one case where the two differ: only Bob adds to his personal hub
+    assert modes(carol, diary) == ("add", "read")
+    # everywhere else what is shown is what is granted
+    assert modes(carol, plans) == ("add", "add")
+    assert modes(carol, parent) == ("add", "add")
+    assert modes(dan, diary) == ("read", "read")
+    assert modes(eve, diary) == (None, None)
+    raw, shown = modes(bob, diary)
+    assert shown == raw  # the owner adds to their own personal hub
+
+    # both places of the read side go through it
+    listed = handlers.search(conn, carol, query="", kind="hub")
+    assert "· read ·" in row_of(listed, diary) and "· add ·" in row_of(listed, plans)
+    seen = handlers.get(conn, carol, ref=diary)
+    assert "@carol read (you)" in seen and read.READERS_NOTE in seen
+    # in the ordinary hub below she adds, and sees the list a reader does not
+    assert read.READERS_NOTE not in handlers.get(conn, carol, ref=plans)
+
+
 # --------------------------------------------- an address without its ``ret:``
 
 

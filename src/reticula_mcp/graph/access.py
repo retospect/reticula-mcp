@@ -39,12 +39,13 @@ def shown_access(conn: Conn, person_id: str, hub_node_id: int) -> str | None:
 
     ``hub_access`` inherits ``add`` from a parent hub also into a personal hub,
     where only the owner adds. Such a person reads the hub and nothing more, so
-    they are shown ``read`` and get the reader's view of who has access.
+    they are shown ``read`` and get the reader's view of who has access. The
+    rule is the SQL function ``shown_access`` (migration 0203).
     """
-    mode = hub_access(conn, person_id, hub_node_id)
-    if mode == "add" and not can_add_person(conn, person_id, hub_node_id):
-        return "read"
-    return mode
+    row = conn.execute(
+        "SELECT shown_access(%s, %s) AS mode", (person_id, hub_node_id)
+    ).fetchone()
+    return row["mode"] if row else None
 
 
 def readers_above(

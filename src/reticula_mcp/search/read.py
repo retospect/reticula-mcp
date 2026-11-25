@@ -216,33 +216,14 @@ class _Chain:
     hides_own: list[str]
 
 
-# The rule of ``current_nodes`` (migration 0202) for one pair: does the newer
-# atom ``n`` hide the original ``o`` from those who can read ``n``? The same
-# author always does. Another person does only when both are filed in a common
-# hub, each by its own author, the original is neither a hub nor an
-# instruction, and the original's author has not linked ``disputes`` to it.
-# ``_chain_lines`` checks the result against the function itself, and
-# tests/test_search_review.py pins that the two agree.
-_HIDES = """
-    (o.author = n.author
-     OR (o.kind NOT IN ('hub', 'instruction')
-         AND EXISTS (
-             SELECT 1 FROM membership mo
-             JOIN membership mn ON mn.hub_node_id = mo.hub_node_id
-             JOIN node h ON h.id = mo.hub_node_id
-             WHERE mo.node_id = o.id AND NOT mo.withdrawn
-               AND mo.audience = 'hub' AND mo.author = o.author
-               AND mn.node_id = n.id AND NOT mn.withdrawn
-               AND mn.audience = 'hub' AND mn.author = n.author
-               AND h.kind = 'hub' AND h.tombstoned_at IS NULL)
-         AND NOT EXISTS (
-             SELECT 1 FROM link l
-             WHERE l.src_node_id = o.id AND l.rel = 'disputes'
-               AND l.dst_address = n.address)))
-"""
+# Every supersession pair with ``p.hides``: does the newer atom hide the
+# original from those who can read the newer one? ``supersession_hides``
+# (migration 0203) is the rule ``current_nodes`` itself applies, so what ``get``
+# says of a pair and what search and hub lists show cannot drift apart:
+# tests/test_search_review.py checks that they agree.
 _PAIRS = (
-    " FROM supersedes s JOIN node o ON o.id = s.old_node_id"
-    " JOIN node n ON n.id = s.new_node_id"
+    " FROM supersedes s"
+    " CROSS JOIN LATERAL supersession_hides(s.old_node_id, s.new_node_id) p"
 )
 
 
@@ -281,26 +262,17 @@ def _chain_lines(conn: Conn, viewer: Account, node: Row) -> _Chain:
         "cap": LINKS_SHOWN + 1,
     }
     old = conn.execute(
-        f"SELECT o.id, {_HIDES} AS hides {_PAIRS}"
-        f" WHERE s.new_node_id = %(node)s AND o.id IN ({readable})"
-        " ORDER BY hides DESC, o.id LIMIT %(cap)s",
+        f"SELECT s.old_node_id AS id, p.hides {_PAIRS}"
+        f" WHERE s.new_node_id = %(node)s AND s.old_node_id IN ({readable})"
+        " ORDER BY p.hides DESC, s.old_node_id LIMIT %(cap)s",
         params,
     ).fetchall()
     new = conn.execute(
-        f"SELECT n.id, {_HIDES} AS hides {_PAIRS}"
-        f" WHERE s.old_node_id = %(node)s AND n.id IN ({readable})"
-        " ORDER BY hides DESC, n.id LIMIT %(cap)s",
+        f"SELECT s.new_node_id AS id, p.hides {_PAIRS}"
+        f" WHERE s.old_node_id = %(node)s AND s.new_node_id IN ({readable})"
+        " ORDER BY p.hides DESC, s.new_node_id LIMIT %(cap)s",
         params,
     ).fetchall()
-    # current_nodes decides what is hidden. Should the copy of its rule above
-    # ever disagree with it, the wording follows the function.
-    if new:
-        hidden = not visible_subset(conn, viewer, [node["id"]], current=True)
-        if hidden != any(r["hides"] for r in new):
-            new = [{**r, "hides": hidden} for r in new]
-    if any(r["hides"] for r in old):
-        shown = visible_subset(conn, viewer, [r["id"] for r in old], current=True)
-        old = [{**r, "hides": r["hides"] and r["id"] not in shown} for r in old]
     out = conn.execute(
         "SELECT l.rel, l.dst_address, d.id AS dst_id,"
         f" (d.id IS NOT NULL AND d.id IN ({readable})) AS can_read"
