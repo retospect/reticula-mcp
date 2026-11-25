@@ -8,6 +8,7 @@ import importlib
 import logging
 import os
 import sys
+import time
 from collections.abc import Sequence
 from datetime import timedelta
 from typing import Any
@@ -75,19 +76,17 @@ def _migrate(settings: Settings) -> int:
     return 0
 
 
-class _NoQueryString(logging.Filter):
-    """Access log lines without the query string.
-
-    ``/signin?req=...`` and ``/authorize?...&state=...`` carry values that must
-    not be kept in a log. uvicorn passes (peer, method, path with query, HTTP
-    version, status) as the arguments of an access record.
-    """
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        args = record.args
-        if isinstance(args, tuple) and len(args) == 5 and isinstance(args[2], str):
-            record.args = (*args[:2], args[2].partition("?")[0], *args[3:])
-        return True
+def _request_log_to_stdout() -> None:
+    """The request lines of ``requestlog`` go to standard output, one per line
+    with the time in UTC, whatever else configures logging."""
+    requests = logging.getLogger("reticula_mcp.request")
+    handler = logging.StreamHandler(sys.stdout)
+    formatter = logging.Formatter("%(asctime)s %(message)s", "%Y-%m-%dT%H:%M:%SZ")
+    formatter.converter = time.gmtime
+    handler.setFormatter(formatter)
+    requests.addHandler(handler)
+    requests.setLevel(logging.INFO)
+    requests.propagate = False
 
 
 def _serve(settings: Settings, auto_migrate: bool) -> int:
@@ -109,9 +108,10 @@ def _serve(settings: Settings, auto_migrate: bool) -> int:
             f"{len(todo)} migration(s) pending (e.g. {todo[0].path.name})",
             hint="run `reticula-mcp migrate` or start with `serve --migrate`",
         )
-    # Added before uvicorn configures logging: that replaces the logger's
-    # handlers and keeps its filters.
-    logging.getLogger("uvicorn.access").addFilter(_NoQueryString())
+    # One line per request comes from requestlog: the caller behind the proxy,
+    # the client program, the reason for a refusal, and no query string.
+    # uvicorn's own access line (switched off below) has the proxy as the caller.
+    _request_log_to_stdout()
     # The SDK logs every request at INFO and httpx every model download request.
     logging.getLogger("mcp").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -122,6 +122,7 @@ def _serve(settings: Settings, auto_migrate: bool) -> int:
         host=settings.host,
         port=settings.port,
         proxy_headers=False,
+        access_log=False,
     )
     return 0
 

@@ -9,6 +9,7 @@
 - `scripts/oauth-client-check` connects with the OAuth client of the MCP Python SDK (sign-in, `start`, token refresh, replay of a used refresh token); Check runs it.
 - `start` and `profile` count the notes of a hub as `get` lists them: a deleted note and a note replaced by a newer one are no longer counted, and a hub filed under the hub is named as a hub (`3 notes, 1 hub`).
 - The server refuses to start on a database that a newer version has used (a migration in the ledger that this version has no file for), and so does every other command of `reticula-mcp`. `RETICULA_ALLOW_NEWER_SCHEMA=1` starts it anyway. 0.1.0 does not check this.
+- The server log has one line per request with what an operator needs to see why an assistant does not connect: the caller's address behind the proxy (as `RETICULA_TRUSTED_PROXIES` allows), the calling program, the MCP protocol version it asked for, the connection of a signed-in request, and the reason for a refusal. It replaces uvicorn's access line, which named the proxy as the caller and gave no reason. `GET /healthz` is no longer logged.
 - Migrations: 0.1.1 adds one, `0203_shared_rules`. It defines three SQL functions and changes no table.
 
 ## 0.1.0 (2026-11-25)

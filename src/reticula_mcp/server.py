@@ -36,6 +36,7 @@ from reticula_mcp.context import access_token_from_context, viewer_for_token
 from reticula_mcp.db.pool import Conn, Database
 from reticula_mcp.errors import INTERNAL, RATE_LIMITED, UNAVAILABLE, ReticulaError
 from reticula_mcp.graph import handlers as graph_handlers
+from reticula_mcp.requestlog import RequestLog
 from reticula_mcp.seams import AuthWiring
 from reticula_mcp.search import handlers as search_handlers
 from reticula_mcp.search import hooks as search_hooks
@@ -530,6 +531,8 @@ def build_app(settings: Settings, db: Database | None = None) -> Starlette:
     app.router.routes[0:0] = list(wiring.routes)
     for mw in wiring.middleware:
         app.add_middleware(mw.cls, *mw.args, **mw.kwargs)
+    # Added last, so outermost: it also sees what the sign-in layer refuses.
+    app.add_middleware(RequestLog, settings=settings)
 
     inner = app.router.lifespan_context
 

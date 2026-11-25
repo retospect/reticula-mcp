@@ -260,6 +260,7 @@ The reason is federation. Because each record already carries its author, addres
 - The instance that hosts your account holds your private keys, unencrypted, in its database. The signature shows which account wrote a note and that it has not changed since. It does not protect you from the operator of your instance.
 - The application does not encrypt anything at rest. Anyone who can read the database can read every note. Use disk encryption and database access control if that matters to you.
 - Passwords are stored as argon2id hashes. Bearer tokens are stored as SHA-256 hashes.
+- The server writes one line per request to its log: the time, the path without its query string, the status, the caller's IP address, the name the calling program gives itself, and for a refused request the server's own error text. It does not log request bodies, tokens, notes, or what a tool was asked and answered.
 - Sign-ups are open by default and rate-limited per IP address. Set `RETICULA_SIGNUP=closed` to close them.
 - The sign-in page names the host that will receive access to your notes, taken from the address the connector returns to. It shows a warning when that host is not listed in `RETICULA_KNOWN_CLIENTS`. A connector on the same computer does not warn. Read the host before you continue.
 - Serve the MCP endpoint over HTTPS when it leaves your machine or tailnet. A bearer token sent over plain HTTP can be read on the way.
