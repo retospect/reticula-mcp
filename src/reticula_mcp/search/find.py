@@ -1,5 +1,9 @@
 """The one hybrid search: lexical + trigram + vector, fused by reciprocal rank.
 
+Two kinds of match are certain and go first, ahead of the fused ranking: the
+paper stored under the identifier the query is (``_identifier``), and notes
+whose title or tag is the query (``_exact``).
+
 Candidate rule (the only visibility rule here): a node is a candidate only if it
 is in ``current_nodes(viewer)`` (or ``readable_nodes(viewer)`` with
 ``include_superseded``). Every leg embeds that subquery, so no leg can rank,
@@ -24,6 +28,8 @@ from psycopg import sql
 from reticula_mcp.accounts import Account
 from reticula_mcp.config import Settings
 from reticula_mcp.db.pool import Conn
+from reticula_mcp.errors import ReticulaError
+from reticula_mcp.graph.paper import normalize_ext_id
 from reticula_mcp.permissions import current_nodes_sql, readable_nodes_sql
 from reticula_mcp.search import index
 from reticula_mcp.search.embedder import (
@@ -46,7 +52,13 @@ TRIGRAM_MIN = 0.25
 # of the words; 1 means every word, that is no second try at all.
 LOOSE_MIN_SHARE = 0.5
 # Weight of each leg in the fusion (see rank_fusion.py).
-LEG_WEIGHTS: dict[str, float] = {"lexical": 1.0, "title": 1.0, "semantic": 1.0}
+LEG_WEIGHTS: dict[str, float] = {
+    "identifier": 1.0,
+    "exact": 1.0,
+    "lexical": 1.0,
+    "title": 1.0,
+    "semantic": 1.0,
+}
 # Up to this many candidate vectors the vector leg compares every one of them
 # (exact, and fast: the candidates are only what the viewer may read). Beyond
 # it the model's HNSW index is used, with pgvector's iterative scan so that
@@ -124,10 +136,67 @@ def _scope(
     return " AND ".join(where), params
 
 
+def _identifier(
+    conn: Conn, query: str, where: str, params: dict[str, Any], pool: int
+) -> list[tuple[int, float]]:
+    """Papers stored under the identifier that the query is: a DOI in any
+    spelling, an arXiv id, or any other id exactly as it was given. The key is
+    the one ``put`` stores (``graph/paper.py``), so a search before writing
+    finds the paper that a write would have run into. Oldest first: that is
+    the one ``put`` returns."""
+    try:
+        key, _ = normalize_ext_id(query)
+    except ReticulaError:
+        return []
+    rows = conn.execute(
+        f"""
+        SELECT n.id FROM node n
+        WHERE n.kind = 'paper' AND n.ext_key = %(key)s AND {where}
+        ORDER BY n.id LIMIT %(pool)s
+        """,
+        {**params, "key": key, "pool": pool},
+    ).fetchall()
+    return [(r["id"], 1.0) for r in rows]
+
+
+def _exact(
+    conn: Conn, query: str, where: str, params: dict[str, Any], pool: int
+) -> list[tuple[int, float]]:
+    """Notes whose title is the query (case and surrounding space ignored),
+    then notes that carry the query as a tag (case and a leading ``#``
+    ignored), newest first."""
+    key = query.strip().lower()
+    tag = key.lstrip("#").strip()
+    ws = " \t\r\n"
+    rows = conn.execute(
+        f"""
+        SELECT n.id,
+               CASE WHEN lower(btrim(n.title, %(ws)s)) = %(key)s THEN 2.0
+                    ELSE 1.0 END AS score
+        FROM node n
+        WHERE {where}
+          AND (lower(btrim(n.title, %(ws)s)) = %(key)s
+               OR (%(tag)s <> '' AND EXISTS (
+                    SELECT 1 FROM unnest(n.tags) t
+                    WHERE lower(ltrim(btrim(t, %(ws)s), '#')) = %(tag)s)))
+        ORDER BY score DESC, n.created_at DESC, n.id DESC LIMIT %(pool)s
+        """,
+        {**params, "key": key, "tag": tag, "ws": ws, "pool": pool},
+    ).fetchall()
+    return [(r["id"], float(r["score"])) for r in rows]
+
+
 def _lexical(
     conn: Conn, query: str, where: str, params: dict[str, Any], pool: int
 ) -> list[tuple[int, float]]:
     base = {**params, "q": query, "pool": pool}
+    # A query with no positive term (only negations such as "-zebra") has
+    # nothing to require: "!zebra" would match every note without the word.
+    positive = conn.execute(
+        "SELECT querytree(websearch_to_tsquery('english', %(q)s)) <> 'T' AS ok", base
+    ).fetchone()
+    if not positive or not positive["ok"]:
+        return []
     strict = conn.execute(
         f"""
         SELECT n.id, ts_rank_cd(n.fts, qq.qq, 32) AS score
@@ -306,6 +375,39 @@ def _semantic(
     return [(r["id"], 1.0 - float(r["d"])) for r in rows]
 
 
+def list_scope(
+    conn: Conn,
+    viewer: Account,
+    *,
+    hub_node_id: int | None = None,
+    kind: str | None = None,
+    limit: int = 10,
+    include_superseded: bool = False,
+) -> tuple[list[int], int]:
+    """What a search without words lists: everything in scope that the viewer
+    may read, newest first; when hubs are asked for, the viewer's own before the
+    others. Returns the first ``limit`` ids and how many there are in all."""
+    where, params = _scope(
+        viewer,
+        hub_node_id=hub_node_id,
+        kind=kind,
+        include_superseded=include_superseded,
+    )
+    params = {**params, "me": viewer.person_id, "limit": limit}
+    own_first = "(n.author = %(me)s) DESC, " if kind == "hub" else ""
+    total = conn.execute(
+        f"SELECT count(*) AS n FROM node n WHERE {where}", params
+    ).fetchone()
+    rows = conn.execute(
+        f"""
+        SELECT n.id FROM node n WHERE {where}
+        ORDER BY {own_first}n.created_at DESC, n.id DESC LIMIT %(limit)s
+        """,
+        params,
+    ).fetchall()
+    return [r["id"] for r in rows], int(total["n"]) if total else 0
+
+
 def hybrid_search(
     conn: Conn,
     viewer: Account,
@@ -326,7 +428,12 @@ def hybrid_search(
         include_superseded=include_superseded,
     )
     pool = max(POOL_MIN, limit * 5)
+    certain = [
+        ("identifier", _identifier(conn, query, where, params, pool)),
+        ("exact", _exact(conn, query, where, params, pool)),
+    ]
     legs: list[tuple[str, list[tuple[int, float]]]] = [
+        *certain,
         ("lexical", _lexical(conn, query, where, params, pool)),
         ("title", _trigram(conn, query, where, params, pool)),
     ]
@@ -360,5 +467,9 @@ def hybrid_search(
         log.warning("semantic leg skipped", exc_info=True)
         semantic = SEMANTIC_OFF
     scores, provenance = reciprocal_rank_fusion(legs, k=RRF_K, weights=LEG_WEIGHTS)
-    ranked = sorted(scores, key=lambda i: (-scores[i], -i))[:limit]
+    # certain matches first, in their own order; the rest by fused score
+    first = list(dict.fromkeys(i for _, rows in certain for i, _ in rows))
+    taken = set(first)
+    rest = sorted((i for i in scores if i not in taken), key=lambda i: (-scores[i], -i))
+    ranked = (first + rest)[:limit]
     return Found([Hit(i, scores[i], provenance[i]) for i in ranked], semantic)

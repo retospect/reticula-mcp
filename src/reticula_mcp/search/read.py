@@ -79,11 +79,6 @@ def read_ref(
     asked = int(depth)
     depth = max(1, min(asked, MAX_DEPTH))
     base, offset = _split_offset(ref)
-    # The planner prices queries over ``current_nodes()`` above jit_above_cost
-    # although they run in a few milliseconds; Postgres then spends ~60 ms per
-    # query compiling them. A hub read runs dozens. ``SET LOCAL`` ends with the
-    # caller's transaction.
-    conn.execute("SET LOCAL jit = off")
     try:
         node = resolve_ref(conn, viewer, base)
     except ReticulaError as exc:
@@ -500,7 +495,7 @@ def _visible_fn(history: bool) -> str:
     )
 
 
-def _counts(
+def member_counts(
     conn: Conn, viewer: Account, hub_ids: list[int], history: bool
 ) -> dict[int, tuple[int, int]]:
     """(notes, hubs) per hub, counting only members the viewer can read."""
@@ -667,7 +662,7 @@ def _load_bodies(
     )
     all_subs = sorted({i for ids in sub_ids.values() for i in ids})
     all_notes = sorted({i for ids in note_ids.values() for i in ids})
-    counts = _counts(conn, viewer, [*hub_ids, *all_subs], history)
+    counts = member_counts(conn, viewer, [*hub_ids, *all_subs], history)
     sub_rows = fetch_rows(conn, viewer, all_subs, text_chars=100)
     note_rows = fetch_rows(conn, viewer, all_notes, text_chars=200)
     # without history the ids came out of current_nodes: none is superseded
