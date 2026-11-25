@@ -253,7 +253,7 @@ What else to know:
 - Ports. A port other than 443 works only for assistants that connect from your own machines, such as Claude Code. Claude's custom connectors (claude.ai, the desktop and mobile apps) connect from Anthropic's servers and accept port 443 only: "Claude can't connect to a URL that specifies another port" (Claude support, "Get started with custom connectors using remote MCP", read on 2026-11-25). For those, run Reticula on a machine whose port 443 is free, or give it a name of its own: a Tailscale node in a container, under [Tailscale Funnel from a container](#tailscale-funnel-from-a-container), or a reverse proxy. On a machine that already uses Funnel on 443, a second service goes on 8443 or 10000, and `RETICULA_PUBLIC_URL` must then carry that port.
 - Client addresses. Measured: in its HTTPS mode Funnel writes `X-Forwarded-For` itself and replaces a value sent by the client. A request with a made-up header was counted under the caller's real address. With `tailscaled` on the host this is the first row of the settings table under [A tunnel or proxy on the same host](#a-tunnel-or-proxy-on-the-same-host): trust the gateway address. Its TCP modes add no header (read from the Tailscale source, not measured): leave `RETICULA_TRUSTED_PROXIES` empty for those.
 - The `Host` header. Measured: Funnel passes the header on with its port, which is what `/mcp` expects when `RETICULA_PUBLIC_URL` carries the port.
-- Turning it off. To stop one tunnel, run its command again with `off` at the end. `tailscale funnel reset` clears the whole Funnel configuration of the machine, not one tunnel (both Tailscale documentation).
+- Turning it off. To stop one tunnel, run its command again with `off` at the end. Measured: a tunnel started with `sudo` needs `sudo` to turn off as well, for example `sudo tailscale funnel --https=8443 off`. After `sudo tailscale set --operator=$USER` once, your own user can change the configuration without `sudo` (that form was not run). `tailscale funnel reset` clears the whole Funnel configuration of the machine, not one tunnel (both Tailscale documentation).
 - `tailscale serve` is the same tunnel for the machines of your tailnet only, without the public internet. Tailscale's pages on Serve do not say whether it writes `X-Forwarded-For`, and it was not measured here. Set `RETICULA_TRUSTED_PROXIES` to the gateway address, run [Check the setting](#check-the-setting), and keep the value only if the table there says it is correct.
 
 ### Tailscale Funnel from a container
@@ -315,7 +315,7 @@ The container runs `tailscale/tailscale:v1.104.7` with userspace networking: no 
    RETICULA_TRUSTED_PROXIES=172.31.88.250
    ```
 
-   `172.31.88.250` is the fixed address of the Tailscale container. With another `RETICULA_SUBNET` the address has to change too: the comment in `compose.tailscale.yaml` says how. Then apply:
+   `172.31.88.250` is the fixed address of the Tailscale container. With another `RETICULA_SUBNET`, set `RETICULA_TAILSCALE_ADDRESS` in `.env` to an address high in that subnet, and trust that address instead. Then apply:
 
    ```
    docker compose up -d --wait
@@ -328,7 +328,7 @@ The container runs `tailscale/tailscale:v1.104.7` with userspace networking: no 
    ../scripts/smoke https://<name>.<tailnet>.ts.net
    ```
 
-   Measured: `/healthz` answered with status 200 and a valid certificate, and `/mcp` without a token with status 401. The smoke test was not run through the node. Then run [Check the setting](#check-the-setting). Measured: before the container was trusted, the request log said `from=172.31.88.250` for every request. After, it gave the caller's public address. Tailscale source: the proxy replaces `X-Forwarded-For` with the address the request came from, and passes the `Host` header on as the client sent it.
+   Measured: `/healthz` answered with status 200 and a valid certificate, and `/mcp` without a token with status 401. The smoke test was not run through the node yet. It must print 14 lines that start with `ok`, and the `authorize` line must end with `cookie Secure`. It signs up a throwaway account, so with sign-ups closed give it an existing account with `--email` and the password in `SMOKE_PASSWORD`. Then run [Check the setting](#check-the-setting). Measured: before the container was trusted, the request log said `from=172.31.88.250` for every request. After, it gave the caller's public address. Tailscale source: the proxy replaces `X-Forwarded-For` with the address the request came from, and passes the `Host` header on as the client sent it.
 
 To take the public name down, run `docker compose stop tailscale`. This was not run. The node's identity stays in the volume for the next `docker compose up -d`.
 
