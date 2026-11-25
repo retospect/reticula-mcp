@@ -91,10 +91,25 @@ def _hub_line(conn: Conn, viewer: Account, row: dict[str, Any]) -> str:
     # quoted, one line, cut short.
     name = quote(row["title"], HUB_TITLE_LIMIT) if row["title"] else "(untitled hub)"
     notes = f"{row['notes']} {'note' if row['notes'] == 1 else 'notes'}"
-    # How many people share a hub is shown only to those who may see the list.
-    if row["own"] or access.hub_access(conn, viewer.person_id, row["id"]) == "add":
+    # Who shares a hub is shown only to those who may see the list: the owner
+    # gets the handles (a bare count was misread as "shared with others"), a
+    # member who can add gets a count, a reader gets nothing.
+    if row["own"]:
+        names = [
+            f"@{g['handle']}"
+            for g in conn.execute(
+                "SELECT a.handle FROM hub_grant g JOIN account a"
+                " ON a.person_id = g.grantee WHERE g.hub_node_id = %s"
+                " AND g.mode IN ('read', 'add') AND g.grantee <> %s ORDER BY g.id",
+                (row["id"], viewer.person_id),
+            ).fetchall()
+        ]
+        more = f" and {len(names) - 3} more" if len(names) > 3 else ""
+        shared = f"{', '.join(names[:3])}{more}" if names else "nobody"
+        count = f"  shared with {shared},"
+    elif access.hub_access(conn, viewer.person_id, row["id"]) == "add":
         people = row["grants"] + 1  # everyone with a grant, plus the owner
-        count = f"  {people} {'person' if people == 1 else 'people'},"
+        count = f"  {people} people have access,"
     else:
         count = ""
     owner = ""

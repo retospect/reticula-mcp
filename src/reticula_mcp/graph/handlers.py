@@ -357,6 +357,10 @@ def _list_access(conn: Conn, viewer: Account, hub: Row) -> str:
                 f"{_handle(conn, r['grantee'])} {r['mode']}"
                 f" (granted by {_handle(conn, r['granted_by'])})"
             )
+        lines.append(
+            "add: reads the hub and adds notes of their own. read: reads only."
+            " Nobody can edit another person's note."
+        )
         lines.append("next: share(hub, person='@handle', mode='add'|'read'|'none')")
     else:
         lines.append(f"@{viewer.handle} {mode or 'read'}")
