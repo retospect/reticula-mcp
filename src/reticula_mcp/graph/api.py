@@ -10,6 +10,7 @@ The caller owns the transaction. The names and signatures of
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
@@ -34,6 +35,18 @@ Row = dict[str, Any]
 
 CORE_KEYS = frozenset({"kind", "text"})
 MAX_TEXT = 200_000
+MAX_TITLE = 200
+MAX_TAGS = 20
+MAX_TAG = 50
+MAX_ANCHOR = 500
+MAX_MODEL = 100
+MAX_EXT_ID = 300
+
+#: ``kind`` and a link's ``rel`` are printed in other accounts' tool output, so
+#: they are checked on every write (here, not in ``materialize``: a rebuild from
+#: records already signed must not start failing).
+KIND_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+REL_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
 
 
 # --- small helpers -------------------------------------------------------------
@@ -80,14 +93,41 @@ def _merge_extra(payload: dict[str, Any], extra: Mapping[str, Any] | None) -> No
             payload[key] = value
 
 
+def _check_length(name: str, value: str | None, limit: int) -> None:
+    if value is not None and len(value) > limit:
+        raise ReticulaError(BAD_INPUT, f"{name} is longer than {limit} characters")
+
+
+def _check_kind(kind: str) -> None:
+    if not KIND_RE.match(kind):
+        raise ReticulaError(
+            BAD_INPUT,
+            f"kind {kind[:40]!r} is not allowed",
+            hint="a kind is 1-32 characters: a lowercase letter, then"
+            " lowercase letters, digits, _ or -",
+        )
+
+
+def _check_rel(rel: str) -> None:
+    if not REL_RE.match(rel):
+        raise ReticulaError(
+            BAD_INPUT,
+            f"rel {rel[:40]!r} is not allowed",
+            hint="a rel is 1-64 characters from A-Z a-z 0-9 _ . : -",
+        )
+
+
 def _clean_tags(tags: Iterable[str] | None) -> list[str]:
     out: list[str] = []
     for tag in tags or ():
         if not isinstance(tag, str):
             raise ReticulaError(BAD_INPUT, "tags must be strings")
         tag = tag.strip()
+        _check_length("a tag", tag, MAX_TAG)
         if tag and tag not in out:
             out.append(tag)
+            if len(out) > MAX_TAGS:
+                raise ReticulaError(BAD_INPUT, f"more than {MAX_TAGS} tags")
     return out
 
 
@@ -192,10 +232,15 @@ def create_atom(
     kind = (kind or "").strip()
     if not kind:
         raise ReticulaError(BAD_INPUT, "kind is empty")
+    _check_kind(kind)
     text = text or ""
-    if len(text) > MAX_TEXT:
-        raise ReticulaError(BAD_INPUT, f"text is longer than {MAX_TEXT} characters")
+    _check_length("text", text, MAX_TEXT)
     title = title.strip() if title else None
+    _check_length("title", title, MAX_TITLE)
+    _check_length("anchor", anchor, MAX_ANCHOR)
+    _check_length("model", model, MAX_MODEL)
+    _check_length("ext_id", ext_id, MAX_EXT_ID)
+    tag_list = _clean_tags(tags)
     hub: Row | None = None
     if hub_node_id is not None:
         hub = _live_hub(conn, hub_node_id)
@@ -228,7 +273,6 @@ def create_atom(
     payload.update(kind=kind, text=text)
     if title:
         payload["title"] = title
-    tag_list = _clean_tags(tags)
     if tag_list:
         payload["tags"] = tag_list
     if supersedes_addresses:
@@ -277,10 +321,10 @@ def update_atom(
     head, payload = _head(conn, node)
     new = dict(payload)
     if text is not None:
-        if len(text) > MAX_TEXT:
-            raise ReticulaError(BAD_INPUT, f"text is longer than {MAX_TEXT} characters")
+        _check_length("text", text, MAX_TEXT)
         new["text"] = text
     if title is not None:
+        _check_length("title", title.strip(), MAX_TITLE)
         if title.strip():
             new["title"] = title.strip()
         elif node["kind"] in ("hub", "paper"):
@@ -319,8 +363,8 @@ def add_relation(
     ``supersedes`` table); any other ``rel`` to ``links``.
     """
     rel = rel.strip()
-    if not rel or len(rel) > 64:
-        raise ReticulaError(BAD_INPUT, "rel must be 1 to 64 characters")
+    if not remove:  # taking back a link written before the check stays possible
+        _check_rel(rel)
     if not fmt.is_valid_address(to_address):
         raise ReticulaError(BAD_INPUT, f"not an address: {to_address!r}")
     node = _lock_live_node(conn, node_id)
