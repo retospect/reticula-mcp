@@ -177,6 +177,7 @@ Never add `-v` to `down`: it deletes the database. If the stack is already stuck
 
 - Funnel serves only the machine's own `ts.net` name, on ports 443, 8443 and 10000. It cannot serve a domain of your own.
 - On a machine that already uses Funnel on 443, a second service goes on another port with `--https=<port>`. `RETICULA_PUBLIC_URL` must then carry that port.
+- A port other than 443 works only for assistants that connect from your own machines, such as Claude Code. Claude's custom connectors (claude.ai, the desktop and mobile apps) connect from Anthropic's servers and accept port 443 only: "Claude can't connect to a URL that specifies another port" (Claude support, "Get started with custom connectors using remote MCP", read on 2026-11-25). For those, run Reticula on a machine whose port 443 is free, or put a reverse proxy with a name of its own in front.
 - `tailscale funnel reset` removes every service of the machine, not one.
 - In its HTTPS mode Funnel writes `X-Forwarded-For` itself and replaces a value sent by the client. Its TCP modes add no header. This is read from the Tailscale source, not measured here, so run the check above.
 
