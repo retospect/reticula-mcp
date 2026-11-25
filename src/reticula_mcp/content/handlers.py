@@ -11,6 +11,7 @@ the tool's parameters, keyword-only, same names and defaults as in
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from reticula_mcp import accounts
@@ -19,6 +20,7 @@ from reticula_mcp.content import bootstrap
 from reticula_mcp.db.pool import Conn
 from reticula_mcp.graph import access
 from reticula_mcp.permissions import read_through_above_sql, readable_nodes_sql
+from reticula_mcp.search import recent
 from reticula_mcp.search.read import member_counts
 from reticula_mcp.search.render import quote
 
@@ -190,6 +192,38 @@ def _hub_lines(
     return lines
 
 
+def _news_lines(conn: Conn, viewer: Account, hubs: list[dict[str, Any]]) -> list[str]:
+    """What other people wrote, changed or shared in the last days: one line of
+    counts by hub, one of hubs newly shared, none when there is nothing. The
+    counts are those of ``search(query="", since=...)`` (``recent.news``).
+    ``hubs``: the rows of ``_hub_rows``, so that the hubs are read once."""
+    days, most = recent.NEWS_DAYS, recent.NEWS_HUBS
+    since = datetime.now(UTC) - timedelta(days=days)
+    found = recent.news(conn, viewer, since=since, hubs=hubs)
+
+    def name(title: str | None) -> str:
+        return quote(title, HUB_TITLE_LIMIT) if title else "(untitled hub)"
+
+    lines: list[str] = []
+    if found.counts:
+        named = [f"{n} in {name(title)}" for title, n in found.counts[:most]]
+        rest = found.counts[most:]
+        if rest:
+            others = "1 more hub" if len(rest) == 1 else f"{len(rest)} more hubs"
+            named.append(f"{sum(n for _, n in rest)} in {others}")
+        lines.append(
+            f"New from other people in the last {days} days: {', '.join(named)}."
+        )
+    if found.shared:
+        named = [f"{name(title)} by {who}" for title, who in found.shared[:3]]
+        more = f" and {len(found.shared) - 3} more" if len(found.shared) > 3 else ""
+        when = "that time" if lines else f"the last {days} days"
+        lines.append(f"Newly shared with you in {when}: {', '.join(named)}{more}.")
+    if lines:
+        lines[-1] += f' List them with search(query="", since="{days}d").'
+    return lines
+
+
 def _own_note_count(conn: Conn, viewer: Account) -> int:
     row = conn.execute(
         "SELECT count(*) AS n FROM node WHERE author = %s AND tombstoned_at IS NULL",
@@ -232,6 +266,7 @@ def start(conn: Conn, viewer: Account) -> str:
     own = sum(1 for h in hubs if h["own"])
     out.append(f"Your hubs ({own}):" if own else "Your hubs: none yet.")
     out += _hub_lines(conn, viewer, hubs, START_HUB_LIMIT)
+    out += _news_lines(conn, viewer, hubs)
     others = _other_instructions(conn, viewer)
     if others:
         out.append("More instructions (get one by id):")

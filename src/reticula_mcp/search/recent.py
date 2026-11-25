@@ -89,6 +89,10 @@ FORMS = (
     " 2026-11-20 (from the start of that day, UTC), or a date and time"
     " 2026-11-20T08:00Z"
 )
+#: ``start`` says what other people did in this many days, and names this many
+#: hubs before "N in M more hubs".
+NEWS_DAYS = 7
+NEWS_HUBS = 4
 #: The viewer's own hubs and notes: readable from the start.
 ALWAYS = datetime.min.replace(tzinfo=UTC)
 _NEVER = datetime.max.replace(tzinfo=UTC)
@@ -476,6 +480,26 @@ def _events_sql(*, in_hub: bool, limited: bool, only: bool, history: bool) -> st
     """
 
 
+def _news_sql() -> str:
+    """Other people's events counted by hub: the hub a note was filed in for a
+    filing, the hub itself for one that was shared, else the first hub the
+    viewer reads that the author filed the note in (a hub with none: itself)."""
+    return f"""{_best_sql(others=True, history=False)}
+        SELECT x.hub, x.shared, count(*) AS n, max(x.at) AS newest
+        FROM (
+            SELECT b.at, b.what = 'shared' AS shared,
+                   CASE WHEN b.what = 'shared' THEN b.id
+                        WHEN b.what = 'filed' THEN b.hub
+                        ELSE coalesce(b.home, CASE WHEN b.kind = 'hub' THEN b.id END)
+                   END AS hub
+            FROM best b
+            WHERE b.other
+        ) x
+        WHERE x.hub IS NOT NULL
+        GROUP BY x.hub, x.shared
+    """
+
+
 def _params(
     viewer: Account, reach: _Reach, *, since: datetime, kind: str | None = None
 ) -> dict[str, Any]:
@@ -543,6 +567,67 @@ def events(
         for r in rows
     ]
     return found, int(rows[0]["total"]) if rows else 0
+
+
+@dataclass(frozen=True)
+class News:
+    """What other people did since a moment, for the block in ``start``."""
+
+    #: (hub title, notes and hubs in it with an event by another person), the
+    #: hub with the most first. A title is its owner's text: quote it.
+    counts: list[tuple[str | None, int]]
+    #: (hub title, who shared it) for the hubs shared with the viewer since
+    #: then, the newest share first
+    shared: list[tuple[str | None, str]]
+
+
+def news(
+    conn: Conn,
+    viewer: Account,
+    *,
+    since: datetime,
+    hubs: Sequence[Row] | None = None,
+) -> News:
+    """Counts of what ``search(query="", since=...)`` lists of other people,
+    by hub, and the hubs shared with the viewer since then. Same events, same
+    rule about what may be told; nothing here is read that the listing does
+    not read. ``hubs``: every hub the viewer can read (``id``, ``author``,
+    ``address``, ``title``), when the caller has read them, as ``start`` has."""
+    reach = _reach(conn, viewer, hubs)
+    if not reach.opened:
+        return News([], [])
+    params = _params(viewer, reach, since=since)
+    rows = conn.execute(_news_sql(), params, prepare=False).fetchall()
+    if not rows:
+        return News([], [])
+    named = [r["hub"] for r in rows if r["hub"] in reach.opened]
+    if hubs is None:
+        hubs = conn.execute(
+            "SELECT n.id, n.title FROM node n WHERE n.id = ANY(%s)", (named,)
+        ).fetchall()
+    titles = {h["id"]: h["title"] for h in hubs if h["id"] in named}
+    counted = sorted(
+        (r for r in rows if not r["shared"] and r["hub"] in titles),
+        key=lambda r: (r["newest"], r["hub"]),
+        reverse=True,
+    )
+    counted.sort(key=lambda r: -r["n"])  # most first; of equals the newest
+    shared = sorted(
+        (r for r in rows if r["shared"] and r["hub"] in titles),
+        key=lambda r: r["newest"],
+        reverse=True,
+    )
+    handles = _handles(conn, sorted({reach.shared[r["hub"]][1] for r in shared}))
+    return News(
+        [(titles[r["hub"]], int(r["n"])) for r in counted],
+        [
+            (
+                titles[r["hub"]],
+                handles.get(reach.shared[r["hub"]][1], "another person"),
+            )
+            for r in shared
+        ],
+    )
 
 
 def _stated_since(conn: Conn, address: str, old_address: str, since: datetime) -> bool:
