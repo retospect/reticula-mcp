@@ -224,7 +224,8 @@ def test_a_share_taken_away_removes_the_hub_and_its_notes(
 def test_a_note_deleted_after_it_was_listed_is_gone_and_not_counted(
     conn: Conn, make_account: Callable[..., Account]
 ) -> None:
-    """A deleted note leaves the listing and the total drops by one."""
+    """A deleted note's own line goes; in its place a bare line says it was
+    deleted, with nothing of what it said, and the total stays the same."""
     ana, bea, _ = people(conn, make_account)
     hub = mk_hub(conn, bea, "Board")
     share(conn, bea, hub, ana, "read")
@@ -235,8 +236,11 @@ def test_a_note_deleted_after_it_was_listed_is_gone_and_not_counted(
     assert short(c) in listed(before), before
     assert shown_and_total(before) == (4, 4), before
     graph.delete(conn, bea, ref=c)
-    full = expect(conn, ana, [hub, a, b], [c], others=3, words=["DELETEDTEXT"])
-    assert "read · 2 notes" in line_of(full, hub)
+    after = recent(conn, ana)
+    assert shown_and_total(after) == (4, 4), after
+    assert f"- {short(c)} note deleted by @bea · now" in after.splitlines()
+    assert "DELETEDTEXT" not in after
+    assert "read · 2 notes" in line_of(after, hub)
 
 
 def test_a_hub_set_to_private_after_sharing_disappears_with_its_notes(
@@ -269,7 +273,8 @@ def test_a_note_taken_out_of_the_shared_hub_is_gone(
     conn: Conn, make_account: Callable[..., Account]
 ) -> None:
     """A note its author took out of the shared hub (and put in a hub ana cannot
-    read) is no longer listed or counted."""
+    read) is no longer listed as a note: a bare line says it was taken out,
+    with nothing of what it said and nothing of the hub it went to."""
     ana, bea, _ = people(conn, make_account)
     hub = mk_hub(conn, bea, "Board")
     share(conn, bea, hub, ana, "read")
@@ -281,14 +286,16 @@ def test_a_note_taken_out_of_the_shared_hub_is_gone(
     before = recent(conn, ana)
     assert short(moved) in listed(before), before
     graph.link(conn, bea, ref=moved, to=hub, remove=True)
-    expect(
-        conn,
-        ana,
-        [hub, a, b],
-        [moved, elsewhere],
-        others=3,
-        words=["REMOVEDTEXT", "Elsewhere hub"],
-    )
+    after = recent(conn, ana, limit=50)
+    lines = after.splitlines()
+    assert f'- {short(moved)} note taken out of hub "Board" by @bea · now' in lines
+    assert [ln for ln in lines if short(moved) in ln] == [
+        f'- {short(moved)} note taken out of hub "Board" by @bea · now'
+    ]
+    assert short(elsewhere) not in after
+    for word in ("REMOVEDTEXT", "Elsewhere hub"):
+        assert word not in after
+    assert {short(hub), short(a), short(b)} <= set(listed(after))
 
 
 def test_corrects_never_names_a_note_the_viewer_cannot_read(

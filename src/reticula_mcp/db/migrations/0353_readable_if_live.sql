@@ -40,3 +40,20 @@ LANGUAGE sql STABLE AS $$
     -- a deleted hub is told by the arms above, or not at all)
     SELECT r.hub_id FROM reach r WHERE r.hub_id = ANY (ids)
 $$;
+
+-- filings_that_told(viewer, membership_ids): of the given filings, those that
+-- let the viewer read their note while they stood, whether or not they are
+-- withdrawn now: readable_nodes' arm for filed notes (the note in audience
+-- 'hub', filed by its own author, membership audience 'hub', in a hub the
+-- viewer may read), without its "not withdrawn". A note taken out of a hub
+-- is told to the readers this filing gave it to, and to nobody else.
+CREATE OR REPLACE FUNCTION filings_that_told(viewer bigint, membership_ids bigint[])
+RETURNS TABLE (membership_id bigint)
+LANGUAGE sql STABLE AS $$
+    SELECT m.id
+    FROM membership m
+    JOIN node n ON n.id = m.node_id
+    WHERE m.id = ANY (membership_ids)
+      AND m.audience = 'hub' AND m.author = n.author AND n.audience = 'hub'
+      AND m.hub_node_id IN (SELECT h.hub_id FROM readable_hubs(viewer) h)
+$$;
