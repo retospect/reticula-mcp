@@ -3,6 +3,8 @@
 ## Unreleased
 
 - Access to a hub covers the hubs filed under it. That is so in 0.1.0 too; its entry below does not say it.
+- Search finds a note by a short title inside a long query: `greenhouse gateway SD card replaced` now finds the note titled "Gateway". A title of filler words or numbers only does not match this way.
+- With Docker, `RETICULA_EMBED_MODEL` in `.env` sets the embedding model.
 
 ## 0.1.0 (2026-11-25)
 
