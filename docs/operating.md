@@ -44,7 +44,7 @@ The commands are written for the Docker Compose files in [`deploy/`](../deploy) 
    docker compose -f compose.yaml -f compose.source.yaml up -d --build --wait
    ```
 
-   The build of release 0.1.0 took 19 seconds, the first build of a checkout 30 seconds. With the image built, the command returned after 11 to 13 seconds, with both containers healthy. The server container waits for the database, applies pending migrations and then serves.
+   The build of release 0.1.1 took 22 seconds, the first build of a checkout 30 seconds. With the image built, the command returned after 11 to 13 seconds, with both containers healthy. The server container waits for the database, applies pending migrations and then serves.
 
    `docker compose ps` shows the state of both containers. If the command does not return, or ends with an error, read `docker compose logs app` and `docker compose logs db`. With `RETICULA_DB_PASSWORD` left empty it stops at once with `required variable RETICULA_DB_PASSWORD is missing a value`.
 
@@ -369,7 +369,15 @@ The last of these lines that is in the log says how far it got. Three runs that 
 ## Upgrade
 
 1. Back up the database (below).
-2. Set the new `RETICULA_VERSION` in `.env`. For a checkout, update the checkout.
+2. Move the clone to the new release, and set the new `RETICULA_VERSION` in `.env`.
+
+   ```
+   git fetch --depth 1 origin tag v<release>
+   git checkout v<release>
+   ```
+
+   For 0.1.1 the last line that `git` prints is `HEAD is now at e8ca1eb Release 0.1.1`. `.env` stays as it is. If you run a checkout and not a release, update the checkout.
+
 3. Rebuild and restart.
 
    ```
@@ -378,16 +386,25 @@ The last of these lines that is in the log says how far it got. Three runs that 
 
 4. Check `/healthz` and run the smoke test.
 
-The server container applies pending migrations when it starts and logs one line per file, for example `applied 0203_shared_rules.sql`.
+Step 2 moves the clone because the files under `deploy/` belong to a release. The compose file of 0.1.1 passes two settings to the server that the one of 0.1.0 does not pass: `RETICULA_EMBED_MODEL` and `RETICULA_ALLOW_NEWER_SCHEMA`. In the drill the compose file of 0.1.0 with `RETICULA_VERSION=0.1.1` started 0.1.1 and it was healthy, but the container had neither setting.
 
-0.1.1 adds two migrations to those of 0.1.0:
+The server container applies pending migrations when it starts and logs one line per file. From 0.1.0 to 0.1.1:
+
+```
+app-1  | applied 0203_shared_rules.sql
+app-1  | applied 0301_title_words.sql
+```
+
+0.1.1 adds these two migrations to those of 0.1.0:
 
 - `0203_shared_rules` defines three SQL functions and changes no table.
 - `0301_title_words` adds one index on the note table, over the words of each title. No column is added and no row is changed. The index is built at that start, before the server answers. On a test database with 30,041 notes the build took 36 to 83 milliseconds.
 
-The drill went from 0.1.0 to a build of 0.1.1 from source that had 0203 and did not have 0301 yet. The command took 28 seconds when it had to build the image, and 8 to 9 seconds on later switches, when Docker still had the layers of the image. The server was away for about a second: `/healthz` was asked every 0.1 seconds during a switch that applied migration 0203, and the longest time without an answer was 1.1 seconds.
+The drill went from 0.1.0 to 0.1.1, both installed from PyPI. Building the image of 0.1.1 took 22 seconds with no step taken from Docker's build cache. With the image built, the command of step 3 took 7 to 8 seconds. The server was away for one to two seconds: `/healthz` was asked every 0.1 seconds during the switches, and the longest time without an answer was 1.1 and 1.5 seconds in the two switches that applied both migrations, and 1.4 seconds in one that had nothing to apply.
 
-Tokens issued before the upgrade worked after it: the access and refresh tokens of a sign-in, and a token minted with `reticula-mcp token`. An account signed in with the password it had before. Notes written before the upgrade read back unchanged: 112 recorded replies of `start`, `profile`, `search`, `get` and `share` were the same before and after.
+Tokens issued before the upgrade worked after it: the access and refresh tokens of a sign-in, and a token minted with `reticula-mcp token`. An account signed in with the password it had before. The smoke test of 0.1.1 passed.
+
+Notes written before the upgrade read back. Of 112 recorded replies of `start`, `profile`, `search`, `get` and `share`, 98 were the same before and after. The other 14 differed in one or two lines each, and all of those are lines that 0.1.1 words differently on purpose: who reads a hub through the hub above it, who has access to a hub that you can add to, and how the notes of a hub are counted. The release notes of 0.1.1 describe the three changes. No table other than the migration ledger had a different row count after the upgrade.
 
 Migrations only move forward and each file runs in its own transaction. A migration file that has already been applied is never edited; changes arrive as new files. If the server reports that an applied file has changed, you are running mismatched code and database: do not continue.
 
@@ -397,7 +414,7 @@ If the search index needs rebuilding after an upgrade, run `docker compose exec 
 
 ### Go back to the older version
 
-The supported way back is the restore: restore the dump from step 1 as described under Restore, with the old `RETICULA_VERSION`. Everything written after that dump is lost.
+The supported way back is the restore: move the clone back to the old release with `git checkout v<old release>`, set the old `RETICULA_VERSION`, and restore the dump from step 1 as described under Restore. Everything written after that dump is lost.
 
 The old `RETICULA_VERSION` alone, without a restore, puts the older version on a database that the newer one has migrated. The older version does not know what those migrations changed. From 0.1.1 on the server refuses to start there. `docker compose up -d --build --wait` then ends, in the drill after 4 to 20 seconds, with
 
@@ -434,9 +451,7 @@ That is safe only when the release notes of the newer version say that its migra
 
 0.1.0 has no such check: it starts on a newer schema and says nothing. So 0.1.0 starts on a database that 0.1.1 has migrated, with the two migrations listed under Upgrade.
 
-The drill covered 0203 only: its build of 0.1.1 did not have 0301 yet. In the drill 0.1.0 ran on the database that this build had migrated. It gave the same 112 replies as that build on the same data, its smoke test passed, notes written under that build read back, and tokens issued under it worked. That is a measurement for 0.1.0 and migration 0203, not a promise for any other.
-
-0.1.0 on a database with 0301 has not been measured.
+In the drill 0.1.0 from PyPI ran on a database that 0.1.1 from PyPI had migrated, with 0203 and 0301 in the ledger. It gave the same 112 replies as 0.1.0 on its own schema with the same data: the replies were recorded under 0.1.0, the stack went to 0.1.1 and back with nothing written in between, and none of the 112 differed afterwards. Its smoke test passed there. Notes written under 0.1.1 read back under 0.1.0, tokens issued under 0.1.1 worked, and a link written under 0.1.0 on the migrated database was there under 0.1.1 again. The switch back left the server without an answer for 1.5 seconds. That is a measurement for 0.1.0 and these two migrations, not a promise for any other pair of versions.
 
 ## Back up
 
@@ -485,7 +500,7 @@ The volume name in step 1 starts with the project name, which the compose file f
 
 In the drill the restored instance had the same number of rows in every table as the original. `docker compose exec app reticula-mcp rebuild` printed the same counts on both. Notes read back, shared and private. Accounts keep their person IDs, keys and tokens, so connected assistants keep working, as long as `RETICULA_PUBLIC_URL` is the same as before. With a different public URL, tokens issued at sign-in got status 401 and tokens minted with `reticula-mcp token` still worked.
 
-The same steps took an instance back after an upgrade. A dump taken under 0.1.0 was restored after the upgrade to a build of 0.1.1, with `RETICULA_VERSION=0.1.0`: steps 1 to 3 took 7 seconds and step 4 another 7. Every table had the row counts from before the upgrade, 112 recorded replies were the same as before it, and the notes written after the dump were gone. Started on that database again, the 0.1.1 build applied its migration as in the first upgrade.
+The same steps took an instance back after an upgrade. A dump taken under 0.1.0 was restored after the upgrade to 0.1.1, with `RETICULA_VERSION=0.1.0` and the compose file of 0.1.0: steps 1 to 3 took 15 seconds and step 4 another 9. Every table had the row counts from before the upgrade, 112 recorded replies were the same as before it, and the notes written after the dump were gone. Started on that database again, 0.1.1 applied its two migrations as in the first upgrade.
 
 ## Accounts, tokens and connections
 
