@@ -1,65 +1,71 @@
-"""OWNED BY the sign-in lane. Foundation ships the resource-server stub.
+"""OWNED BY the sign-in lane: the OAuth 2.1 authorization server and its one page.
 
 Contract (frozen): ``build_auth(settings, db) -> AuthWiring``. ``server.py``
-calls it once at start-up and never looks inside. See ``seams.AuthWiring`` for
-what may be returned and AGENTS.md for the rules (the principal's
-``AccessToken.subject`` is ``str(account.id)``).
+calls it once at start-up and never looks inside.
 
-Stub behaviour: bearer tokens minted by ``accounts.mint_token`` are verified
-against ``oauth_token``; there are no OAuth endpoints. The sign-in lane
-replaces this module with a full authorization server (dynamic client
-registration, PKCE, one sign-in/sign-up page) without touching ``server.py``.
+Wiring (SDK-native, see AGENTS.md seam 1): ``settings`` + ``provider``. FastMCP
+then verifies bearer tokens through the provider, answers unauthenticated MCP
+calls with ``401`` and ``WWW-Authenticate: Bearer ... resource_metadata=...``,
+and serves ``/authorize`` and ``/token`` (SDK handlers) and the protected-
+resource document at the path-qualified well-known URL. Everything else is ours
+and goes first in ``routes`` (so it wins over any SDK route of the same path):
+
+    /.well-known/oauth-authorization-server    discovery (advertises auth method none)
+    /.well-known/oauth-protected-resource[/mcp] discovery
+    /register                                  dynamic client registration, public clients
+    /revoke                                    RFC 7009 for public clients
+    /signin                                    the one sign-in / create-account page
+
+Bearer tokens minted with ``accounts.mint_token`` (tests, CLI) keep working: the
+provider looks every token up with ``accounts.lookup_token``.
+
+Modules: ``provider`` (state machine), ``grants`` (per-assistant grants and
+tokens), ``registration`` (/register, /revoke), ``signin`` + ``page`` (the
+page), ``metadata``, ``throttle`` + ``netaddr`` (rate limits, client address),
+``verification`` (e-mail verification switch, off), ``cli`` (connections).
 """
 
 from __future__ import annotations
 
-import anyio.to_thread
-from mcp.server.auth.provider import AccessToken
-from mcp.server.auth.settings import AuthSettings
+from mcp.server.auth.settings import (
+    AuthSettings,
+    ClientRegistrationOptions,
+    RevocationOptions,
+)
 from pydantic import AnyHttpUrl
 
-from reticula_mcp import accounts
+from reticula_mcp.auth import config, metadata, registration, signin
+from reticula_mcp.auth.provider import DEFAULT_CLIENT_ID, ReticulaProvider
 from reticula_mcp.config import Settings
 from reticula_mcp.db.pool import Database
 from reticula_mcp.seams import AuthWiring
 
-__all__ = ["AuthWiring", "build_auth"]
-
-DEFAULT_CLIENT_ID = "reticula-token"
-
-
-class DbTokenVerifier:
-    """``TokenVerifier`` over ``oauth_token`` (async; DB work runs in a thread)."""
-
-    def __init__(self, db: Database) -> None:
-        self._db = db
-
-    async def verify_token(self, token: str) -> AccessToken | None:
-        return await anyio.to_thread.run_sync(self._verify, token)
-
-    def _verify(self, token: str) -> AccessToken | None:
-        with self._db.connection() as conn:
-            found = accounts.lookup_token(conn, token)
-        if found is None:
-            return None
-        account, info = found
-        return AccessToken(
-            token="",  # never keep the raw token around
-            client_id=info.client_id or DEFAULT_CLIENT_ID,
-            scopes=list(info.scopes),
-            expires_at=int(info.expires_at.timestamp()) if info.expires_at else None,
-            resource=info.resource,
-            subject=str(account.id),
-            claims={"grant_id": info.grant_id, "label": info.label},
-        )
+__all__ = ["DEFAULT_CLIENT_ID", "AuthWiring", "build_auth"]
 
 
 def build_auth(settings: Settings, db: Database) -> AuthWiring:
+    provider = ReticulaProvider(settings, db)
+    routes = [
+        *metadata.routes(settings),
+        *registration.routes(settings, db, provider),
+        *signin.routes(settings, db, provider),
+    ]
     return AuthWiring(
         settings=AuthSettings(
             issuer_url=AnyHttpUrl(settings.base_url),
             resource_server_url=AnyHttpUrl(settings.resource_url),
-            validate_token_resource=False,
+            # Issued tokens carry the resource they were requested for (RFC
+            # 8707); the provider reports the endpoint URL for operator tokens.
+            validate_token_resource=True,
+            # /register and /revoke are ours (registration.py); keep the SDK's
+            # versions off so they cannot be reached by accident.
+            client_registration_options=ClientRegistrationOptions(
+                enabled=False,
+                valid_scopes=[config.SCOPE],
+                default_scopes=[config.SCOPE],
+            ),
+            revocation_options=RevocationOptions(enabled=False),
         ),
-        token_verifier=DbTokenVerifier(db),
+        provider=provider,
+        routes=routes,
     )
