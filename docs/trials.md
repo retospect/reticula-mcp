@@ -1,6 +1,6 @@
 # Trials with assistants that had never seen Reticula
 
-Reticula is used by language models, not by people. These trials watched models that knew nothing about it try to use it, recorded what they did, and ran again after each fix. This page is the record: the method, the rounds, what went wrong, what was changed and what is still open. About 300 runs in all.
+Reticula is used by language models, not by people. These trials watched models that knew nothing about it try to use it, recorded what they did, and ran again after each fix. This page is the record: the method, the rounds, what went wrong, what was changed and what is still open. About 450 runs in all.
 
 ## Method
 
@@ -387,20 +387,71 @@ When it files a note, the assistant knows what `start` prints: the titles of the
 - **Under which hub** (scenario 14): as on `ff38584`. The project fact went into the shared hub, the medication, the plan to leave and the salary stayed outside every hub, and nothing private was where Ben can read it. Haiku left the second project fact outside the hub, said so and offered to file it.
 - **The listing was not used.** None of 194 searches on this main had an empty query. No account in these trials has more hubs than `start` shows, so no assistant was pointed to it.
 
+## What was changed after round six
+
+All in the server's output, by the owners of those outputs. Each text was first tried on a patched copy of the server.
+
+- The reply to `put` names the 8-character id of the new note or hub in its `next:` line: `next: share(hub='b6b2b2cd', person='@handle') to invite someone; link(ref=<note>, to='b6b2b2cd') files a note under it`.
+- `start` says who an own hub is shared with: `owner  shared with nobody, 6 notes`, `owner  shared with @ben, 7 notes`. A member who can add sees `add  2 people have access`. A reader sees no count.
+- The access list of a hub ends with "add: reads the hub and adds notes of their own. read: reads only. Nobody can edit another person's note."
+- A word that names what is kept here ("notes", "hub", "info") is no longer required of a note. `search("kiln notes")` finds what `search("kiln")` finds.
+- `get` of a correction offers the `disputes` link to the author of the note it hides. Before, the hint was on the hidden note.
+- `get` of a note written with `ext_id` shows `about:` and `anchor:`. `get` of a paper lists the notes about it. A DOI or arXiv id as the query finds the paper and the notes that carry it.
+
+## Round seven: the changes, run again
+
+139 runs of the scenarios these changes touch. By the source the server ran: 33 on main `17c8812`, 48 on main `7bbe825` (six of them with the member's count line patched), 34 on main `a7c5f8d`, which is version 0.1.0, and 24 on `a7c5f8d` with one tool description changed. A table of all thirteen scenarios was not run again.
+
+| Change | Scenario | Runs | Before | After |
+|---|---|---|---|---|
+| Short id in the reply to `put` | 2 and 9, both models | 11 | a short form of the hub's address refused in 3 of 12 runs, 11 rejected calls | no rejected call; 40 of 45 references to a new hub are the printed id, the other 5 a longer tail of the address |
+| Who an own hub is shared with | 14, Haiku | 4 | a false statement about sharing in 6 of 12 runs | none; "Which of my hubs are shared, and with whom?" answered correctly 4 of 4 |
+| What `add` and `read` mean | 6, Haiku | 4 | "can edit" in 2 of 9 runs | none; all four say that nobody can edit another person's note |
+| Search with a filler word | 12, both models | 2 | Ada's search for "kiln notes" found one of three notes | found all three; see below |
+| `disputes` offered on the correction | 13, both models | 6 | hint seen in 0 of 6 runs | seen in 3 of 6; see below |
+| A note shows its paper | 5, both models, with and without a paper stub | 16 | "it will show up with the paper" was not true | every statement about which paper and passage a note belongs to is true |
+
+- **No call was rejected** in the 33 runs on `17c8812` apart from the refused share of a private hub in scenario 12, which the scenario is built on.
+- **Notes about a paper.** Each of the sixteen runs wrote one note with `ext_id` and `anchor`. Without a stub the person was told, for example, that the note is "attached to the paper by its DOI", and a later conversation added that there is "no paper entry for the DOI that you can read, so the note links to the DOI only". In all sixteen runs a later conversation that asked by DOI found the note and named the passage from `anchor`. The one false statement in these runs is a slip: Haiku gave a note's date with the wrong year.
+- **Sharing a private hub.** With all three notes in its first search result, Haiku made the hub and the three notes visible, shared the hub and listed what it had made visible. Ben got his answer. Sonnet shared the hub, left the notes hidden and asked, as before.
+- **Disagreeing with a correction.** All six assistants again wrote a new note that supersedes Ben's, two of them with the hint in front of them. "Put that right" asks for exactly that. One offered afterwards to link Ben's note as disputed. The hint now reaches the person it is for: when Ben asked for the payload afterwards, his assistant opened Ada's note in three of six runs and offered him the `disputes` link in two of them.
+- **A member's count.** `add  2 people have access` is read by Haiku as two people besides the reader. In 23 of 82 runs it told Ben that "Ada and the other member of the hub" can read his note. There is no other member. On a patched copy the line read `add  only you and the owner have access`, and none of the four assistants that saw it said this.
+- **A private note that steers the next one.** Ada's note about leaving the project, which says that Ben must not know, came back in the search for the next project fact when that search had one word too many (see "Still open"). Haiku then kept the project fact out of the shared hub in 6 of 11 conversations, said so and offered to file it. When the note was not among the results, 7 of 7 filed the fact in the hub. Since search results show text, a private note can make the next conversation more careful than the person asked for.
+
+### Two sentences in tool descriptions
+
+Main `7bbe825` came with the paper change and added to two tool descriptions. The description of `query` in `search` gained "A DOI or arXiv id finds the paper and the notes about it." The description of `get` gained "and the paper and passage it is about" and "A paper lists the notes about it." Nothing else that an assistant sees before its first call differed.
+
+With these sentences Haiku skipped `start` in the sharing scenario ("Share my notes on the Kestrel drone with @ben"). The table counts scenario 3 on Haiku. A run has three new conversations, and the first is the one that shares.
+
+| Descriptions of `search` and `get` | Runs | `start` first, all new conversations | `start` first, the sharing conversation | Shared read-only, unasked |
+|---|---|---|---|---|
+| both as in `7bbe825` | 38 | 90 of 114 | 24 of 38 | 3 |
+| both without the sentences (`17c8812`, `a7c5f8d`) | 28 | 84 of 84 | 28 of 28 | 0 |
+| only the sentence in `search` | 12 | 36 of 36 | 12 of 12 | 0 |
+| only the sentences in `get` | 12 | 36 of 36 | 12 of 12 | 0 |
+
+- **Side by side.** Twice the two versions ran at the same time against servers that differed in these sentences only, 12 runs each: 30 of 36 against 36 of 36, then 27 of 36 against 36 of 36.
+- **What a skipped `start` cost.** Of the 14 sharing conversations without `start`, 3 shared the hub read-only ("I made Ben's access read-only. If you want him to be able to add notes too, I can change that.") and one asked instead of sharing. In those three runs Ben's correction did not reach the hub. It stayed in his own account or was not written, and Ada was told 1.2 kg at the end. This is the failure of round one. The server's instructions and the description of `mode` both say that a share is read and add unless the person asks for read-only. Without the starting instruction that was not enough.
+- **Not in every scenario.** Scenarios 1 and 5 on `7bbe825` had `start` first in 30 of 30 new conversations, on both models. A request that reads like one action is where `start` is skipped.
+- **Neither sentence alone.** With one of the two descriptions changed, 36 of 36 each. A test of one edit at a time would have passed both.
+- **The sentences were not needed.** Without them, on `a7c5f8d`, the eight paper runs wrote the note with `ext_id` and `anchor`, said nothing false about its paper or passage, and found it by DOI in a later conversation. The replies carry the paper flow: `about:`, `anchor:`, `notes about this paper` and their `next:` lines.
+- **Why** these sentences have this effect is not known. Its size is: 24 skipped of 114 against none of 156.
+
+Main `a7c5f8d` took the sentences out again. What follows for the next change: a change to the server's instructions, to a tool description or to the starting instruction is run before it is merged. Scenario 3 on Haiku, side by side with the text it replaces, at least 12 runs each, counting `start` first and the mode of the share. All changed texts go into the test together, as they will ship.
+
 ## Still open
 
-These are not fixed by text in the instructions. They are with the owners of search and of the graph tools. Three items of earlier versions of this list are closed: instruction notes no longer come back for unrelated queries, a search result shows the text of the note, and an address without `ret:` is accepted.
+These are not fixed by text in the instructions. They are with the owners of search and of the graph tools. Closed since earlier versions of this list: instruction notes no longer come back for unrelated queries, a search result shows the text of the note, an address without `ret:` is accepted, the reply to `put` names the short id, `start` names who an own hub is shared with, the access list says what `add` and `read` mean, a filler word no longer hides notes from a search, and a note shows the paper and passage it is about.
 
-- **A new note has no short id.** The reply to `put` shows the full address only. See round six: without a short id to copy, assistants make their own, and some of those are refused. A changed `next:` line was tested and removed the problem in 10 of 10 runs.
-- **Who shares a hub.** `start` gives a count of people for each hub. Haiku misreads it in half of its runs, always towards "shared". A line that names the people was tested. See "Under which hub a note goes".
-- **What `add` allows.** Haiku told an owner that a member with `add` can edit notes in 2 of 9 runs. A line under the access list that says what `add` and `read` mean was tested. See round five.
-- **Search misses with a filler word.** `search("kiln notes")` finds fewer of the kiln notes than `search("kiln")`, on `3bab081` as on `ff38584`. An assistant that searches before it writes can be told "no results" while a note on the subject exists.
-- **Disagreeing with a correction.** The hint about `disputes` is printed on the hidden original, which no assistant opened. In six runs over three rounds every assistant superseded the correction instead. The person gets what she asked for, and the other person's note is hidden in turn.
-- **Private notes in a hub that is then shared.** The assistant shares the hub, leaves the notes hidden and asks (scenario 12, all eight runs since round three). One more turn for the person. Since round one no assistant has written a private note unasked, so this should be rare.
-- **Notes about a paper.** `get` on a note shows neither its `ext_id` nor its `anchor`, and a search for the DOI does not find a note that carries it unless a paper stub exists. Both models write exactly such a note, without a stub. A later conversation learns which paper and passage a note is about only if the text says so.
-- **`start` skipped.** Haiku skipped it in 8 of 93 new conversations over the last three rounds, when the request looked simple ("Forget ...", "Show me note ..."). What such a conversation knows is the server's instructions and the tool descriptions. A rule that matters has to be there.
+- **`start` skipped, and then a read-only share.** With the descriptions that ship, Haiku called `start` first in all 84 new conversations of scenario 3. In rounds four to six it skipped `start` in 8 of 93 new conversations, when the request looked simple ("Forget ...", "Show me note ..."). A conversation without `start` knows the server's instructions and the tool descriptions, and with those alone Haiku shared read-only in 3 of 14. The margin is thin: two sentences in two descriptions moved the skipped share of new conversations from none to one in five.
+- **A member's count.** `add  2 people have access` made Haiku speak of another member in 23 of 82 runs. A line that says who the people are was tested: `add  only you and the owner have access`, and `add  you, the owner and 2 more have access` for a larger hub. None of the four assistants that saw the first form spoke of another member. It has not shipped.
+- **Search misses on the subject.** `search("greenhouse gateway SD card replaced")` returns the hub and a private note on another matter, but not the note "Gateway" that `search("greenhouse gateway SD card")` finds. In scenario 2, 10 of 18 searches before a write returned "no results" while a note about the same offsite existed. An assistant that searches before it writes then writes beside what is there.
+- **A private note that steers the next one.** See round seven. Six of eleven conversations kept a project fact out of the shared hub because a private note in the search results asked for discretion on another matter.
+- **Disagreeing with a correction.** The hint about `disputes` is now on the correction and is seen. In twelve runs over four rounds no assistant used it for "Put that right". Each superseded the correction, which hides the other person's note in turn. Whether a second correction should hide the first or stand beside it is a question of design, not of wording.
+- **Private notes in a hub that is then shared.** Sonnet shares the hub, leaves the notes hidden and asks (scenario 12, every Sonnet run since round three). One more turn for the person. Haiku passed in round seven. Since round one no assistant has written a private note unasked, so this should be rare.
 
-Slips that the product did not cause and cannot prevent: a weekday invented for a date (twice, Haiku), a miscounted list (eight times, mostly the hub itself counted as a note), a year assumed for "12 to 14 March" (said openly each time).
+Slips that the product did not cause and cannot prevent: a weekday invented for a date (twice, Haiku), a miscounted list (eight times, mostly the hub itself counted as a note), a year assumed for "12 to 14 March" (said openly each time), the wrong year in a date that the tool had printed correctly (once, Haiku).
 
 ## What these trials do not show
 
@@ -408,5 +459,6 @@ Slips that the product did not cause and cannot prevent: a weekday invented for 
 - The browser sign-in of a connector was not part of the trials. Tokens were minted on the command line.
 - Small graphs: at most a dozen notes per account. Search noise in a large graph is untested.
 - One run per cell in the round tables. Repeated were scenarios 2, 3, 4 and 6 on Haiku, scenario 9 on Sonnet and scenario 14 on both. Several findings above did not show in single runs: the short forms of an address were refused in 3 of 12 runs, and Haiku said "can edit" in 2 of 9. Others may be waiting in the cells that were run once.
-- Each text change to tool output was tested on a patched copy of the server, in 6 to 10 runs. The changes are proposals to the owners of those outputs. This page does not say that they shipped.
+- Each text change to tool output was tested on a patched copy of the server, in 4 to 10 runs, before its owner took it. The six changes after round six are on main and were run again there in round seven. The member's count line is a proposal and has not shipped.
+- The test of the two description sentences ran scenario 3 on Haiku only. Whether Sonnet, or another scenario that reads like one action, reacts to them is not known.
 - English only, and conversations of at most six turns.
