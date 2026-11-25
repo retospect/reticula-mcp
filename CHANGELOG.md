@@ -1,19 +1,20 @@
 # Changelog
 
-## Unreleased
+## 0.1.1 (2026-11-25)
 
 - Access to a hub covers the hubs filed under it. That is so in 0.1.0 too; its entry below does not say it.
 - A hub filed under another hub names the people who read it through the hub above. The owner's line in `start` and `profile` reads `shared with @ben, @cleo through a hub above it`. The access list of `share` has `@ben add (through a hub above this one)`, and the `access:` line of `get` has `@ben add (through a hub above)`. A person is named only to someone who may see the access list of that hub above: its owner, or a member who can add to it. Everyone else gets the wording of 0.1.0.
 - A member who can add to a hub is told who the people are: `only you and the owner have access`, or `you, the owner and 2 more have access`. 0.1.0 printed `2 people have access` and `4 people have access` for the same hubs.
 - `start` and `profile` showed `read` on a hub to two people who can add to it: the owner of a hub above it, and a person with read on the hub and add on a hub above. Both now see `add (from a parent hub)`. The access list says the same of such a reader: `@cleo read (granted by @ben); add through a hub above this one`. Nobody's access changed, only what is printed.
 - Search finds a note by a short title inside a long query: `greenhouse gateway SD card replaced` now finds the note titled "Gateway". A title of filler words or numbers only does not match this way.
+- Search stays fast in a big account and for a long query. It no longer compares the query with every title: at 30,000 notes the title part of a search takes 48 ms instead of 130, and 11 ms instead of 1.8 s for a 1,000-character query. A search on a long-lived connection no longer slows down after the fifth search (22 to 127 ms measured). A query of more than 16 words that say something is taken for a pasted text: no title is looked for inside it, and a note is still found by its words.
 - With Docker, `RETICULA_EMBED_MODEL` in `.env` sets the embedding model.
 - Docs: the README quick start is the Docker Compose path; the operating guide starts with cloning the repository at the release tag and has the Tailscale Funnel steps in order.
 - `scripts/oauth-client-check` connects with the OAuth client of the MCP Python SDK (sign-in, `start`, token refresh, replay of a used refresh token); Check runs it.
 - `start` and `profile` count the notes of a hub as `get` lists them: a deleted note and a note replaced by a newer one are no longer counted, and a hub filed under the hub is named as a hub (`3 notes, 1 hub`).
 - The server refuses to start on a database that a newer version has used (a migration in the ledger that this version has no file for), and so does every other command of `reticula-mcp`. `RETICULA_ALLOW_NEWER_SCHEMA=1` starts it anyway. 0.1.0 does not check this.
 - The server log has one line per request with what an operator needs to see why an assistant does not connect: the caller's address behind the proxy (as `RETICULA_TRUSTED_PROXIES` allows), the calling program, the MCP protocol version it asked for, the connection of a signed-in request, and the reason for a refusal. It replaces uvicorn's access line, which named the proxy as the caller and gave no reason. `GET /healthz` is no longer logged.
-- Migrations: 0.1.1 adds one, `0203_shared_rules`. It defines three SQL functions and changes no table.
+- Migrations: 0.1.1 adds two. `0203_shared_rules` defines three SQL functions and changes no table. `0301_title_words` adds one index on the note table, over the words of each title; no column is added and no row is changed.
 
 ## 0.1.0 (2026-11-25)
 
