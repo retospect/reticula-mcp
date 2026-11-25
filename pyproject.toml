@@ -34,7 +34,30 @@ classifiers = [
     "Topic :: Database",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
-dependencies = []
+dependencies = [
+    "mcp>=1.30,<2",
+    "psycopg[binary,pool]>=3.3.6",
+    "pgvector>=0.4",
+    "cryptography>=45",
+    "argon2-cffi>=23.1",
+    "uvicorn>=0.30",
+]
+
+[project.optional-dependencies]
+# The search lane's local embedder. Not needed for RETICULA_EMBEDDER=hash.
+fastembed = ["fastembed>=0.4"]
+
+[project.scripts]
+reticula-mcp = "reticula_mcp.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-timeout>=2.3",
+    "httpx>=0.27",
+    "ruff>=0.8",
+    "mypy>=1.13",
+]
 
 [project.urls]
 Homepage = "https://github.com/retospect/reticula-mcp"
@@ -43,3 +66,44 @@ Issues = "https://github.com/retospect/reticula-mcp/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/reticula_mcp"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "docs", "tests", "scripts", "README.md", "LICENSE", "AGENTS.md", "CLAUDE.md"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+extend-exclude = [".claude"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF", "PLW1514", "S113", "D417"]
+preview = true
+explicit-preview-rules = true
+ignore = [
+    "B008", "E501", "E741",
+    "RUF001", "RUF002", "RUF003", "RUF012",
+    "SIM102", "SIM103", "SIM105", "SIM108", "SIM110", "SIM117",
+    "B007", "B905", "B010", "RUF005",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["B007", "E402", "F841", "RUF012", "RUF015", "RUF059", "S113"]
+"src/**" = ["RUF059"]
+
+[tool.ruff.format]
+exclude = ["*.md"]
+
+[tool.mypy]
+python_version = "3.12"
+check_untyped_defs = true
+warn_unused_ignores = true
+files = ["src", "tests"]
+
+[[tool.mypy.overrides]]
+module = ["pgvector.*", "fastembed.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+timeout = 120
+markers = ["db: needs the real Postgres (all tests do; informational)"]
