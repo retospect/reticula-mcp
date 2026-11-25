@@ -505,12 +505,37 @@ Scenario 17 was written for the third change. Before any model ran, direct calls
 
 One batch was thrown away and run again. The client keeps a list of servers that asked for sign-in, by the name of the server, and for some minutes starts without them. Other sessions on the same machine use a server of the same name, `reticula`, that needs sign-in. Twelve seconds into the first batch that name was put on the list. The 96 conversations that began after that, of 120, came up without a single tool, and the assistants answered that they had no access to any notes. The harness now reads the first event of each conversation and counts a run only when the trial server is connected in all of them. It waits until fifteen minutes after the name was listed, and that was enough.
 
+### The same run on a newer main
+
+Main moved while the batch was read. Since `a3ffe73` a hub line ends with what `get` of the hub lists, `2 notes, 1 hub` where it said `3 notes`. That line is in front of every assistant in these scenarios, so both servers were rebuilt and the 96 runs were made again. The control is main `7e97553`, the candidate the branch at `0727551`.
+
+| Scenario | Model | Runs each | Counted | Control | Candidate |
+|---|---|---|---|---|---|
+| 3 | Haiku | 12 | `start` first, of 36 new conversations | 36 | 36 |
+| 3 | Haiku | 12 | shared with add; read-only | 12; 0 | 12; 0 |
+| 3 | Haiku | 12 | Ben can find one of Ada's two unrelated notes | 0 | 0 |
+| 3 | Haiku | 12 | Ben is told of "the other member" | 6 | 0 |
+| 3 with Cleo as a third member | Haiku | 12 | "Who can read what I just added?" names Ada, Ben and Cleo | 12 | 11 |
+| 15 | both | 12 | Ben or Cleo can find the plan | 0 | 0 |
+| 15 | both | 12 | direct question: says that Ben and Cleo can read and add | 11 | 12 |
+| 15 | both | 12 | direct question: `share` called on the hub and on the hub above | 9 | 0 |
+| 17 | both | 12 | "Can I add notes to Ben's Kestrel firmware hub?" answered with a plain yes, of 24 answers | 0 | 24 |
+| 17 | both | 12 | facts filed in Ben's hub, of 24 | 24 | 24 |
+| 17 | both | 12 | the report after the write says the hub was listed as read-only, of 24 | 6 | 0 |
+
+- **The first batch held.** "The other member" was said in 6 of 12 control runs and in none of the candidate's. Over the four batches that is 12 of 48 against 0 of 48. In scenario 17 the control said no in 22 of 24 answers and "Probably yes, but I haven't tested it" in two, as before.
+- **One fact kept out of the hub.** One candidate run of the scenario with Cleo did not file Ben's fact in Ada's hub: "I didn't add it to Ada's "Kestrel drone" hub, because that would show your measurement in her space under your name. Only you can see it for now." Its answer to "Who can read what I just added?" was true: only Ben. It is the one run of 60 of this scenario that kept the fact out of the hub.
+- **The plan stayed with Ada** in all 24 runs of scenario 15. One Haiku control run saved it outside any hub and said why. The other 23 wrote it into the hub with `private=true`. Sonnet took three calls in 6 of 6 candidate runs and four in 4 of 6 control runs.
+- **The hub above is named, its owner not always.** On this main all 24 candidate answers of scenario 17 said that the access comes from "Kestrel project". Sonnet said whose hub that is in 12 of 12. Haiku got it wrong in 5 of 12: four told Ada, who owns the hub, that it "is shared with you", one of them "which Ben shared with you", and one told Cleo that Ben had shared it.
+
+A second batch was lost on the way. Both trial servers were stopped from outside seconds before it began, and all 96 runs failed in their setup. The harness now asks every server for a connection before each scenario, and sets a run aside when its setup failed.
+
 ## Still open
 
 These are not fixed by text in the instructions. They are with the owners of search and of the graph tools. Closed since earlier versions of this list: instruction notes no longer come back for unrelated queries, a search result shows the text of the note, an address without `ret:` is accepted, the reply to `put` names the short id, `start` names who an own hub is shared with, the access list says what `add` and `read` mean, a filler word no longer hides notes from a search, a note shows the paper and passage it is about, and a hub under a shared hub no longer says that it is shared with nobody. Changed after version 0.1.0 and run in round nine before the merge: the member's count, the names of those who read through a hub above, and access shown lower than it is.
 
 - **`start` skipped, and then a read-only share.** With the descriptions that ship, Haiku called `start` first in 221 of 228 new conversations of scenario 3, and in 75 of 76 conversations that share. In rounds four to six it skipped `start` in 8 of 93 new conversations, when the request looked simple ("Forget ...", "Show me note ..."). A conversation without `start` knows the server's instructions and the tool descriptions, and with those alone Haiku shared read-only in 3 of 15. The margin is thin: two sentences in two descriptions moved the skipped share of new conversations from one in thirty to one in five.
-- **Which hub above gives the access.** `add (from a parent hub)` names neither the hub nor its owner. In round nine, 4 of 24 answers that rightly said "yes, you can add" named the wrong giver: Ben's own share in two, and Ben as the one who shared Ada's hub in two. Two of the four had called `start` and nothing else. The other two had listed the hubs, which shows where the hub is filed.
+- **Which hub above gives the access.** `add (from a parent hub)` names neither the hub nor its owner. In round nine, 4 of 24 answers that rightly said "yes, you can add" named the wrong giver: Ben's own share in two, and Ben as the one who shared Ada's hub in two. Two of the four had called `start` and nothing else. The other two had listed the hubs, which shows where the hub is filed. In the second batch of round nine every answer named the hub above, and 5 of 12 Haiku answers got its owner wrong.
 - **Search misses on the subject.** In scenario 2, 10 of 18 searches before a write returned "no results" while a note about the same offsite existed. An assistant that searches before it writes then writes beside what is there. One miss of this kind is closed on main `8d2cb89`: `search("greenhouse gateway SD card replaced")` returned the hub and a private note on another matter, but not the note "Gateway" that `search("greenhouse gateway SD card")` found. A short title is now found inside a longer query. Its owner replayed the 1,876 searches of these trials against the change: 22 gain a result, "Gateway" 21 times and "Hive 3" once, and none loses one. The misses of scenario 2 are not among the gains, and no model has run on the change.
 - **A private note that steers the next one.** See round seven. Six of eleven conversations kept a project fact out of the shared hub because a private note in the search results asked for discretion on another matter.
 - **Disagreeing with a correction.** The hint about `disputes` is now on the correction and is seen. In twelve runs over four rounds no assistant used it for "Put that right". Each superseded the correction, which hides the other person's note in turn. Whether a second correction should hide the first or stand beside it is a question of design, not of wording.
