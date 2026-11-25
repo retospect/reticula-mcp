@@ -161,3 +161,57 @@ def test_the_switch_needs_a_connection_and_on_or_off(conn: Conn, ana: Account) -
     assert "per connection" in err.value.message
     with connection.during({"connection": "grant:g1"}), pytest.raises(ReticulaError):
         profile(conn, ana, word_handles="maybe")
+
+
+# ------------------------------------------------------------- words as refs
+
+
+def test_words_open_the_note_whether_or_not_they_are_shown(
+    conn: Conn, ana: Account
+) -> None:
+    note = mk_note(conn, ana, "kiln firing notes", title="Kiln")
+    n = handle_words.number(note)
+    for count in (2, 3, 4):
+        said = handle_words.to_words(n, count)
+        assert get(conn, ana, ref=said) == get(conn, ana, ref=note)
+        assert get(conn, ana, ref=said.upper().replace(" ", "-")) == get(
+            conn, ana, ref=note
+        )
+
+
+def test_two_words_that_name_several_notes_list_them_with_more_words(
+    conn: Conn, ana: Account
+) -> None:
+    a = mk_note(conn, ana, "first", title="First")
+    b = set_number(conn, mk_note(conn, ana, "second", title="Second"), 0)
+    base = handle_words.number(a)
+    b = set_number(conn, b, base ^ (1 << 10))  # same two words, other three
+    two = handle_words.to_words(base, 2)
+    with pytest.raises(ReticulaError) as err:
+        get(conn, ana, ref=two)
+    assert err.value.code == "Conflict"
+    for x in (a, b):
+        three = handle_words.to_words(handle_words.number(x), 3)
+        assert three in err.value.message and short_ref(x) in err.value.message
+        assert get(conn, ana, ref=three) == get(conn, ana, ref=x)
+
+
+def test_words_never_open_a_note_the_reader_may_not_read(
+    conn: Conn, ana: Account, make_account: Callable[..., Account]
+) -> None:
+    bea = make_account(handle="bea")
+    theirs = mk_note(conn, bea, "private to bea", title="Theirs", private=True)
+    said = handle_words.to_words(handle_words.number(theirs), 3)
+    with pytest.raises(ReticulaError) as err:
+        get(conn, ana, ref=said)
+    assert err.value.code == "NotFound" and "Theirs" not in err.value.message
+
+
+def test_several_handles_in_one_get_go_between_commas(conn: Conn, ana: Account) -> None:
+    a = mk_note(conn, ana, "first", title="First")
+    b = mk_note(conn, ana, "second", title="Second")
+    wa, wb = (handle_words.to_words(handle_words.number(x), 3) for x in (a, b))
+    out = get(conn, ana, ref=f"{wa}, {wb}, {short_ref(a)} {short_ref(b)}")
+    assert f"--- 1 of 4: {wa} ---" in out and f"--- 2 of 4: {wb} ---" in out
+    assert f"--- 3 of 4: {short_ref(a)} ---" in out
+    assert '"First"' in out and '"Second"' in out
