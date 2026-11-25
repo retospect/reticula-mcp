@@ -279,7 +279,13 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
 
     @mcp.tool(structured_output=False)
     async def get(
-        ref: Annotated[str, Field(description=_REF)],
+        # Draft sentence, for the trial.
+        ref: Annotated[
+            str,
+            Field(
+                description=_REF + " Up to 10 at once, separated by spaces or commas."
+            ),
+        ],
         history: Annotated[
             bool,
             Field(
