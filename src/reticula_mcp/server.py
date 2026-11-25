@@ -28,7 +28,7 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from reticula_mcp import __version__, permissions
+from reticula_mcp import __version__, connection, permissions
 from reticula_mcp.auth import build_auth, throttle
 from reticula_mcp.config import Settings, parse_rate
 from reticula_mcp.content import handlers as content_handlers
@@ -154,7 +154,11 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
 
         def work() -> str:
             try:
-                with db.connection() as conn:
+                # which connection the call came through (connection.py)
+                with (
+                    connection.during(token.claims if token else None),
+                    db.connection() as conn,
+                ):
                     viewer = viewer_for_token(conn, token)
                     if write:
                         limit_writes(conn, viewer.id)
