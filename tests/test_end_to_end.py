@@ -220,7 +220,9 @@ def test_two_people_share_a_hub_from_sign_up_to_revocation(
         assert call(live, bt, "get", ref=hub).startswith("[error:NotFound]")
         assert call(live, bt, "get", ref=note).startswith("[error:NotFound]")
         left = call(live, bt, "search", query="ActivityPub federation")
-        assert "1 results" in left and "@ada" not in left and "Mastodon" not in left
+        assert "1 results" in left and "@ada" not in left
+        # Ada's note; Ben's own note is the one result.
+        assert "Mastodon federates" not in left
         assert "Mastodon" not in call(live, bt, "start")
         # Ben still has what Ben wrote, and Ada still reads it in her hub.
         assert "Federation protocol and moving" in call(live, at, "get", ref=hub)
