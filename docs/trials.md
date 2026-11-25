@@ -1,6 +1,6 @@
 # Trials with assistants that had never seen Reticula
 
-Reticula is used by language models, not by people. These trials watched models that knew nothing about it try to use it, recorded what they did, and ran again after each fix. This page is the record: the method, the rounds, what went wrong, what was changed and what is still open. About 10,400 runs in all.
+Reticula is used by language models, not by people. These trials watched models that knew nothing about it try to use it, recorded what they did, and ran again after each fix. This page is the record: the method, the rounds, what went wrong, what was changed and what is still open. About 10,700 runs in all.
 
 ## Method
 
@@ -916,7 +916,7 @@ Both texts are read after `start` and cannot move the first call. The cells that
 
 ## Round seventeen: a standing line, and onboarding
 
-1,080 runs. Rounds fourteen and sixteen showed that no text of the server makes an assistant call `start` for a request that does not look like memory, such as an email. The client's own standing instructions can: a CLAUDE.md, a preference in the app, a project's instructions. The line proposed for them:
+1,440 runs. Rounds fourteen and sixteen showed that no text of the server makes an assistant call `start` for a request that does not look like memory, such as an email. The client's own standing instructions can: a CLAUDE.md, a preference in the app, a project's instructions. The line proposed for them:
 
 ```
 Use the Reticula connector as long-term memory: call its start tool at the beginning of every conversation, search it before answering from memory, and save there what should outlast the conversation.
@@ -953,6 +953,20 @@ Haiku with the client's own prompt did not call `start` for "What pressure does 
 ### A move in one call
 
 `link(ref=..., to=<new hub>, from_hub=<old hub>)` moves a note between hubs. It was used in 24 of 24 runs where it was offered and saved a call. Its description cost two gate cells with the client's own prompt (scenario 18's first conversation 7 of 12 against 12; scenario 4's second 1 of 12 against 12), and without it the assistants moved the note right with two calls in 48 of 48. Held.
+
+### The groups, without a new parameter
+
+360 runs. Round sixteen held the lettered groups because `part` cost a gate cell. Two forms followed: `part` with no description, and no new parameter at all, a group read through the ref itself (`get(ref="9ab6128c:A")`). Both carried the same changes beside: no sentence on several refs in `ref` (the hint moved to the last line of a search reply), and the listing told the assistant to name a group to the person by its words.
+
+| Haiku, `start` first, chat / client's own prompt | Main | Through `ref` | `part`, no description |
+|---|---|---|---|
+| scenario 4, first conversation, of 24 | 22 / 24 | 23 / 24 | 17 / 7 |
+| scenario 4, second conversation, of 24 | 22 / 24 | 19 / 24 | 24 / 0 |
+| scenario 18, first conversation, of 12 | 12 / 12 | 12 / 12 | 5 / 12 |
+
+- **A parameter with no description cost the gate as `part` with one did.** The form through `ref` cost nothing beyond the noise.
+- **The groups still worked through `ref`.** Sonnet's overview of the 223-note hub took 12 calls in 6 runs against 73 and 67 on main; every overview named the hub's subjects; Haiku named the three newest notes in 12 of 12 against 3 of 12. The letters reached the person in 2 of 24 overviews, against 12 of 48 before the listing said how to name a group.
+- Taken: the form through `ref`.
 
 ## Still open
 
