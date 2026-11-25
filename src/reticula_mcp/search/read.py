@@ -216,7 +216,10 @@ def _paths(conn: Conn, viewer: Account, node_id: int, own: Row | None = None) ->
             seen.add(ups[0]["id"])
         if own is not None:
             chain.append(own)
-        paths.append(" / ".join(render.quote(render.label(c), 40) for c in chain))
+        path = " / ".join(render.quote(render.label(c), 40) for c in chain)
+        if own is None:
+            path += f" id {render.short_ref(parent['address'])}"
+        paths.append(path)
     return "; ".join(paths)
 
 
@@ -586,6 +589,13 @@ def _render_note(
             f"next: edit(ref={ref!r}) to change it; link(ref={ref!r}, to=<hub>) to file it"
         )
     else:
+        parents = _parents(conn, viewer, row["id"], readable_hub_ids(conn, viewer))
+        if parents:
+            hub = render.short_ref(parents[0]["address"])
+            lines.append(
+                f"next: put(text=<the correction>, supersedes={ref!r}, hub={hub!r})"
+                " replaces it in the same hub"
+            )
         lines.append(f"next: link(ref={ref!r}, to=<hub>) files it under a hub")
     return "\n".join(lines)
 

@@ -235,7 +235,9 @@ def test_through_the_server_a_share_taken_away_holds_at_the_next_call(fresh_db_u
         note = mk_note(c, ada, "cone 6 glaze fires at 1222 C", hub=sub)
         c.commit()
     with start_live(fresh_db_url) as live:
-        assert "ok" not in call(live, his, "get", ref=note)  # not shared yet
+        # not shared yet: nothing of the note. ("ok" was asked here before and
+        # matched two letters of the random person id in the echoed address.)
+        assert "1222" not in call(live, his, "get", ref=note)
         assert "[error:NotFound]" in call(live, his, "get", ref=note)
         call(live, hers, "share", hub=hub, person="@ben", mode="read")
         seen = call(live, his, "get", ref=note)

@@ -271,7 +271,10 @@ def test_a_superseded_private_draft_and_a_link_to_it_show_nothing(conn, make_acc
     for address in (pub, other):
         seen = handlers.get(conn, v, ref=address)
         assert draft not in seen and ref(draft) not in seen
-        assert "(opaque)" not in seen and "supersedes" not in seen
+        # the one "supersedes" allowed is the hint to replace the note read
+        # itself: put(..., supersedes=<this note>, hub=...)
+        hint = f"supersedes={ref(address)!r}"
+        assert "(opaque)" not in seen and "supersedes" not in seen.replace(hint, "")
         assert "see-also" not in seen and "more links" not in seen
     # the author reads all of it
     assert f"supersedes: {ref(draft)} note" in handlers.get(conn, z, ref=pub)
