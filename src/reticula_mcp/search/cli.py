@@ -28,7 +28,13 @@ def run(settings: Settings, args: argparse.Namespace) -> int:
 
     embedder = get_embedder(settings)
     with connect(settings.require_database_url()) as conn:
-        n = index.reindex(conn, embedder, drop=args.drop)
+        # The vector index first, outside a transaction, so that building it
+        # never blocks a running server's writes; then the vectors, committed
+        # in steps.
+        conn.autocommit = True
+        index.ensure_vector_index(conn, embedder)
+        conn.autocommit = False
+        n = index.reindex(conn, embedder, drop=args.drop, checkpoint=conn.commit)
         conn.commit()
     print(f"embedded {n} nodes with {embedder.model}")
     return 0

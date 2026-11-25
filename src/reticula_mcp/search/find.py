@@ -4,6 +4,12 @@ Candidate rule (the only visibility rule here): a node is a candidate only if it
 is in ``current_nodes(viewer)`` (or ``readable_nodes(viewer)`` with
 ``include_superseded``). Every leg embeds that subquery, so no leg can rank,
 count or surface anything the viewer may not read.
+
+The vector leg is optional by design. It runs only when the embedder can
+answer without a long wait (``embedder.is_ready``); otherwise the search asks
+it to load in the background, answers from the keyword legs and says so
+(``Found.semantic``). It compares only vectors of the CURRENT model and
+dimension: rows of any other model in the ``embedding`` table are never read.
 """
 
 from __future__ import annotations
@@ -13,13 +19,21 @@ from dataclasses import dataclass
 from typing import Any
 
 from pgvector import Vector
+from psycopg import sql
 
 from reticula_mcp.accounts import Account
 from reticula_mcp.config import Settings
 from reticula_mcp.db.pool import Conn
 from reticula_mcp.permissions import current_nodes_sql, readable_nodes_sql
 from reticula_mcp.search import index
-from reticula_mcp.search.embedder import Embedder, embed_query, get_embedder
+from reticula_mcp.search.embedder import (
+    Embedder,
+    embed_query,
+    get_embedder,
+    is_ready,
+    load_error,
+    warm,
+)
 from reticula_mcp.search.rank_fusion import reciprocal_rank_fusion
 
 log = logging.getLogger("reticula_mcp.search")
@@ -27,6 +41,21 @@ log = logging.getLogger("reticula_mcp.search")
 RRF_K = 60
 POOL_MIN = 50
 TRIGRAM_MIN = 0.25
+# The share of the query's distinct words a note must have to be a keyword
+# match when no note has all of them (see _lexical). 0 keeps any note with one
+# of the words; 1 means every word, that is no second try at all.
+LOOSE_MIN_SHARE = 0.5
+# Weight of each leg in the fusion (see rank_fusion.py).
+LEG_WEIGHTS: dict[str, float] = {"lexical": 1.0, "title": 1.0, "semantic": 1.0}
+# Up to this many candidate vectors the vector leg compares every one of them
+# (exact, and fast: the candidates are only what the viewer may read). Beyond
+# it the model's HNSW index is used, with pgvector's iterative scan so that
+# the visibility filter cannot starve the result.
+EXACT_MAX = 20_000
+
+SEMANTIC_ON = "on"  # the vector leg ran
+SEMANTIC_LOADING = "loading"  # the model is still loading: keywords only
+SEMANTIC_OFF = "off"  # no model, or it failed: keywords only
 
 # All members of the hub subtree: the hub's members, and (transitively) the
 # members of every sub-hub (a hub that is itself a member). UNION, not UNION ALL,
@@ -50,6 +79,12 @@ class Hit:
     node_id: int
     score: float
     legs: dict[str, tuple[int, float]]
+
+
+@dataclass
+class Found:
+    hits: list[Hit]
+    semantic: str  # SEMANTIC_ON | SEMANTIC_LOADING | SEMANTIC_OFF
 
 
 def _scope(
@@ -89,19 +124,29 @@ def _lexical(
     ).fetchall()
     if strict:
         return [(r["id"], float(r["score"])) for r in strict]
-    # Strict (AND) query matched nothing: retry with the same terms OR-ed, the
-    # way a long natural-language question needs.
+    # No note has every word: retry with the words OR-ed, and keep a note only
+    # when it has at least LOOSE_MIN_SHARE of the query's distinct words (one
+    # common word such as "work" or "day" is not a match). Most words first.
     loose = conn.execute(
         f"""
+        WITH q AS (
+            SELECT tsvector_to_array(to_tsvector('english', %(q)s)) AS words
+        )
         SELECT n.id, ts_rank_cd(n.fts, oq.oq, 32) AS score
-        FROM node n,
+        FROM q,
              to_tsquery('english',
                  replace(plainto_tsquery('english', %(q)s)::text, ' & ', ' | ')
-             ) AS oq(oq)
+             ) AS oq(oq),
+             node n,
+             LATERAL (
+                 SELECT count(*) AS n FROM unnest(tsvector_to_array(n.fts)) AS w(word)
+                 WHERE w.word = ANY(q.words)
+             ) AS shared
         WHERE n.fts @@ oq.oq AND {where}
-        ORDER BY score DESC, n.id DESC LIMIT %(pool)s
+          AND shared.n >= ceil(cardinality(q.words) * %(share)s::numeric)
+        ORDER BY shared.n DESC, score DESC, n.id DESC LIMIT %(pool)s
         """,
-        base,
+        {**base, "share": LOOSE_MIN_SHARE},
     ).fetchall()
     return [(r["id"], float(r["score"])) for r in loose]
 
@@ -124,6 +169,86 @@ def _trigram(
     return [(r["id"], float(r["score"])) for r in rows]
 
 
+def _candidates(
+    conn: Conn, embedder: Embedder, dim: int, where: str, params: dict[str, Any]
+) -> int:
+    """How many vectors the exact scan would compare, counted up to
+    ``EXACT_MAX + 1``. The table's row estimate answers for small instances
+    without a count."""
+    stat = conn.execute(
+        "SELECT reltuples::bigint AS n FROM pg_class WHERE oid = 'embedding'::regclass"
+    ).fetchone()
+    if stat is not None and 0 <= stat["n"] <= EXACT_MAX:
+        return int(stat["n"])
+    row = conn.execute(
+        f"""
+        SELECT count(*) AS n FROM (
+            SELECT 1 FROM embedding e JOIN node n ON n.id = e.node_id
+            WHERE e.model = %(model)s AND e.dim = %(dim)s AND {where}
+            LIMIT %(cap)s
+        ) c
+        """,
+        {**params, "model": embedder.model, "dim": dim, "cap": EXACT_MAX + 1},
+    ).fetchone()
+    return int(row["n"]) if row else 0
+
+
+def _iterative_scan(conn: Conn) -> bool:
+    """pgvector 0.8 or newer: an index scan can go on past ``ef_search`` until
+    enough rows pass the filter."""
+    row = conn.execute(
+        "SELECT extversion FROM pg_extension WHERE extname = 'vector'"
+    ).fetchone()
+    if row is None:
+        return False
+    try:
+        major, minor = (int(part) for part in str(row["extversion"]).split(".")[:2])
+    except ValueError:
+        return False
+    return (major, minor) >= (0, 8)
+
+
+def semantic_sql(embedder: Embedder, dim: int, where: str, *, indexed: bool) -> str:
+    """The vector leg's query. Both forms read only rows of the embedder's own
+    model and dimension.
+
+    ``indexed``: ordered by the distance over ``vec::vector(dim)``, the exact
+    expression of the model's partial HNSW index, with the model as a literal
+    so that the planner can match the index predicate. The cast is in the
+    select list and the ORDER BY only, which are evaluated after the model
+    filter, so a vector of another dimension never reaches it; the distance
+    cutoff sits outside the LIMIT for the same reason.
+
+    Exact form: the candidates are materialised first, then compared.
+    """
+    if indexed:
+        expr = index.vector_expr(dim)
+        model = sql.Literal(embedder.model).as_string().replace("%", "%%")
+        return f"""
+            SELECT id, d FROM (
+                SELECT e.node_id AS id, {expr} <=> %(vec)s::vector({dim}) AS d
+                FROM embedding e
+                WHERE e.model = {model} AND e.dim = {dim}
+                  AND e.node_id IN (SELECT n.id FROM node n WHERE {where})
+                ORDER BY {expr} <=> %(vec)s::vector({dim})
+                LIMIT %(pool)s
+            ) x
+            WHERE x.d <= %(max)s
+            ORDER BY d, id DESC
+        """
+    return f"""
+        WITH cand AS MATERIALIZED (
+            SELECT e.node_id, e.vec FROM embedding e JOIN node n ON n.id = e.node_id
+            WHERE e.model = %(model)s AND e.dim = %(dim)s AND {where}
+        )
+        SELECT node_id AS id, d FROM (
+            SELECT c.node_id, c.vec <=> %(vec)s::vector AS d FROM cand c
+        ) x
+        WHERE x.d <= %(max)s
+        ORDER BY d, id DESC LIMIT %(pool)s
+    """
+
+
 def _semantic(
     conn: Conn,
     embedder: Embedder,
@@ -131,30 +256,37 @@ def _semantic(
     where: str,
     params: dict[str, Any],
     pool: int,
+    keyword_ids: list[int] | None = None,
 ) -> list[tuple[int, float]]:
     qvec = embed_query(embedder, query)
+    dim = len(qvec)
     max_distance = float(getattr(embedder, "max_distance", 1.0))
-    # model-filtered candidates first (MATERIALIZED): vectors of other models
-    # may have another dimension and must never meet the distance operator.
+    # Instructions come back through meaning for almost any question about
+    # the product itself, so they join this leg only when asked for by kind
+    # or when a keyword leg matched them.
+    where = (
+        f"{where} AND (n.kind <> 'instruction' OR %(kind)s::text = 'instruction'"
+        " OR n.id = ANY(%(keyword_ids)s))"
+    )
+    params = {**params, "keyword_ids": keyword_ids or []}
+    indexed = (
+        _candidates(conn, embedder, dim, where, params) > EXACT_MAX
+        and index.has_vector_index(conn, embedder)
+        and _iterative_scan(conn)
+    )
+    args: dict[str, Any] = {
+        **params,
+        "vec": Vector(qvec),
+        "max": max_distance,
+        "pool": pool,
+    }
+    if indexed:
+        conn.execute("SET LOCAL hnsw.iterative_scan = 'relaxed_order'")
+        conn.execute(f"SET LOCAL hnsw.ef_search = {max(40, min(pool * 2, 1000))}")
+    else:
+        args.update(model=embedder.model, dim=dim)
     rows = conn.execute(
-        f"""
-        WITH cand AS MATERIALIZED (
-            SELECT e.node_id, e.vec FROM embedding e JOIN node n ON n.id = e.node_id
-            WHERE e.model = %(model)s AND {where}
-        )
-        SELECT node_id AS id, d FROM (
-            SELECT c.node_id, c.vec <=> %(vec)s::vector AS d FROM cand c
-        ) x
-        WHERE x.d <= %(max)s
-        ORDER BY d, id DESC LIMIT %(pool)s
-        """,
-        {
-            **params,
-            "model": embedder.model,
-            "vec": Vector(qvec),
-            "max": max_distance,
-            "pool": pool,
-        },
+        semantic_sql(embedder, dim, where, indexed=indexed), args
     ).fetchall()
     return [(r["id"], 1.0 - float(r["d"])) for r in rows]
 
@@ -169,8 +301,9 @@ def hybrid_search(
     limit: int = 10,
     include_superseded: bool = False,
     settings: Settings | None = None,
-) -> list[Hit]:
-    """Ranked hits (best first) among the nodes ``viewer`` may read."""
+) -> Found:
+    """Ranked hits (best first) among the nodes ``viewer`` may read, and
+    whether the vector leg took part."""
     where, params = _scope(
         viewer,
         hub_node_id=hub_node_id,
@@ -182,17 +315,35 @@ def hybrid_search(
         ("lexical", _lexical(conn, query, where, params, pool)),
         ("title", _trigram(conn, query, where, params, pool)),
     ]
-    embedder: Embedder | None = None
+    semantic = SEMANTIC_OFF
     try:
         embedder = get_embedder(settings or Settings.from_env())
-        with conn.transaction():  # savepoint: upkeep trouble must not sink a search
-            index.catch_up(conn, embedder, viewer.id)
-            legs.append(
-                ("semantic", _semantic(conn, embedder, query, where, params, pool))
-            )
+        if not is_ready(embedder):
+            # Never load a model inside a tool call: start it in the background
+            # (nothing happens when it is loading, or failed a moment ago) and
+            # answer from keywords now.
+            failed = load_error(embedder)  # read before the retry can clear it
+            warm(embedder)
+            semantic = SEMANTIC_OFF if failed else SEMANTIC_LOADING
+        else:
+            keyword_ids = [i for _, rows in legs for i, _ in rows]
+            cheap = bool(getattr(embedder, "cheap", False))
+            with conn.transaction():  # savepoint: trouble here must not sink a search
+                index.catch_up(
+                    conn,
+                    embedder,
+                    viewer.id,
+                    seconds=None if cheap else index.CATCH_UP_SECONDS,
+                )
+                hits = _semantic(
+                    conn, embedder, query, where, params, pool, keyword_ids
+                )
+            legs.append(("semantic", hits))
+            semantic = SEMANTIC_ON
     except Exception:
-        # No model, a failed download, a dimension surprise: lexical still works.
+        # No model, a dimension surprise, a full disk: keywords still work.
         log.warning("semantic leg skipped", exc_info=True)
-    scores, provenance = reciprocal_rank_fusion(legs, k=RRF_K)
+        semantic = SEMANTIC_OFF
+    scores, provenance = reciprocal_rank_fusion(legs, k=RRF_K, weights=LEG_WEIGHTS)
     ranked = sorted(scores, key=lambda i: (-scores[i], -i))[:limit]
-    return [Hit(i, scores[i], provenance[i]) for i in ranked]
+    return Found([Hit(i, scores[i], provenance[i]) for i in ranked], semantic)

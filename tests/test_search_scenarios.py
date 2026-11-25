@@ -268,7 +268,8 @@ def test_instruction_from_outside_the_system_account_is_quoted_with_a_warning(
     )
     file_under(conn, shipped, hub)
 
-    found = handlers.search(conn, alice, query="instructions tip", limit=10)
+    # a word both carry: instructions are found by keyword, not by meaning alone
+    found = handlers.search(conn, alice, query="tip", limit=10)
     bad_row = lines_with(found, ref(evil))[0]
     assert render.UNTRUSTED in bad_row and '"Helpful tip"' in bad_row
     assert "approved instruction" not in bad_row

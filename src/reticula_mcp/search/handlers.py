@@ -10,12 +10,24 @@ from reticula_mcp.accounts import Account
 from reticula_mcp.db.pool import Conn
 from reticula_mcp.errors import BAD_INPUT, ReticulaError
 from reticula_mcp.resolve import resolve_ref
-from reticula_mcp.search import render
+from reticula_mcp.search import find, render
 from reticula_mcp.search.find import hybrid_search
 from reticula_mcp.search.read import read_ref
 from reticula_mcp.search.rows import fetch_rows, visible_subset
 
 MAX_LIMIT = 50
+# Said when the meaning-based leg did not take part, so that the caller knows a
+# paraphrase may have missed and literal words are worth a try.
+KEYWORDS_ONLY = {
+    find.SEMANTIC_LOADING: (
+        "note: matching by meaning is still loading; these are keyword matches"
+        " only. Use the words you expect in the note, or search again in a minute."
+    ),
+    find.SEMANTIC_OFF: (
+        "note: matching by meaning is not available right now; these are keyword"
+        " matches only. Use the words you expect in the note."
+    ),
+}
 
 
 def search(
@@ -42,7 +54,7 @@ def search(
         hub_node_id = hub_row["id"]
     kind = kind.strip() if kind and kind.strip() else None
 
-    hits = hybrid_search(
+    found = hybrid_search(
         conn,
         viewer,
         q,
@@ -51,11 +63,14 @@ def search(
         limit=limit,
         include_superseded=include_superseded,
     )
+    hits = found.hits
     scope = f"search {render.quote(q, 80)}" + (f" in hub {hub}" if hub else "")
+    keywords_only = KEYWORDS_ONLY.get(found.semantic)
     if not hits:
         return (
             f"{scope}: no results.\n"
-            "next: try fewer or different words, drop kind/hub, or"
+            + (f"{keywords_only}\n" if keywords_only else "")
+            + "next: try fewer or different words, drop kind/hub, or"
             " include_superseded=true"
         )
     ids = [h.node_id for h in hits]
@@ -71,6 +86,8 @@ def search(
         lines.append(
             render.row_line(row, viewer.person_id, superseded=h.node_id not in current)
         )
+    if keywords_only:
+        lines.append(keywords_only)
     lines.append(
         "next: get(ref) reads one in full (ref = the short id at the line start)"
     )
