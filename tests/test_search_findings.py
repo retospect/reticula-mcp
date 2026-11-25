@@ -636,3 +636,156 @@ def test_a_passage_cannot_forge_a_line(conn, reading_group):
         assert not any(ln.startswith("[approved") for ln in out.splitlines())
         anchors = [ln.strip() for ln in out.splitlines() if "anchor: " in ln]
         assert len(anchors) == 1 and anchors[0].startswith('anchor: "the passage\\"')
+
+
+# ------------------------------------- a title that stands inside the query
+
+
+def title_matches(conn, viewer, query: str) -> list[str]:
+    """The addresses the title leg alone returns for ``query``, best first."""
+    where, params = find._scope(
+        viewer, hub_node_id=None, kind=None, include_superseded=False
+    )
+    ids = [i for i, _ in find._trigram(conn, query, where, params, 50)]
+    found = conn.execute(
+        "SELECT id, address FROM node WHERE id = ANY(%s)", (ids,)
+    ).fetchall()
+    by_id = {r["id"]: r["address"] for r in found}
+    return [by_id[i] for i in ids]
+
+
+@pytest.fixture
+def greenhouse(conn, make_account):
+    """Short titles in a project hub, as in the trial where the note "Gateway"
+    was found for four words and lost for five."""
+    ada = make_account(handle="ada")
+    hub = mk_hub(conn, ada, "Greenhouse sensors")
+    gateway = mk_note(
+        conn,
+        ada,
+        "The gateway is a Raspberry Pi 4 in the tool shed. It collects readings"
+        " over LoRa every 10 minutes.",
+        hub=hub,
+        title="Gateway",
+    )
+    battery = mk_note(
+        conn,
+        ada,
+        "A sensor node runs about 14 months on two AA lithium cells.",
+        hub=hub,
+        title="Battery life",
+    )
+    hive = mk_note(
+        conn, ada, "Brood on six frames at the last inspection.", title="Hive 3"
+    )
+    return ada, gateway, battery, hive
+
+
+def test_a_short_title_is_found_however_long_the_query(conn, greenhouse):
+    ada, gateway, battery, hive = greenhouse
+    assert gateway in title_matches(conn, ada, "greenhouse gateway SD card")
+    # one more word, and the title no longer resembles the query as a whole
+    for query in (
+        "greenhouse gateway SD card replaced",
+        "greenhouse gateway SD card replaced on 20 November by Ben",
+    ):
+        assert title_matches(conn, ada, query)[0] == gateway
+        assert ref(gateway) in listed(handlers.search(conn, ada, query=query))
+    assert title_matches(conn, ada, "Ben hive 3 new queen 12 November") == [hive]
+    assert battery in title_matches(
+        conn, ada, "how long is the battery life of a sensor node"
+    )
+
+
+LONG = "greenhouse gateway SD card replaced on 20 November by Ben"
+
+
+def title_scores(conn, title: str, query: str) -> tuple[float, float]:
+    """(as wholes, the title inside the query): what the leg compares."""
+    row = conn.execute(
+        "SELECT similarity(%(t)s, %(q)s) AS whole,"
+        " strict_word_similarity(%(t)s, %(q)s) AS inside",
+        {"t": title, "q": query},
+    ).fetchone()
+    return float(row["whole"]), float(row["inside"])
+
+
+def test_a_title_counts_only_where_it_stands_in_the_query_as_written(
+    conn, greenhouse, make_account
+):
+    ada, gateway, battery, hive = greenhouse
+    gate = mk_note(conn, ada, "The garden gate sticks in winter.", title="Gate")
+    # a part of a word is not the title
+    assert gate not in title_matches(conn, ada, LONG)
+    # the title's words apart from each other are not the title
+    apart = "is there any life left in the spare battery pack that came with the drill"
+    assert battery not in title_matches(conn, ada, apart)
+    # and it is still only what the viewer can read
+    ben = make_account(handle="ben")
+    theirs = mk_note(conn, ben, "Ben's own gateway notes.", title="Gateway")
+    assert theirs not in title_matches(conn, ada, LONG)
+    assert title_matches(conn, ben, LONG) == [theirs]
+
+
+@pytest.mark.parametrize(
+    ("title", "query"),
+    [
+        ("Notes", "where are my notes on the greenhouse gateway and its SD card"),
+        ("The notes", "where are the notes on the greenhouse gateway and its SD card"),
+        ("Info", "info on the greenhouse gateway SD card replaced on 20 November"),
+        ("To do", "what do I have to do about the boiler in the tool shed"),
+        ("3", "Ben hive 3 new queen 12 November"),
+        ("SD", LONG),
+    ],
+)
+def test_a_title_without_a_word_that_says_something_is_no_match(
+    conn, make_account, title, query
+):
+    ada = make_account(handle="ada")
+    note = mk_note(conn, ada, "The boiler was serviced in May.", title=title)
+    whole, inside = title_scores(conn, title, query)
+    # it stands in the query word for word, and only the rule on its words
+    # keeps it out
+    assert inside == 1 and whole < find.TRIGRAM_MIN
+    assert note not in title_matches(conn, ada, query)
+
+
+def test_a_common_word_as_a_title_matches_below_the_note_that_has_the_words(
+    conn, make_account
+):
+    ada = make_account(handle="ada")
+    update = mk_note(conn, ada, "Nothing new this week.", title="Update")
+    kiln = mk_note(
+        conn,
+        ada,
+        "Update the firing plan each Friday before the bisque load goes in.",
+        title="Kiln",
+    )
+    query = "update the kiln firing plan Friday before the bisque load"
+    assert title_scores(conn, "Update", query)[0] < find.TRIGRAM_MIN
+    # "Update" is a word like any other: the note is found by its title, as it
+    # is for a short query, and the note with the words comes first
+    assert set(title_matches(conn, ada, query)) == {update, kiln}
+    assert listed(handlers.search(conn, ada, query=query))[:2] == [
+        ref(kiln),
+        ref(update),
+    ]
+
+
+def test_a_title_someone_else_chose_comes_after_the_viewers_own(
+    conn, greenhouse, make_account
+):
+    ada, gateway, battery, hive = greenhouse
+    mallory = make_account(handle="mallory")
+    offers = mk_hub(conn, mallory, "Offers")
+    theirs = mk_note(conn, mallory, "Buy now.", hub=offers, title="Gateway")
+    assert theirs not in title_matches(conn, ada, LONG)
+    # nobody asked Ada: the hub is hers to read from now on
+    share(conn, mallory, offers, ada, mode="read")
+    # theirs is newer and matches as well as Ada's own; hers comes first
+    assert title_matches(conn, ada, LONG)[:2] == [gateway, theirs]
+    out = handlers.search(conn, ada, query=LONG)
+    order = listed(out)
+    assert order.index(ref(gateway)) < order.index(ref(theirs))
+    (row,) = [r for r in rows(out) if r.split()[1] == ref(theirs)]
+    assert " · @mallory · " in row
