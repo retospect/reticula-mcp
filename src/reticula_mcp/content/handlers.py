@@ -19,6 +19,7 @@ from reticula_mcp.content import bootstrap
 from reticula_mcp.db.pool import Conn
 from reticula_mcp.graph import access
 from reticula_mcp.permissions import read_through_above_sql, readable_nodes_sql
+from reticula_mcp.search.read import member_counts
 from reticula_mcp.search.render import quote
 
 #: Hubs listed by ``start`` and ``profile`` before "and N more".
@@ -68,22 +69,30 @@ def _inherited_mode(conn: Conn, viewer: Account, hub_node_id: int) -> str:
 
 def _hub_rows(conn: Conn, viewer: Account) -> list[dict[str, Any]]:
     """Hubs the viewer can read, own first. Visibility comes only from
-    ``readable_nodes``."""
-    return conn.execute(
+    ``readable_nodes``. ``notes`` and ``hubs`` count what ``get`` of the hub
+    lists (``member_counts``): not what was deleted or replaced by a newer
+    note."""
+    rows = conn.execute(
         "SELECT h.id, h.address, h.title, h.author, o.handle AS owner_handle,"
         " (h.author = %(person)s) AS own,"
         f" {read_through_above_sql('h.id')} AS above,"
         " (SELECT count(*) FROM hub_grant g WHERE g.hub_node_id = h.id"
-        "   AND g.mode IN ('read', 'add')) AS grants,"
-        " (SELECT count(*) FROM membership m WHERE m.hub_node_id = h.id"
-        "   AND NOT m.withdrawn AND m.node_id IN"
-        f"   ({readable_nodes_sql('%(viewer)s')})) AS notes"
+        "   AND g.mode IN ('read', 'add')) AS grants"
         " FROM node h LEFT JOIN account o ON o.person_id = h.author"
         " WHERE h.kind = 'hub' AND h.tombstoned_at IS NULL"
         f" AND h.id IN ({readable_nodes_sql('%(viewer)s')})"
         " ORDER BY own DESC, h.updated_at DESC, h.id DESC",
         {"person": viewer.person_id, "viewer": viewer.id},
     ).fetchall()
+    counts = member_counts(conn, viewer, [r["id"] for r in rows], history=False)
+    return [
+        {
+            **r,
+            "notes": counts.get(r["id"], (0, 0))[0],
+            "hubs": counts.get(r["id"], (0, 0))[1],
+        }
+        for r in rows
+    ]
 
 
 def _hub_line(conn: Conn, viewer: Account, row: dict[str, Any]) -> str:
@@ -98,6 +107,8 @@ def _hub_line(conn: Conn, viewer: Account, row: dict[str, Any]) -> str:
     # quoted, one line, cut short.
     name = quote(row["title"], HUB_TITLE_LIMIT) if row["title"] else "(untitled hub)"
     notes = f"{row['notes']} {'note' if row['notes'] == 1 else 'notes'}"
+    if row["hubs"]:
+        notes += f", {row['hubs']} {'hub' if row['hubs'] == 1 else 'hubs'}"
     # Who shares a hub is shown only to those who may see the list: the owner
     # gets the handles (a bare count was misread as "shared with others"), a
     # member who can add gets a count, a reader gets nothing.

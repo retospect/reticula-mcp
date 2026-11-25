@@ -121,6 +121,7 @@ All settings are environment variables. There are no config files. Under Docker 
 | `RETICULA_EMBEDDER` | `auto` | `auto`, `hash` or `fastembed`. `fastembed` runs a local model and needs the extra `reticula-mcp[fastembed]`. `hash` needs nothing and has no real sense of meaning; keyword matching still works. `auto` uses `fastembed` when it is installed and `hash` otherwise. |
 | `RETICULA_EMBED_MODEL` | `BAAI/bge-small-en-v1.5` | Model name for the `fastembed` embedder. The model is downloaded once, on first use. |
 | `RETICULA_STATELESS_HTTP` | `true` | Keep no MCP session state on the server, so a restart does not strand a connected assistant. |
+| `RETICULA_ALLOW_NEWER_SCHEMA` | unset | The server refuses to start on a database that a newer version has used, because it does not know what that version changed. `1` starts it anyway, with a warning. For an emergency step back to an older version only. |
 
 To get the local embedding model, run `uvx --from 'reticula-mcp[fastembed]' reticula-mcp serve`.
 

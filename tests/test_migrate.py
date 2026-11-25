@@ -14,6 +14,7 @@ from reticula_mcp.db.migrate import (
     migrate,
     migrations_dir,
     pending,
+    unknown,
 )
 
 EXPECTED_TABLES = {
@@ -110,3 +111,50 @@ def test_record_log_is_append_only(conn):
     with pytest.raises(psycopg.errors.RaiseException, match="no tombstone"):
         with conn.transaction():
             conn.execute("SELECT blank_record_content(%s)", (rid,))
+
+
+def test_a_database_a_newer_version_has_used_is_refused(blank_db_url, tmp_path: Path):
+    (tmp_path / "0001_a.sql").write_text("CREATE TABLE a (x int);")
+    (tmp_path / "0002_b.sql").write_text("CREATE TABLE b (x int);")
+    with connect(blank_db_url) as c:
+        migrate(c, tmp_path)
+        assert unknown(c, tmp_path) == []
+        # the older version: no file for 0002, and one file not applied yet
+        (tmp_path / "0002_b.sql").unlink()
+        (tmp_path / "0003_c.sql").write_text("CREATE TABLE c (x int);")
+        assert unknown(c, tmp_path) == ["0002_b"]
+        with pytest.raises(
+            MigrationError, match=r"0002_b.*a newer version has used it"
+        ):
+            migrate(c, tmp_path)
+        # refused before anything is applied
+        assert c.execute("SELECT to_regclass('c')").fetchone()["to_regclass"] is None
+        c.rollback()
+        assert [m.version for m in migrate(c, tmp_path, allow_newer=True)] == [3]
+
+
+def test_the_command_line_refuses_a_newer_schema_unless_told(
+    blank_db_url, monkeypatch, capsys
+):
+    from reticula_mcp import cli
+
+    monkeypatch.setenv("RETICULA_DATABASE_URL", blank_db_url)
+    monkeypatch.delenv("RETICULA_ALLOW_NEWER_SCHEMA", raising=False)
+    assert cli.main(["migrate"]) == 0
+    with connect(blank_db_url) as c:
+        c.execute(
+            "INSERT INTO schema_migration (version, name, checksum)"
+            " VALUES (9999, 'from_a_later_release', 'x')"
+        )
+        c.commit()
+    capsys.readouterr()
+    for command in (["migrate"], ["serve"], ["serve", "--migrate"]):
+        assert cli.main(command) == 1
+        err = capsys.readouterr().err
+        assert "[error:BadInput]" in err and "9999_from_a_later_release" in err
+        assert "RETICULA_ALLOW_NEWER_SCHEMA=1" in err and "Traceback" not in err
+    monkeypatch.setenv("RETICULA_ALLOW_NEWER_SCHEMA", "1")
+    assert cli.main(["migrate"]) == 0
+    captured = capsys.readouterr()
+    assert "warning:" in captured.err and "9999_from_a_later_release" in captured.err
+    assert "schema is up to date" in captured.out

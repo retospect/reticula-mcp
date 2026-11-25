@@ -7,6 +7,8 @@
 - With Docker, `RETICULA_EMBED_MODEL` in `.env` sets the embedding model.
 - Docs: the README quick start is the Docker Compose path; the operating guide starts with cloning the repository at the release tag and has the Tailscale Funnel steps in order.
 - `scripts/oauth-client-check` connects with the OAuth client of the MCP Python SDK (sign-in, `start`, token refresh, replay of a used refresh token); Check runs it.
+- `start` and `profile` count the notes of a hub as `get` lists them: a deleted note and a note replaced by a newer one are no longer counted, and a hub filed under the hub is named as a hub (`3 notes, 1 hub`).
+- The server refuses to start on a database that a newer version has used (a migration in the ledger that this version has no file for). `RETICULA_ALLOW_NEWER_SCHEMA=1` starts it anyway. 0.1.0 does not check this.
 
 ## 0.1.0 (2026-11-25)
 

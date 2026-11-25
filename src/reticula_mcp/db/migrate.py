@@ -7,6 +7,9 @@
 * One transaction per file. Ledger: ``schema_migration(version, name,
   checksum, applied_at)``. A sealed file whose bytes changed is refused
   (``checksum`` mismatch): add a new migration instead.
+* A ledger row without a file means a newer version has used the database.
+  That is refused unless ``allow_newer`` is set: this version does not know
+  what the newer schema changed.
 * A session advisory lock serialises concurrent runners.
 * Idempotent: running twice applies nothing the second time.
 
@@ -87,6 +90,30 @@ def applied(conn: psycopg.Connection[Any]) -> dict[int, str]:
     return {int(str(_col(r, "version", 0))): str(_col(r, "checksum", 1)) for r in rows}
 
 
+def unknown(conn: psycopg.Connection[Any], directory: Path | None = None) -> list[str]:
+    """Applied migrations this version has no file for, as ``NNNN_name``: a
+    newer version has used the database."""
+    known = {m.version for m in discover(directory)}
+    exists = conn.execute("SELECT to_regclass('schema_migration')").fetchone()
+    if not exists or _first(exists) is None:
+        conn.rollback()
+        return []
+    rows = conn.execute(
+        "SELECT version, name FROM schema_migration ORDER BY version"
+    ).fetchall()
+    conn.rollback()
+    found = [(int(str(_col(r, "version", 0))), str(_col(r, "name", 1))) for r in rows]
+    return [f"{version:04d}_{name}" for version, name in found if version not in known]
+
+
+def newer_schema_message(names: list[str]) -> str:
+    more = f" and {len(names) - 3} more" if len(names) > 3 else ""
+    return (
+        "the database has migrations this version does not have"
+        f" ({', '.join(names[:3])}{more}): a newer version has used it"
+    )
+
+
 def pending(
     conn: psycopg.Connection[Any], directory: Path | None = None
 ) -> list[Migration]:
@@ -95,11 +122,16 @@ def pending(
 
 
 def migrate(
-    conn: psycopg.Connection[Any], directory: Path | None = None
+    conn: psycopg.Connection[Any],
+    directory: Path | None = None,
+    *,
+    allow_newer: bool = False,
 ) -> list[Migration]:
     """Apply every pending migration; return the ones applied.
 
     ``conn`` must be idle (no open transaction); this function commits.
+    A database a newer version has used is refused before anything is applied,
+    unless ``allow_newer`` is set.
     """
     files = discover(directory)
     ran: list[Migration] = []
@@ -108,6 +140,9 @@ def migrate(
         conn.execute(LEDGER_DDL)
         conn.commit()
         done = applied(conn)
+        newer = unknown(conn, directory)
+        if newer and not allow_newer:
+            raise MigrationError(newer_schema_message(newer))
         for m in files:
             if m.version in done:
                 if done[m.version] != m.checksum:
