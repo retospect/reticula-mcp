@@ -56,7 +56,8 @@ def test_two_people_share_a_hub_from_sign_up_to_revocation(
             "SELECT count(*) AS n, count(e.node_id) AS embedded FROM node n"
             " LEFT JOIN embedding e ON e.node_id = n.id WHERE n.kind = 'instruction'"
         ).fetchone()
-    assert shipped == {"n": 4, "embedded": 4}
+    # one per file in content/instructions/
+    assert shipped == {"n": 5, "embedded": 5}
 
     with start_live(blank_db_url) as live:
         # An assistant that knows only the URL finds out how to sign in.
