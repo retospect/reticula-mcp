@@ -210,7 +210,13 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
 
     @mcp.tool(structured_output=False)
     async def search(
-        query: Annotated[str, Field(description="What to look for, in plain words.")],
+        query: Annotated[
+            str,
+            Field(
+                description="What to look for, in plain words. Leave it empty"
+                " together with `kind` or `hub` to list what is there."
+            ),
+        ],
         hub: Annotated[
             str | None,
             Field(

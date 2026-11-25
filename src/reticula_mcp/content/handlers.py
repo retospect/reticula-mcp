@@ -119,7 +119,7 @@ def _hub_lines(
         )
         lines += foreign
     if len(rows) > limit:
-        lines.append(f'- and {len(rows) - limit} more: search(query=..., kind="hub")')
+        lines.append(f'- and {len(rows) - limit} more: search(query="", kind="hub")')
     return lines
 
 
