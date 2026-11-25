@@ -330,4 +330,37 @@ def get(
     depth: int = 1,
     part: str | None = None,
 ) -> str:
-    return read_ref(conn, viewer, ref, history=history, depth=depth, part=part)
+    refs = split_refs(ref)
+    if len(refs) <= 1:
+        return read_ref(conn, viewer, ref, history=history, depth=depth, part=part)
+    if len(refs) > MAX_REFS:
+        raise ReticulaError(
+            BAD_INPUT,
+            f"at most {MAX_REFS} refs in one get; this asks for {len(refs)}",
+            hint="split them over several calls",
+        )
+    if part is not None:
+        raise ReticulaError(BAD_INPUT, "part is for one hub: give one ref with it")
+    answers = []
+    for n, one in enumerate(refs, 1):
+        try:
+            text = read_ref(conn, viewer, one, history=history, depth=depth)
+        except ReticulaError as exc:  # this ref fails; the others still answer
+            text = exc.render()
+        answers.append(f"--- {n} of {len(refs)}: {one} ---\n{text}")
+    return "\n".join(answers)
+
+
+#: Refs one ``get`` reads.
+MAX_REFS = 10
+_REF_SPLIT = re.compile(r"[\s,]+")
+
+
+def split_refs(ref: str) -> list[str]:
+    """The refs in ``ref``, separated by spaces or commas, each once, in order.
+    No ref has a space or a comma in it (an address, an id suffix, a page)."""
+    seen: list[str] = []
+    for one in _REF_SPLIT.split(ref.strip()):
+        if one and one not in seen:
+            seen.append(one)
+    return seen
