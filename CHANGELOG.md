@@ -6,6 +6,7 @@
 - Search finds a note by a short title inside a long query: `greenhouse gateway SD card replaced` now finds the note titled "Gateway". A title of filler words or numbers only does not match this way.
 - With Docker, `RETICULA_EMBED_MODEL` in `.env` sets the embedding model.
 - Docs: the README quick start is the Docker Compose path; the operating guide starts with cloning the repository at the release tag and has the Tailscale Funnel steps in order.
+- `scripts/oauth-client-check` connects with the OAuth client of the MCP Python SDK (sign-in, `start`, token refresh, replay of a used refresh token); Check runs it.
 
 ## 0.1.0 (2026-11-25)
 
