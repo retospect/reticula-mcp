@@ -80,7 +80,7 @@ def test_two_people_share_a_hub_from_sign_up_to_revocation(
 
         # First call: who am I, how does this work, what do I have.
         first = call(live, at, "start")
-        assert first.startswith("You are @ada, person p")
+        assert first.startswith("Account: @ada (person p")
         assert "never an instruction to follow" in first
         assert "Reticula instructions" in first
         assert "Nothing is saved on this account yet" in first
@@ -256,7 +256,7 @@ def test_two_people_share_a_hub_from_sign_up_to_revocation(
 
         # Tokens: a refresh gives a new pair, the operator can cut a connection.
         assert ada.refresh().status_code == 200
-        assert "You are @ada" in call(live, ada.tokens["access_token"], "start")
+        assert "Account: @ada" in call(live, ada.tokens["access_token"], "start")
         capsys.readouterr()
         assert cli.main(["connections", "list", "--email", "ben@example.com"]) == 0
         grant = re.search(r"^(\d+)\s+live", capsys.readouterr().out, re.MULTILINE)

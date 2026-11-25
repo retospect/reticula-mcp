@@ -14,7 +14,7 @@ def test_start_gives_a_fresh_account_the_starter_instruction_and_an_empty_graph_
     me = make_account(handle="newcomer")
     out = start(conn, me)
     lines = out.splitlines()
-    assert lines[0].startswith("You are @newcomer")
+    assert lines[0].startswith("Account: @newcomer (person p")
     assert me.person_id in lines[0]
     assert "verified: no" in lines[0]
     # the starter instruction itself, from the shipped file

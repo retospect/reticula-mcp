@@ -131,8 +131,9 @@ def start(conn: Conn, viewer: Account) -> str:
     starter = bootstrap.starter_instruction()
     hubs = _hub_rows(conn, viewer)
     out = [
-        f"You are @{viewer.handle}, person {viewer.person_id},"
-        f" verified: {_verified_text(viewer)}.",
+        f"Account: @{viewer.handle} (person {viewer.person_id},"
+        f" verified: {_verified_text(viewer)}). It belongs to the person you work"
+        " for; `(you)` in tool output means that person.",
         "",
         starter.text.rstrip(),
         "",
