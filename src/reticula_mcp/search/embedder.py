@@ -6,20 +6,33 @@ captures word overlap, not meaning); ``fastembed`` = a small real model on CPU
 (optional extra ``reticula-mcp[fastembed]``); ``auto`` = fastembed when the
 package is installed, else hash.
 
-The heavy library is imported only when a fastembed embedder is *used* (never
-at server start-up), the model is loaded on the first ``embed`` call, and one
-instance is shared by every session of the process.
+Loading the real model costs time (measured on a laptop: import 0.3 s, load
+0.1 s from the local cache, about 3 s plus the 64 MB download the first time)
+and can fail (no network on first use). So nothing here loads it on the calling
+thread unless the caller asks: ``get_embedder`` imports nothing heavy, ``warm``
+starts the load in a background thread and returns at once, ``ready`` says
+whether vectors can be computed without waiting. A search made while the model
+is not ready answers from keywords; a write never touches the model at all
+(see ``hooks.py`` and ``worker.py``). One instance is shared by the process.
+
+The model files live in ``FASTEMBED_CACHE_PATH`` when that is set, else in
+``~/.cache/reticula/fastembed`` (not the system temp directory, fastembed's
+default, which a container loses when it is recreated).
 """
 
 from __future__ import annotations
 
 import hashlib
 import importlib.util
+import logging
 import math
+import os
 import re
 import struct
 import threading
+import time
 from functools import lru_cache
+from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 from reticula_mcp.config import Settings
@@ -33,6 +46,12 @@ _KNOWN_DIMS = {
     "sentence-transformers/all-MiniLM-L6-v2": 384,
 }
 _WORD = re.compile(r"\w+", re.UNICODE)
+# After a failed load, ``warm`` waits this long before it tries again; the wait
+# doubles with every failure in a row, up to the maximum.
+RETRY_FIRST = 30.0
+RETRY_MAX = 900.0
+
+log = logging.getLogger("reticula_mcp.search")
 
 
 @runtime_checkable
@@ -42,7 +61,9 @@ class Embedder(Protocol):
     Optional attributes the search code reads with ``getattr``:
     ``cheap`` (True when embedding is fast enough to do inside a write),
     ``max_distance`` (cosine distance beyond which a semantic hit is noise),
-    ``embed_query`` (asymmetric models embed a query differently).
+    ``embed_query`` (asymmetric models embed a query differently),
+    ``ready`` / ``warm`` / ``load`` / ``load_error`` (models that take time to
+    load; see :func:`is_ready`, :func:`warm`).
     """
 
     @property
@@ -73,7 +94,10 @@ class HashEmbedder:
     """
 
     cheap = True
-    max_distance = 0.8  # cosine similarity below 0.2 is noise at this size
+    # Measured on tests/test_search_relevance.py: at 0.65 a nonsense query gets
+    # nothing and a question on a subject no note covers gets 0.2 notes on
+    # average (5.2 at 0.8); exact titles and keywords are found either way.
+    max_distance = 0.65
 
     def __init__(self, dim: int = 256, model: str = "hash") -> None:
         if dim <= 0:
@@ -108,18 +132,57 @@ class HashEmbedder:
         return _unit(vec)
 
 
+def model_cache_dir() -> str | None:
+    """Where model files are kept: ``FASTEMBED_CACHE_PATH``, else
+    ``~/.cache/reticula/fastembed`` (``XDG_CACHE_HOME`` honoured). None when that
+    directory cannot be created or written: fastembed then uses its own default
+    in the system temp directory, and the model is fetched again whenever that
+    is emptied."""
+    configured = os.environ.get("FASTEMBED_CACHE_PATH", "").strip()
+    if configured:
+        return configured
+    base = os.environ.get("XDG_CACHE_HOME", "").strip() or str(Path.home() / ".cache")
+    path = Path(base) / "reticula" / "fastembed"
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        if not os.access(path, os.W_OK):
+            raise PermissionError(str(path))
+    except OSError as exc:
+        log.warning(
+            "model cache %s is not writable (%s); using the system temp directory",
+            path,
+            exc,
+        )
+        return None
+    return str(path)
+
+
 class FastEmbedEmbedder:
     """A small local model (default BAAI/bge-small-en-v1.5, 384 dimensions)
-    through ``fastembed`` (ONNX runtime, CPU). Loaded lazily, once per process."""
+    through ``fastembed`` (ONNX runtime, CPU). Loaded once per process, by
+    :meth:`load` (blocking) or :meth:`warm` (background)."""
 
     cheap = False
-    max_distance = 0.45  # bge models compress cosine similarity into ~0.4-1.0
+    # Measured for the default model on tests/test_search_relevance.py (run it
+    # with RETICULA_SEARCH_MEASURE=1). bge models compress cosine similarity
+    # into about 0.4 to 1.0: the nearest note to a nonsense query is at
+    # distance 0.37 to 0.44, so 0.35 is the largest value at which nonsense
+    # returns nothing. It costs the paraphrases whose note is further away
+    # (4 of 18 in the set). Another model needs its own measurement.
+    max_distance = 0.35
 
     def __init__(self, model_name: str | None = None) -> None:
         self._name = model_name or DEFAULT_FASTEMBED_MODEL
         self._engine: Any = None
         self._dim: int | None = _KNOWN_DIMS.get(self._name)
-        self._lock = threading.Lock()
+        self._load_lock = threading.Lock()  # one load at a time
+        self._state_lock = threading.Lock()  # guards the fields below
+        self._run_lock = threading.Lock()  # one inference at a time
+        self._loader: threading.Thread | None = None
+        self._failures = 0
+        self._retry_at = 0.0
+        self.load_error: str | None = None
+        self.load_seconds: float | None = None
 
     @property
     def model(self) -> str:
@@ -131,9 +194,51 @@ class FastEmbedEmbedder:
             self._dim = len(self.embed(["dimension probe"])[0])
         return self._dim
 
+    @property
+    def ready(self) -> bool:
+        """True once the model is in memory: ``embed`` will not wait for a load."""
+        return self._engine is not None
+
+    def load(self) -> None:
+        """Load the model on the calling thread (seconds; a download the first
+        time). Raises when it cannot be loaded. Safe to call from any thread."""
+        self._load()
+
+    def warm(self) -> None:
+        """Start loading in a background thread and return at once. Does nothing
+        when the model is loaded, a load is running, or the last attempt failed
+        less than the retry wait ago."""
+        with self._state_lock:
+            if self._engine is not None:
+                return
+            if self._loader is not None and self._loader.is_alive():
+                return
+            if time.monotonic() < self._retry_at:
+                return
+            self._loader = threading.Thread(
+                target=self._load_quietly, name="reticula-embedder-load", daemon=True
+            )
+            self._loader.start()
+
+    def _load_quietly(self) -> None:
+        try:
+            self._load()
+        except Exception:
+            log.warning(
+                "embedding model %s did not load; search answers from keywords"
+                " and the load is retried later",
+                self._name,
+                exc_info=True,
+            )
+
     def _load(self) -> Any:
-        with self._lock:
-            if self._engine is None:
+        if self._engine is not None:
+            return self._engine
+        with self._load_lock:
+            if self._engine is not None:
+                return self._engine
+            started = time.monotonic()
+            try:
                 try:
                     from fastembed import TextEmbedding
                 except ImportError as exc:  # pragma: no cover - extra missing
@@ -142,8 +247,28 @@ class FastEmbedEmbedder:
                         "RETICULA_EMBEDDER=fastembed but fastembed is not installed",
                         hint="pip install 'reticula-mcp[fastembed]'",
                     ) from exc
-                self._engine = TextEmbedding(model_name=self._name, threads=2)
-            return self._engine
+                engine = TextEmbedding(
+                    model_name=self._name, threads=2, cache_dir=model_cache_dir()
+                )
+                # one real inference: the first one pays for graph optimisation
+                list(engine.embed(["warm up"]))
+            except Exception as exc:
+                with self._state_lock:
+                    self._failures += 1
+                    wait = min(RETRY_FIRST * 2 ** (self._failures - 1), RETRY_MAX)
+                    self._retry_at = time.monotonic() + wait
+                    self.load_error = f"{type(exc).__name__}: {exc}"
+                raise
+            with self._state_lock:
+                self._failures = 0
+                self._retry_at = 0.0
+                self.load_error = None
+                self.load_seconds = time.monotonic() - started
+                self._engine = engine
+            log.info(
+                "embedding model %s loaded in %.1fs", self._name, self.load_seconds
+            )
+            return engine
 
     @staticmethod
     def _floats(vectors: Any) -> list[list[float]]:
@@ -152,10 +277,16 @@ class FastEmbedEmbedder:
     def embed(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
-        return self._floats(self._load().embed(texts))
+        engine = self._load()
+        with self._run_lock:
+            return self._floats(engine.embed(texts))
 
     def embed_query(self, text: str) -> list[float]:
-        return self._floats(self._load().query_embed(text))[0]
+        # No query instruction is prepended: measured on the relevance set, the
+        # model's recommended one moved a single query and made no cutoff safer.
+        engine = self._load()
+        with self._run_lock:
+            return self._floats(engine.query_embed(text))[0]
 
 
 def fastembed_installed() -> bool:
@@ -196,3 +327,22 @@ def embed_query(embedder: Embedder, text: str) -> list[float]:
         result: list[float] = special(text)
         return result
     return embedder.embed([text])[0]
+
+
+def is_ready(embedder: Embedder) -> bool:
+    """Can ``embedder`` compute vectors now without a long wait? Embedders with
+    no ``ready`` attribute (the hash embedder) always can."""
+    return bool(getattr(embedder, "ready", True))
+
+
+def warm(embedder: Embedder) -> None:
+    """Ask a slow embedder to start loading in the background; returns at once."""
+    start = getattr(embedder, "warm", None)
+    if start is not None:
+        start()
+
+
+def load_error(embedder: Embedder) -> str | None:
+    """Why the last load failed, None when it did not (or has not been tried)."""
+    error: str | None = getattr(embedder, "load_error", None)
+    return error

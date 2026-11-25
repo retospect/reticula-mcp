@@ -99,7 +99,7 @@ def _check_length(name: str, value: str | None, limit: int) -> None:
 
 
 def _check_kind(kind: str) -> None:
-    if not KIND_RE.match(kind):
+    if not KIND_RE.fullmatch(kind):
         raise ReticulaError(
             BAD_INPUT,
             f"kind {kind[:40]!r} is not allowed",
@@ -109,7 +109,7 @@ def _check_kind(kind: str) -> None:
 
 
 def _check_rel(rel: str) -> None:
-    if not REL_RE.match(rel):
+    if not REL_RE.fullmatch(rel):
         raise ReticulaError(
             BAD_INPUT,
             f"rel {rel[:40]!r} is not allowed",

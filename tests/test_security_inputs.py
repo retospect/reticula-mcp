@@ -320,3 +320,10 @@ def test_a_new_paper_stub_points_at_notes_with_its_identifier(conn, make_account
     assert "next: write notes about it with put(text=..., ext_id=doi:10.1000/x," in out
     assert "anchor=<first words of the passage>)" in out
     assert "link(ref, to=<hub>)" in out  # the hint about filing it stays
+
+
+def test_kind_and_rel_patterns_refuse_a_trailing_newline():
+    from reticula_mcp.graph import api
+
+    assert api.KIND_RE.fullmatch("note") and not api.KIND_RE.fullmatch("note\n")
+    assert api.REL_RE.fullmatch("cites") and not api.REL_RE.fullmatch("cites\n")

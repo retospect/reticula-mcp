@@ -31,6 +31,9 @@ def configure_connection(conn: psycopg.Connection[Any]) -> None:
     """
     conn.row_factory = dict_row
     in_tx = conn.info.transaction_status != psycopg.pq.TransactionStatus.IDLE
+    # Postgres compiles every statement that embeds current_nodes(), about
+    # 60 ms each, for queries that run in a few milliseconds.
+    conn.execute("SET jit = off")
     row = conn.execute(
         "SELECT 1 AS x FROM pg_extension WHERE extname = 'vector'"
     ).fetchone()

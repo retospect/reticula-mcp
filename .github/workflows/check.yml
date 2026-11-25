@@ -31,7 +31,8 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy
-      - run: uv run pytest -q
+      # -rs prints why a test was skipped, so a skipped end-to-end test shows.
+      - run: uv run pytest -q -rs
       - name: Golden vectors are up to date with the format library
         run: |
           uv run python scripts/gen_vectors.py

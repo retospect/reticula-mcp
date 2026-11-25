@@ -8,15 +8,22 @@ visibility use the graph handlers instead (``tests/test_search_access.py``).
 
 from __future__ import annotations
 
+import os
+import tempfile
+import threading
+import time
 import uuid
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
 import pytest
 
 from reticula_mcp.accounts import Account
+from reticula_mcp.config import Settings
 from reticula_mcp.db.pool import Conn
 from reticula_mcp.search import embedder as embedder_module
+from reticula_mcp.search.embedder import Embedder, HashEmbedder
 from tests.helpers import make_atom
 
 
@@ -24,6 +31,130 @@ def use_hash_embedder(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RETICULA_EMBEDDER", "hash")
     monkeypatch.delenv("RETICULA_EMBED_MODEL", raising=False)
     embedder_module._build.cache_clear()
+
+
+def use_embedder(monkeypatch: pytest.MonkeyPatch, embedder: Embedder) -> None:
+    """Make ``get_embedder`` return ``embedder`` everywhere (search, the write
+    hook, the worker, the command line) for the rest of the test."""
+    monkeypatch.setenv("RETICULA_EMBEDDER", "hash")
+
+    def build(kind: str, model_name: str | None) -> Embedder:
+        return embedder
+
+    build.cache_clear = lambda: None  # type: ignore[attr-defined]
+    monkeypatch.setattr(embedder_module, "_build", build)
+
+
+def use_real_model(monkeypatch: pytest.MonkeyPatch) -> Embedder:
+    """Switch to the real fastembed model, NOT loaded yet. Skips the test when
+    the extra is not installed. Model files are read from (and on first use
+    downloaded to) fastembed's own default cache unless the environment names
+    another, so a test run never fills the home directory."""
+    pytest.importorskip("fastembed")
+    monkeypatch.setenv("RETICULA_EMBEDDER", "fastembed")
+    monkeypatch.delenv("RETICULA_EMBED_MODEL", raising=False)
+    if not os.environ.get("FASTEMBED_CACHE_PATH"):
+        monkeypatch.setenv(
+            "FASTEMBED_CACHE_PATH",
+            os.path.join(tempfile.gettempdir(), "fastembed_cache"),
+        )
+    embedder_module._build.cache_clear()
+    monkeypatch.setattr(
+        embedder_module, "_build", embedder_module._build
+    )  # restored, then cleared, after the test
+    return embedder_module.get_embedder(Settings.from_env())
+
+
+def load_real_model(monkeypatch: pytest.MonkeyPatch) -> Embedder:
+    """:func:`use_real_model`, loaded. Skips when the model cannot be loaded
+    (the first download needs the network)."""
+    embedder = use_real_model(monkeypatch)
+    try:
+        embedder.load()  # type: ignore[attr-defined]
+    except Exception as exc:
+        pytest.skip(f"real embedding model unavailable: {exc}")
+    return embedder
+
+
+def wait_until(
+    condition: Callable[[], Any], seconds: float = 5.0, step: float = 0.02
+) -> bool:
+    """Poll ``condition`` until it is true; False when ``seconds`` ran out."""
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if condition():
+            return True
+        time.sleep(step)
+    return bool(condition())
+
+
+class SlowEmbedder:
+    """Stands in for a real model where the suite has none: not cheap, takes
+    ``delay`` seconds to load, fails its first ``failures`` loads, and counts
+    what was asked of it. Vectors come from the hash embedder."""
+
+    cheap = False
+    max_distance = 0.8
+
+    def __init__(
+        self,
+        delay: float = 0.3,
+        failures: int = 0,
+        dim: int = 64,
+        model: str = "slow",
+        embed_delay: float = 0.0,
+    ) -> None:
+        self._inner = HashEmbedder(dim=dim, model=model)
+        self.delay = delay
+        self.failures = failures
+        self.embed_delay = embed_delay
+        self.ready = False
+        self.load_error: str | None = None
+        self.loads = 0  # load attempts
+        self.embed_calls = 0
+        self.embedded = 0  # texts embedded
+        self._lock = threading.Lock()
+        self._thread: threading.Thread | None = None
+
+    @property
+    def model(self) -> str:
+        return self._inner.model
+
+    @property
+    def dim(self) -> int:
+        return self._inner.dim
+
+    def load(self) -> None:
+        with self._lock:
+            if self.ready:
+                return
+            self.loads += 1
+            time.sleep(self.delay)
+            if self.loads <= self.failures:
+                self.load_error = "RuntimeError: no network"
+                raise RuntimeError("no network")
+            self.load_error = None
+            self.ready = True
+
+    def _quiet(self) -> None:
+        try:
+            self.load()
+        except RuntimeError:
+            pass
+
+    def warm(self) -> None:
+        if self.ready or (self._thread is not None and self._thread.is_alive()):
+            return
+        self._thread = threading.Thread(target=self._quiet, daemon=True)
+        self._thread.start()
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        self.load()  # like the real one: an unloaded model makes the caller wait
+        self.embed_calls += 1
+        self.embedded += len(texts)
+        if self.embed_delay:
+            time.sleep(self.embed_delay)
+        return self._inner.embed(texts)
 
 
 def file_under(

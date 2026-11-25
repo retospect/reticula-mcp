@@ -1,0 +1,12 @@
+# Override for compose.yaml: build the server from this checkout instead of
+# installing a release from PyPI. Everything else stays as compose.yaml has it.
+#
+#   docker compose -f compose.yaml -f compose.source.yaml up -d --build --wait
+#
+# RETICULA_VERSION in .env must still be set; this build does not use it.
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      target: source

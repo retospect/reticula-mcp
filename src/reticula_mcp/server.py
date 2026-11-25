@@ -38,6 +38,7 @@ from reticula_mcp.errors import INTERNAL, RATE_LIMITED, UNAVAILABLE, ReticulaErr
 from reticula_mcp.graph import handlers as graph_handlers
 from reticula_mcp.seams import AuthWiring
 from reticula_mcp.search import handlers as search_handlers
+from reticula_mcp.search import hooks as search_hooks
 
 log = logging.getLogger("reticula_mcp")
 
@@ -529,10 +530,12 @@ def build_app(settings: Settings, db: Database | None = None) -> Starlette:
     @asynccontextmanager
     async def lifespan(a: Starlette) -> AsyncIterator[Any]:
         database.open()
+        search_hooks.on_server_start(settings, database)
         try:
             async with inner(a) as state:
                 yield state
         finally:
+            search_hooks.on_server_stop()
             if owned:
                 database.close()
 
