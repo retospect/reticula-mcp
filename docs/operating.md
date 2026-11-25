@@ -40,7 +40,7 @@ The commands are written for the Docker Compose files in [`deploy/`](../deploy) 
    curl -s http://127.0.0.1:8787/healthz
    ```
 
-   The answer is status 200 and `{"status":"ok","version":"0.0.1"}`, with the installed version. When the database does not answer, the status is 503. `docker compose ps` shows the same result as `healthy` or `unhealthy`.
+   The answer is status 200 and `{"status":"ok","version":"0.1.0"}`, with the installed version. When the database does not answer, the status is 503. `docker compose ps` shows the same result as `healthy` or `unhealthy`.
 
 4. Run the smoke test. It needs [uv](https://docs.astral.sh/uv/).
 
