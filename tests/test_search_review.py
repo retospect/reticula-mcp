@@ -281,7 +281,8 @@ def test_unreadable_backlinks_neither_count_nor_displace_readable_ones(
 
     got = handlers.get(conn, v, ref=target)
     assert f"link zzz-cites <- {ref(legit)} note" in got
-    assert "more links" not in got and "aaa" not in got
+    # "link aaa", not "aaa": a short id is hex and can contain "aaa"
+    assert "more links" not in got and "link aaa" not in got
     assert got.count("link ") == 1
     # z reads its own 31 and is told there are more than the 30 shown
     mine = handlers.get(conn, z, ref=target)
