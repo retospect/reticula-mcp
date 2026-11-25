@@ -159,20 +159,20 @@ When the public URL carries a port, the `Host` header must carry it too. A reque
 
 ### Check the setting
 
-First check which address the server sees for the host:
+First check which address the server sees for the host. A request for `/healthz` leaves no line in the log, so ask for another address:
 
 ```
-curl -s -o /dev/null http://127.0.0.1:8787/healthz
-docker compose logs app | grep 'GET /healthz' | grep -v ' 127.0.0.1:' | tail -1
+curl -s -o /dev/null -A 'address check' http://127.0.0.1:8787/.well-known/oauth-authorization-server
+docker compose logs app | grep 'address check' | tail -1
 ```
 
 The line looks like this:
 
 ```
-app-1  | INFO:     172.31.88.1:53992 - "GET /healthz HTTP/1.1" 200 OK
+app-1  | 2026-11-25T13:13:50Z GET /.well-known/oauth-authorization-server 200 0ms from=172.31.88.1 agent="address check"
 ```
 
-The address in front of the port, here `172.31.88.1`, is the one to trust. Lines from `127.0.0.1` are the container's own health check.
+The address after `from=`, here `172.31.88.1`, is the one to trust.
 
 Then check the whole path, with `RETICULA_TRUSTED_PROXIES` set to that address. Register a client through the public name, with a made-up `X-Forwarded-For`, and read the address it was counted under. The first command prints `201`.
 
@@ -276,7 +276,95 @@ The limits per client address depend on `RETICULA_TRUSTED_PROXIES`, as described
 docker compose logs app
 ```
 
-At the default log level the server writes one line per request: the peer address, the method, the path without its query string, and the status. Behind a proxy the peer address is the proxy's. After a full smoke run and a failed sign-in, the log was searched for the password, the tokens, the authorization code, the e-mail address, the handle and the note text. None of them was in it.
+The server writes one line per request. Two lines from a test stack:
+
+```
+app-1  | 2026-11-25T13:13:48Z POST /mcp 200 2ms from=172.31.89.1 agent="ExampleConnector/1.0" mcp=2025-06-18 client=c_IIQvKb2C
+app-1  | 2026-11-25T13:13:49Z POST /token 400 3ms from=172.31.89.1 agent="ExampleConnector/1.0" reason="invalid_grant: credential is invalid, expired or revoked"
+```
+
+A line has the time in UTC, the method, the path without its query string, the status and the time until the answer began. Then:
+
+| Field | What it is |
+|---|---|
+| `from=` | The caller's address. `X-Forwarded-For` is believed only from the peers in `RETICULA_TRUSTED_PROXIES`, as described under [A tunnel or proxy on the same host](#a-tunnel-or-proxy-on-the-same-host). |
+| `agent=` | The name the calling program gives itself, its `User-Agent` header. |
+| `mcp=` | The MCP protocol version the caller asked for, when it sent one. |
+| `client=` | The first 10 characters of the connection's client id, when the request carried a valid token. All requests of one connection have the same value. `client=reticula-t` is a token minted with `reticula-mcp token`. |
+| `reason=` | For a status of 400 and above, the server's own error text. |
+
+Behind a proxy that is not in `RETICULA_TRUSTED_PROXIES`, `from=` is the proxy's address on every line. Measured with a Caddy container at `172.31.89.10` in front: with nothing trusted the lines had `from=172.31.89.10`, also for a request that sent an `X-Forwarded-For` of its own, and with that address trusted they had the address the proxy saw the caller come from. A process on the host reaches the server from the gateway address, so that is what `from=` shows for a tunnel on the host. With the gateway trusted, a request that carried `X-Forwarded-For: 203.0.113.7` was logged with `from=203.0.113.7`, and one without the header with the gateway address.
+
+A request for `/healthz` that gets status 200 leaves no line, because the container asks every few seconds. A tool that fails answers with status 200 and its error as text. Its line has no reason: a `get` for a note that does not exist was logged as `POST /mcp 200`.
+
+A line never holds a request body, a token, a note, or what a tool was asked and answered. After the runs for the next part (a sign-up, sign-ins, a wrong password, tokens, a renewal, and tool calls that wrote and searched a note) the log was searched for the passwords, the access and refresh tokens, the authorization codes, the `state` and PKCE values, the hidden values of the sign-in page, the e-mail address, the handle, and the title and text of the note. None of them was in it. Of the client id, which has 26 characters, it held the first 10.
+
+The other lines come from the start: one `applied` line per migration or `schema is up to date`, four lines of the web server that begin with `INFO:`, and the lines about the embedding model.
+
+### When an assistant does not connect
+
+Follow the log while the assistant tries:
+
+```
+docker compose logs -f --since 1m app
+```
+
+Three questions, in this order.
+
+**Did it reach the server at all?** Every request leaves a line, also a refused one and one for a path that does not exist (`GET /nothing-here 404`). No line at the time of the attempt means that the request never arrived. Then the cause is in front of the server: the name, the tunnel or proxy, or the port. Claude's custom connectors accept port 443 only, see [Tailscale Funnel](#tailscale-funnel). To send a request of your own through the public name, ask for `/.well-known/oauth-authorization-server`, not for `/healthz`.
+
+**How far did the sign-in get?** A connector that connects for the first time, and the person who signs in for it, left these lines, in this order:
+
+```
+POST /mcp 401 0ms from=172.31.89.1 agent="ExampleConnector/1.0" reason="invalid_token: Authentication required"
+GET /.well-known/oauth-protected-resource/mcp 200 0ms from=172.31.89.1 agent="ExampleConnector/1.0"
+GET /.well-known/oauth-authorization-server 200 0ms from=172.31.89.1 agent="ExampleConnector/1.0"
+POST /register 201 4ms from=172.31.89.1 agent="ExampleConnector/1.0"
+GET /authorize 302 2ms from=172.31.89.1 agent="Mozilla/5.0 (example browser)"
+GET /signin 200 1ms from=172.31.89.1 agent="Mozilla/5.0 (example browser)"
+POST /signin 303 39ms from=172.31.89.1 agent="Mozilla/5.0 (example browser)"
+POST /token 200 3ms from=172.31.89.1 agent="ExampleConnector/1.0"
+POST /mcp 200 2ms from=172.31.89.1 agent="ExampleConnector/1.0" mcp=2025-06-18 client=c_IIQvKb2C
+```
+
+The time and the `app-1  |` prefix are left out here. Both programs ran on the host of the test stack, so `from=` is the gateway address on every line.
+
+| Line | What happened |
+|---|---|
+| `POST /mcp 401` with `invalid_token` | The first call, without a token. This is normal: the answer tells the connector where to sign in. |
+| the two `GET /.well-known/...` | The connector read where and how to sign in. |
+| `POST /register 201` | The connector registered itself. |
+| `GET /authorize 302`, `GET /signin 200` | A browser opened the sign-in page. `agent=` is now the browser, and `from=` the person's address. |
+| `POST /signin 303` | The person signed in or signed up. The browser was sent back to the connector with a code. |
+| `POST /token 200` | The connector collected its tokens with that code. |
+| `POST /mcp 200` with `client=` | The connector calls with its token. |
+
+The last of these lines that is in the log says how far it got. Three runs that were stopped on purpose:
+
+- A connector that never registers. The log ends after the two `GET /.well-known/...` lines. The server answered everything it was asked, and the connector did not go on. The cause is in the connector: it does not register by itself, or it did not accept what it read.
+- A sign-in that is finished in the browser, and a code that is never collected. The log ends with `POST /signin 303`, and no `POST /token` follows. The server sent the browser back to the connector's address with the code, and the connector never came for its tokens. Look at the page the browser showed after the sign-in.
+- A token that has expired. The call is refused, the connector renews its token, and the next call works:
+
+  ```
+  POST /mcp 401 1ms from=172.31.89.1 agent="ExampleConnector/1.0" mcp=2025-06-18 reason="invalid_token: Authentication required"
+  POST /token 200 4ms from=172.31.89.1 agent="ExampleConnector/1.0"
+  POST /mcp 200 2ms from=172.31.89.1 agent="ExampleConnector/1.0" mcp=2025-06-18 client=c_IIQvKb2C
+  ```
+
+  The reason is the same for an expired token, a revoked token, a made-up token and no token. What follows tells them apart. When the renewal is refused too, the line is `POST /token 400` with `reason="invalid_grant: credential is invalid, expired or revoked"`. The connection is over then, and the assistant has to sign in again.
+
+**What did the server answer?** The status and `reason=` say it. Lines from the test stack:
+
+| Line | Meaning |
+|---|---|
+| `POST /signin 401` | The sign-in page refused the e-mail address and password. |
+| `POST /signin 429`, no reason | The sign-up limit of that address was used up. See [Limits](#limits). |
+| `POST /register 429`, `reason="temporarily_unavailable: too many registrations from this address; try again later"` | The registration limit of that address was used up. Behind a proxy that is not trusted, all callers share one address. |
+| `POST /register 400`, `reason="invalid_redirect_uri: redirect URI contains forbidden characters"` | The server refused the connector's registration. The reason says which part. |
+| `GET /authorize 400`, `reason="invalid_request: Client ID 'c_nosuchclient' not found"` | The connector used a registration that this server does not have, for example one from before a restore. |
+| `POST /mcp 421`, no reason | The `Host` header was not the one of the public URL. The line before it in the log reads `Invalid Host header: reticula.test`. See the table of `Host` headers under [A tunnel or proxy on the same host](#a-tunnel-or-proxy-on-the-same-host). |
+| `POST /mcp 403`, no reason | The request had an `Origin` header from another site. The line before it reads `Invalid Origin header: https://other.example.com`. |
+| `POST /mcp 400`, reason begins with `Bad Request: Unsupported protocol version: 2099-01-01` | The caller asked for an MCP protocol version that the server does not speak. The reason lists the versions it does. |
 
 ## Upgrade
 
@@ -290,7 +378,7 @@ At the default log level the server writes one line per request: the peer addres
 
 4. Check `/healthz` and run the smoke test.
 
-The server container applies pending migrations when it starts and logs one line per file, for example `applied 0203_shared_rules.sql`. The drill went from 0.1.0 to a build of 0.1.1 from source, which adds that one migration. The command took 28 seconds when it had to build the image, and 8 to 9 seconds on later switches, when Docker still had the layers of the image. The server was away for about a second: `/healthz` was asked every 0.1 seconds during a switch that applied migration 0203, and the longest time without an answer was 1.1 seconds.
+The server container applies pending migrations when it starts and logs one line per file, for example `applied 0203_shared_rules.sql`. The drill went from 0.1.0 to a build of 0.1.1 from source that added this one migration. The command took 28 seconds when it had to build the image, and 8 to 9 seconds on later switches, when Docker still had the layers of the image. The server was away for about a second: `/healthz` was asked every 0.1 seconds during a switch that applied migration 0203, and the longest time without an answer was 1.1 seconds.
 
 Tokens issued before the upgrade worked after it: the access and refresh tokens of a sign-in, and a token minted with `reticula-mcp token`. An account signed in with the password it had before. Notes written before the upgrade read back unchanged: 112 recorded replies of `start`, `profile`, `search`, `get` and `share` were the same before and after.
 
@@ -337,7 +425,7 @@ A command such as `reticula-mcp token` prints the same line and then does its wo
 
 That is safe only when the release notes of the newer version say that its migrations change no table. Otherwise the older version reads and writes tables in a form it does not know. Take the variable out of `.env` again once the newer version runs. While it is set, nothing is refused.
 
-0.1.0 has no such check: it starts on a newer schema and says nothing. Migration 0203 is the only one that 0.1.1 adds. It defines three SQL functions and changes no table. In the drill 0.1.0 ran on the database that the 0.1.1 build had migrated. It gave the same 112 replies as that build on the same data, its smoke test passed, notes written under the 0.1.1 build read back, and tokens issued under it worked. That is a measurement for this pair of versions, not a promise for any other.
+0.1.0 has no such check: it starts on a newer schema and says nothing. The 0.1.1 build of the drill added one migration, `0203_shared_rules`. It defines three SQL functions and changes no table. In the drill 0.1.0 ran on the database that this build had migrated. It gave the same 112 replies as that build on the same data, its smoke test passed, notes written under the 0.1.1 build read back, and tokens issued under it worked. That is a measurement for 0.1.0 and this one migration, not a promise for any other.
 
 ## Back up
 
