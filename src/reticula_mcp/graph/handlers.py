@@ -397,6 +397,11 @@ def share(
             "\nnote: only the owner adds in a personal hub, so they got read."
             f' edit(ref={hub_row["address"][-8:]}, preset="group") lets members add.'
         )
+    owned_before = (
+        len(access.hubs_to_detach(conn, hub_row["id"], grantee.person_id))
+        if mode == "none"
+        else 0
+    )
     api.set_grant(conn, viewer, hub_row["id"], grantee.person_id, mode)
     who = f"@{grantee.handle}"
     where = hub_row["address"]
@@ -407,6 +412,15 @@ def share(
             if left
             else ""
         )
+        detached = owned_before - len(
+            access.hubs_to_detach(conn, hub_row["id"], grantee.person_id)
+        )
+        if detached > 0:
+            extra += (
+                f"\n{detached} hub{'s' if detached != 1 else ''} owned by {who}"
+                f" {'were' if detached != 1 else 'was'} detached from this hub's"
+                " tree; notes others filed there stay readable to their owner"
+            )
         return f"{who} no longer has access to {where}{extra}"
     what = "read and add" if mode == "add" else "read"
     out = f"{who} can now {what} in {where} and in the hubs under it{note}"

@@ -466,6 +466,14 @@ def add_membership(conn: Conn, actor: Account, node_id: int, hub_node_id: int) -
             raise ReticulaError(NOT_FOUND, "no such note")
     if not access.can_add_person(conn, actor.person_id, hub["id"]):
         raise ReticulaError(FORBIDDEN, "you cannot add to that hub")
+    if not access.is_hub_admin(
+        conn, actor.person_id, hub["id"]
+    ) and access.removed_by_admin(conn, node["id"], hub["id"]):
+        raise ReticulaError(
+            FORBIDDEN,
+            "an admin of that hub removed this note from it; only an admin can"
+            " file it there again",
+        )
     if node["kind"] == "hub" and access.closes_cycle(conn, node["id"], hub["id"]):
         raise ReticulaError(
             CONFLICT,
@@ -523,7 +531,9 @@ def remove_membership(
     if not rows:
         raise ReticulaError(NOT_FOUND, "that note is not filed under that hub")
     mine = [r for r in rows if r["author"] == actor.person_id]
-    privileged = actor.person_id in (hub["author"], node["author"])
+    privileged = actor.person_id == node["author"] or access.is_hub_admin(
+        conn, actor.person_id, hub["id"]
+    )
     if not mine and not privileged:
         raise ReticulaError(
             FORBIDDEN,
@@ -615,3 +625,29 @@ def set_grant(
         audience="hub",
     )
     apply_record(conn, rec)
+    if (
+        mode == "none"
+        and actor.person_id == hub["author"]
+        and grantee_person_id != actor.person_id
+    ):
+        _detach_owned_hubs(conn, actor, hub, grantee_person_id)
+
+
+def _detach_owned_hubs(conn: Conn, admin: Account, hub: Row, person_id: str) -> None:
+    """After the admin revoked ``person_id`` on ``hub``: take every hub the person
+    owns out from under ``hub`` and the hubs below it, so their revoked access does
+    not live on through a sub-hub they can still invite into. Notes other people
+    filed into those hubs stay readable to the hub's owner."""
+    for row in access.hubs_to_detach(conn, hub["id"], person_id):
+        child = node_row(conn, row["node_id"])
+        parent = node_row(conn, row["hub_node_id"])
+        rec = _append(
+            conn,
+            admin,
+            type="member",
+            address=fmt.new_address(admin.person_id),
+            payload=_member_payload(child, parent, True),
+            hub_id=_hub_id(parent),
+            audience="hub",
+        )
+        apply_record(conn, rec)
