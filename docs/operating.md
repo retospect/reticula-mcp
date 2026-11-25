@@ -13,7 +13,7 @@ The commands are written for the Docker Compose files in [`deploy/`](../deploy) 
    cd reticula-mcp/deploy
    ```
 
-   For release 0.1.0 the option is `--branch v0.1.0`. The releases are listed on [PyPI](https://pypi.org/project/reticula-mcp/#history). `git` prints a warning that the tag is not a commit and a note about a detached HEAD. Both are expected.
+   For release 0.1.1 the option is `--branch v0.1.1`. The releases are listed on [PyPI](https://pypi.org/project/reticula-mcp/#history). `git` prints a warning that the tag is not a commit and a note about a detached HEAD. Both are expected.
 
    The files under `deploy/` at a tag belong to that release, and so does this guide. Read it at the same tag: the main branch can describe things a release does not have yet.
 
@@ -26,7 +26,7 @@ The commands are written for the Docker Compose files in [`deploy/`](../deploy) 
    Set two values in `.env`:
 
    - `RETICULA_DB_PASSWORD`: generate one with `openssl rand -hex 24`.
-   - `RETICULA_VERSION`: the release you cloned, without the `v`. For the tag `v0.1.0` it is `0.1.0`.
+   - `RETICULA_VERSION`: the release you cloned, without the `v`. For the tag `v0.1.1` it is `0.1.1`.
 
    Leave `RETICULA_PUBLIC_URL` and `RETICULA_TRUSTED_PROXIES` empty for now.
 
@@ -44,7 +44,7 @@ The commands are written for the Docker Compose files in [`deploy/`](../deploy) 
    docker compose -f compose.yaml -f compose.source.yaml up -d --build --wait
    ```
 
-   The build of release 0.1.0 took 19 seconds, the first build of a checkout 30 seconds. With the image built, the command returned after 11 to 13 seconds, with both containers healthy. The server container waits for the database, applies pending migrations and then serves.
+   The build of release 0.1.1 took 22 seconds, the first build of a checkout 30 seconds. With the image built, the command returned after 11 to 13 seconds, with both containers healthy. The server container waits for the database, applies pending migrations and then serves.
 
    `docker compose ps` shows the state of both containers. If the command does not return, or ends with an error, read `docker compose logs app` and `docker compose logs db`. With `RETICULA_DB_PASSWORD` left empty it stops at once with `required variable RETICULA_DB_PASSWORD is missing a value`.
 
@@ -56,7 +56,7 @@ The commands are written for the Docker Compose files in [`deploy/`](../deploy) 
    curl -s -w '\n%{http_code}\n' http://127.0.0.1:8787/healthz
    ```
 
-   The answer is `{"status":"ok","version":"0.1.0"}`, with the installed version, and `200` on the next line. When the database does not answer, it is `{"status":"unavailable","version":"0.1.0"}` and `503`. `docker compose ps` shows the same result as `healthy` or `unhealthy`.
+   The answer is `{"status":"ok","version":"0.1.1"}`, with the installed version, and `200` on the next line. When the database does not answer, it is `{"status":"unavailable","version":"0.1.1"}` and `503`. `docker compose ps` shows the same result as `healthy` or `unhealthy`.
 
 5. Run the smoke test. It needs [uv](https://docs.astral.sh/uv/).
 
@@ -290,8 +290,8 @@ A line has the time in UTC, the method, the path without its query string, the s
 | `from=` | The caller's address. `X-Forwarded-For` is believed only from the peers in `RETICULA_TRUSTED_PROXIES`, as described under [A tunnel or proxy on the same host](#a-tunnel-or-proxy-on-the-same-host). |
 | `agent=` | The name the calling program gives itself, its `User-Agent` header. |
 | `mcp=` | The MCP protocol version the caller asked for, when it sent one. |
-| `client=` | The first 10 characters of the connection's client id, when the request carried a valid token. All requests of one connection have the same value. `client=reticula-t` is a token minted with `reticula-mcp token`. |
-| `reason=` | For a status of 400 and above, the server's own error text. |
+| `client=` | The first 10 characters of the connection's client id, when the request carried a valid token. All requests of one connection have the same value. `client=reticula-t` is a token minted with `reticula-mcp token`. From 0.2.0 on, `reticula-mcp connections list` shows the same value in its `client` column. |
+| `reason=` | For a status of 400 and above, the server's own error text. For the sign-in page it is a fixed word such as `signin: bad_credentials`. |
 
 Behind a proxy that is not in `RETICULA_TRUSTED_PROXIES`, `from=` is the proxy's address on every line. Measured with a Caddy container at `172.31.89.10` in front: with nothing trusted the lines had `from=172.31.89.10`, also for a request that sent an `X-Forwarded-For` of its own, and with that address trusted they had the address the proxy saw the caller come from. A process on the host reaches the server from the gateway address, so that is what `from=` shows for a tunnel on the host. With the gateway trusted, a request that carried `X-Forwarded-For: 203.0.113.7` was logged with `from=203.0.113.7`, and one without the header with the gateway address.
 
@@ -357,19 +357,36 @@ The last of these lines that is in the log says how far it got. Three runs that 
 
 | Line | Meaning |
 |---|---|
-| `POST /signin 401` | The sign-in page refused the e-mail address and password. |
-| `POST /signin 429`, no reason | The sign-up limit of that address was used up. See [Limits](#limits). |
+| `POST /signin 401`, `reason="signin: bad_credentials"` | The sign-in page refused the e-mail address and password. |
+| `POST /signin 429`, `reason="signin: throttled"` | Too many failed sign-ins. In the test the seventh wrong password for one e-mail address got this line. See [Limits](#limits). |
+| `POST /signin 429`, `reason="signin: signup_rate"` | The sign-up limit of that address was used up. See [Limits](#limits). |
+| `POST /signin 403`, `reason="signin: closed"` | A sign-up was sent while `RETICULA_SIGNUP=closed`. The sign-up page has no form then, so a browser that loaded the page after the change does not send one. |
+| `POST /signin 400`, `reason="signin: link_gone"` | The form of a sign-in that was already finished was sent again, or the link had expired. The person has to start again from the assistant. |
+| `POST /signin 403`, `reason="signin: page_expired"` | The hidden check value of the form was wrong. The page asks the person to load it again. |
+| `POST /signin 400`, `reason="signin: password_length"` | A sign-up with a password of 3 characters. |
+| `POST /signin 409`, `reason="signin: Conflict"` | A sign-up with an e-mail address that already has an account. |
+| `POST /signin 400`, `reason="signin: BadInput"` | A sign-up with a handle that is not allowed, here one with a space. |
 | `POST /register 429`, `reason="temporarily_unavailable: too many registrations from this address; try again later"` | The registration limit of that address was used up. Behind a proxy that is not trusted, all callers share one address. |
 | `POST /register 400`, `reason="invalid_redirect_uri: redirect URI contains forbidden characters"` | The server refused the connector's registration. The reason says which part. |
 | `GET /authorize 400`, `reason="invalid_request: Client ID 'c_nosuchclient' not found"` | The connector used a registration that this server does not have, for example one from before a restore. |
-| `POST /mcp 421`, no reason | The `Host` header was not the one of the public URL. The line before it in the log reads `Invalid Host header: reticula.test`. See the table of `Host` headers under [A tunnel or proxy on the same host](#a-tunnel-or-proxy-on-the-same-host). |
-| `POST /mcp 403`, no reason | The request had an `Origin` header from another site. The line before it reads `Invalid Origin header: https://other.example.com`. |
+| `POST /mcp 421`, `reason="Invalid Host header"` | The `Host` header was not the one of the public URL. The line before it in the log has the header as the caller sent it: `2026-11-25T14:02:23Z Invalid Host header: other.example.com`. See the table of `Host` headers under [A tunnel or proxy on the same host](#a-tunnel-or-proxy-on-the-same-host). |
+| `POST /mcp 403`, `reason="Invalid Origin header"` | The request had an `Origin` header from another site. The line before it reads `2026-11-25T14:02:23Z Invalid Origin header: https://other.example.com`. |
 | `POST /mcp 400`, reason begins with `Bad Request: Unsupported protocol version: 2099-01-01` | The caller asked for an MCP protocol version that the server does not speak. The reason lists the versions it does. |
+
+The reasons of the `/signin` lines and of the `421` and `403` lines are written from 0.2.0 on. 0.1.1 writes those lines without `reason=`, and the line before a `421` or `403` without the time.
 
 ## Upgrade
 
 1. Back up the database (below).
-2. Set the new `RETICULA_VERSION` in `.env`. For a checkout, update the checkout.
+2. Move the clone to the new release, and set the new `RETICULA_VERSION` in `.env`.
+
+   ```
+   git fetch --depth 1 origin tag v<release>
+   git checkout v<release>
+   ```
+
+   For 0.1.1 the last line that `git` prints is `HEAD is now at e8ca1eb Release 0.1.1`. `.env` stays as it is. If you run a checkout and not a release, update the checkout.
+
 3. Rebuild and restart.
 
    ```
@@ -378,9 +395,25 @@ The last of these lines that is in the log says how far it got. Three runs that 
 
 4. Check `/healthz` and run the smoke test.
 
-The server container applies pending migrations when it starts and logs one line per file, for example `applied 0203_shared_rules.sql`. The drill went from 0.1.0 to a build of 0.1.1 from source that added this one migration. The command took 28 seconds when it had to build the image, and 8 to 9 seconds on later switches, when Docker still had the layers of the image. The server was away for about a second: `/healthz` was asked every 0.1 seconds during a switch that applied migration 0203, and the longest time without an answer was 1.1 seconds.
+Step 2 moves the clone because the files under `deploy/` belong to a release. The compose file of 0.1.1 passes two settings to the server that the one of 0.1.0 does not pass: `RETICULA_EMBED_MODEL` and `RETICULA_ALLOW_NEWER_SCHEMA`. In the drill the compose file of 0.1.0 with `RETICULA_VERSION=0.1.1` started 0.1.1 and it was healthy, but the container had neither setting.
 
-Tokens issued before the upgrade worked after it: the access and refresh tokens of a sign-in, and a token minted with `reticula-mcp token`. An account signed in with the password it had before. Notes written before the upgrade read back unchanged: 112 recorded replies of `start`, `profile`, `search`, `get` and `share` were the same before and after.
+The server container applies pending migrations when it starts and logs one line per file. From 0.1.0 to 0.1.1:
+
+```
+app-1  | applied 0203_shared_rules.sql
+app-1  | applied 0301_title_words.sql
+```
+
+0.1.1 adds these two migrations to those of 0.1.0:
+
+- `0203_shared_rules` defines three SQL functions and changes no table.
+- `0301_title_words` adds one index on the note table, over the words of each title. No column is added and no row is changed. The index is built at that start, before the server answers. On a test database with 30,041 notes the build took 36 to 83 milliseconds.
+
+The drill went from 0.1.0 to 0.1.1, both installed from PyPI. Building the image of 0.1.1 took 22 seconds with no step taken from Docker's build cache. With the image built, the command of step 3 took 7 to 8 seconds. The server was away for one to two seconds: `/healthz` was asked every 0.1 seconds during the switches, and the longest time without an answer was 1.1 and 1.5 seconds in the two switches that applied both migrations, and 1.4 seconds in one that had nothing to apply.
+
+Tokens issued before the upgrade worked after it: the access and refresh tokens of a sign-in, and a token minted with `reticula-mcp token`. An account signed in with the password it had before. The smoke test of 0.1.1 passed.
+
+Notes written before the upgrade read back. Of 112 recorded replies of `start`, `profile`, `search`, `get` and `share`, 98 were the same before and after. The other 14 differed in one or two lines each, and all of those are lines that 0.1.1 words differently on purpose: who reads a hub through the hub above it, who has access to a hub that you can add to, and how the notes of a hub are counted. The release notes of 0.1.1 describe the three changes. No table other than the migration ledger had a different row count after the upgrade.
 
 Migrations only move forward and each file runs in its own transaction. A migration file that has already been applied is never edited; changes arrive as new files. If the server reports that an applied file has changed, you are running mismatched code and database: do not continue.
 
@@ -390,7 +423,7 @@ If the search index needs rebuilding after an upgrade, run `docker compose exec 
 
 ### Go back to the older version
 
-The supported way back is the restore: restore the dump from step 1 as described under Restore, with the old `RETICULA_VERSION`. Everything written after that dump is lost.
+The supported way back is the restore: move the clone back to the old release with `git checkout v<old release>`, set the old `RETICULA_VERSION`, and restore the dump from step 1 as described under Restore. Everything written after that dump is lost.
 
 The old `RETICULA_VERSION` alone, without a restore, puts the older version on a database that the newer one has migrated. The older version does not know what those migrations changed. From 0.1.1 on the server refuses to start there. `docker compose up -d --build --wait` then ends, in the drill after 4 to 20 seconds, with
 
@@ -423,9 +456,11 @@ app-1  | warning: the database has migrations this version does not have (0203_s
 
 A command such as `reticula-mcp token` prints the same line and then does its work.
 
-That is safe only when the release notes of the newer version say that its migrations change no table. Otherwise the older version reads and writes tables in a form it does not know. Take the variable out of `.env` again once the newer version runs. While it is set, nothing is refused.
+That is safe only when the release notes of the newer version say that its migrations leave the columns and the rows of every table as they are. Otherwise the older version reads and writes tables in a form it does not know. Take the variable out of `.env` again once the newer version runs. While it is set, nothing is refused.
 
-0.1.0 has no such check: it starts on a newer schema and says nothing. The 0.1.1 build of the drill added one migration, `0203_shared_rules`. It defines three SQL functions and changes no table. In the drill 0.1.0 ran on the database that this build had migrated. It gave the same 112 replies as that build on the same data, its smoke test passed, notes written under the 0.1.1 build read back, and tokens issued under it worked. That is a measurement for 0.1.0 and this one migration, not a promise for any other.
+0.1.0 has no such check: it starts on a newer schema and says nothing. So 0.1.0 starts on a database that 0.1.1 has migrated, with the two migrations listed under Upgrade.
+
+In the drill 0.1.0 from PyPI ran on a database that 0.1.1 from PyPI had migrated, with 0203 and 0301 in the ledger. It gave the same 112 replies as 0.1.0 on its own schema with the same data: the replies were recorded under 0.1.0, the stack went to 0.1.1 and back with nothing written in between, and none of the 112 differed afterwards. Its smoke test passed there. Notes written under 0.1.1 read back under 0.1.0, tokens issued under 0.1.1 worked, and a link written under 0.1.0 on the migrated database was there under 0.1.1 again. The switch back left the server without an answer for 1.5 seconds. That is a measurement for 0.1.0 and these two migrations, not a promise for any other pair of versions.
 
 ## Back up
 
@@ -474,7 +509,7 @@ The volume name in step 1 starts with the project name, which the compose file f
 
 In the drill the restored instance had the same number of rows in every table as the original. `docker compose exec app reticula-mcp rebuild` printed the same counts on both. Notes read back, shared and private. Accounts keep their person IDs, keys and tokens, so connected assistants keep working, as long as `RETICULA_PUBLIC_URL` is the same as before. With a different public URL, tokens issued at sign-in got status 401 and tokens minted with `reticula-mcp token` still worked.
 
-The same steps took an instance back after an upgrade. A dump taken under 0.1.0 was restored after the upgrade to a build of 0.1.1, with `RETICULA_VERSION=0.1.0`: steps 1 to 3 took 7 seconds and step 4 another 7. Every table had the row counts from before the upgrade, 112 recorded replies were the same as before it, and the notes written after the dump were gone. Started on that database again, the 0.1.1 build applied its migration as in the first upgrade.
+The same steps took an instance back after an upgrade. A dump taken under 0.1.0 was restored after the upgrade to 0.1.1, with `RETICULA_VERSION=0.1.0` and the compose file of 0.1.0: steps 1 to 3 took 15 seconds and step 4 another 9. Every table had the row counts from before the upgrade, 112 recorded replies were the same as before it, and the notes written after the dump were gone. Started on that database again, 0.1.1 applied its two migrations as in the first upgrade.
 
 ## Accounts, tokens and connections
 

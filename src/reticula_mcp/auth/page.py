@@ -16,6 +16,8 @@ from urllib.parse import quote, urlsplit
 
 from starlette.responses import HTMLResponse
 
+from reticula_mcp import refusal
+
 STYLE = """
 :root{color-scheme:light dark;--fg:#1b1f23;--bg:#fff;--mut:#59636e;--line:#c9d1d9;\
 --acc:#0b57d0;--err:#b3261e}
@@ -92,6 +94,7 @@ def respond(html: str, status: int = 200) -> HTMLResponse:
 
 def gone_page() -> HTMLResponse:
     """The parked request is unknown, used or expired."""
+    refusal.note("signin: link_gone")
     return respond(
         _shell(
             "Link expired",
@@ -105,6 +108,7 @@ def gone_page() -> HTMLResponse:
 def expired_page(handle: str) -> HTMLResponse:
     """CSRF check failed: ask for a reload (a fresh GET sets a fresh token)."""
     link = f"/signin?req={quote(handle, safe='')}"
+    refusal.note("signin: page_expired")
     return respond(
         _shell(
             "Reload",

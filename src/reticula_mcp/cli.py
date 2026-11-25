@@ -76,17 +76,31 @@ def _migrate(settings: Settings) -> int:
     return 0
 
 
+def _timed() -> logging.Formatter:
+    formatter = logging.Formatter("%(asctime)s %(message)s", "%Y-%m-%dT%H:%M:%SZ")
+    formatter.converter = time.gmtime
+    return formatter
+
+
 def _request_log_to_stdout() -> None:
     """The request lines of ``requestlog`` go to standard output, one per line
     with the time in UTC, whatever else configures logging."""
     requests = logging.getLogger("reticula_mcp.request")
     handler = logging.StreamHandler(sys.stdout)
-    formatter = logging.Formatter("%(asctime)s %(message)s", "%Y-%m-%dT%H:%M:%SZ")
-    formatter.converter = time.gmtime
-    handler.setFormatter(formatter)
+    handler.setFormatter(_timed())
     requests.addHandler(handler)
     requests.setLevel(logging.INFO)
     requests.propagate = False
+
+
+def _time_on_other_lines() -> None:
+    """The lines that reach the root logger get the same time in front. The MCP
+    package sets that logger up with the bare message, so its line about a
+    refused ``Host`` header could not be put beside the request it belongs to.
+    Only plain stream handlers: one that formats by itself is left alone."""
+    for handler in logging.getLogger().handlers:
+        if type(handler) is logging.StreamHandler:
+            handler.setFormatter(_timed())
 
 
 def _serve(settings: Settings, auto_migrate: bool) -> int:
@@ -117,8 +131,10 @@ def _serve(settings: Settings, auto_migrate: bool) -> int:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     # proxy_headers off: uvicorn would otherwise believe X-Forwarded-For from any
     # loopback peer. Whose header is believed is RETICULA_TRUSTED_PROXIES' job.
+    app = build_app(settings)
+    _time_on_other_lines()  # after build_app: the MCP package configures logging there
     uvicorn.run(
-        build_app(settings),
+        app,
         host=settings.host,
         port=settings.port,
         proxy_headers=False,

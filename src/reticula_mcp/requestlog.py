@@ -19,12 +19,14 @@ What a line holds, and what it never holds:
 * ``agent``: the ``User-Agent`` header, printable ASCII, cut;
 * ``mcp``: the ``MCP-Protocol-Version`` header, when sent;
 * ``client``: the start of the connection's client id, when the request carried
-  a valid token. All requests of one connection carry the same value
-  (``reticula-mcp connections list`` does not show it);
+  a valid token. All requests of one connection carry the same value, and
+  ``reticula-mcp connections list`` shows it in its ``client`` column;
 * ``reason``, for a status of 400 and above: the server's OWN error text, taken
   from the answer (``error`` and ``error_description`` of a sign-in error, the
-  message of a protocol error, the ``error`` of a ``WWW-Authenticate`` header).
-  An answer that is a page (a refused sign-in) has no reason on its line.
+  message of a protocol error, the ``error`` of a ``WWW-Authenticate`` header,
+  one of the fixed texts of the MCP package for a bad ``Host`` or ``Origin``).
+  An answer that is a page says its reason through ``refusal.note``: a refused
+  sign-in reads ``reason="signin: bad_credentials"``.
 
 Never: a request body, a token, a note, a tool's arguments or reply. A tool that
 fails answers with status 200 and its error as text, so it has no reason here.
@@ -44,6 +46,7 @@ from starlette.datastructures import Headers
 from starlette.requests import Request
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from reticula_mcp import refusal
 from reticula_mcp.auth.netaddr import client_address
 from reticula_mcp.config import Settings
 
@@ -55,6 +58,17 @@ REASON_MAX = 160
 BODY_MAX = 4096  # bytes of an error answer read for its reason
 _VERSION_RE = re.compile(r"^[0-9A-Za-z.-]{1,20}$")
 _CHALLENGE_ERROR_RE = re.compile(r'error="([^"]{1,60})"')
+# The MCP package refuses a bad Host, Origin or Content-Type with one of these
+# texts as its whole answer. No other text answer is taken for a reason: it
+# could repeat what the caller sent.
+FIXED_TEXTS = frozenset(
+    {
+        "Invalid Host header",
+        "Invalid Origin header",
+        "Invalid Content-Type header",
+        "Request body too large",
+    }
+)
 # A validation message quotes what it was given; the reason stops before that.
 _ECHO_MARKS = ("input_value", "[type=", "input=")
 
@@ -80,6 +94,10 @@ def reason_of(status: int, headers: Headers, body: bytes) -> str:
             elif isinstance(error, str):  # a sign-in error
                 detail = data.get("error_description")
                 said = f"{error}: {detail}" if isinstance(detail, str) else error
+    if not said and body:
+        text = body[:80].decode("ascii", "replace").strip()
+        if text in FIXED_TEXTS:
+            said = text
     if not said:
         challenge = headers.get("www-authenticate", "")
         found = _CHALLENGE_ERROR_RE.search(challenge)
@@ -111,12 +129,20 @@ class RequestLog:
         answer = Headers()
         body = bytearray()
         written = False
+        noted, token = refusal.begin()
 
         def write() -> None:
             nonlocal written
             if not written:
                 written = True
-                self._write(scope, status, answer, bytes(body), started)
+                self._write(
+                    scope,
+                    status,
+                    answer,
+                    bytes(body),
+                    started,
+                    noted.get("reason", ""),
+                )
 
         async def watched(message: Message) -> None:
             nonlocal status, answer
@@ -138,9 +164,16 @@ class RequestLog:
         finally:
             status = status or 500  # ended without an answer
             write()
+            refusal.end(token)
 
     def _write(
-        self, scope: Scope, status: int, answer: Headers, body: bytes, started: float
+        self,
+        scope: Scope,
+        status: int,
+        answer: Headers,
+        body: bytes,
+        started: float,
+        noted: str,
     ) -> None:
         path = scope.get("path", "")
         if status == 200 and path in QUIET_PATHS:
@@ -164,7 +197,8 @@ class RequestLog:
         if isinstance(client_id, str) and client_id:
             parts.append(f"client={one_line(client_id, 200)[:10]}")
         if status >= 400:
-            why = reason_of(status, answer, body)
+            # what the refusing code said itself comes before what the answer shows
+            why = one_line(noted, REASON_MAX) or reason_of(status, answer, body)
             if why:
                 parts.append(f"reason={json.dumps(why)}")
         log.info(" ".join(parts))
