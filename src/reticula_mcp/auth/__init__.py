@@ -74,7 +74,8 @@ def warn_if_proxy_untrusted(settings: Settings) -> bool:
         " ALL clients share ONE rate-limit bucket (sign-ups, failed sign-ins,"
         " client registrations, pending authorizations): a handful of requests from"
         " anyone locks everyone else out. Set RETICULA_TRUSTED_PROXIES to the"
-        " proxy's address (e.g. 127.0.0.1 for a local tunnel).",
+        " proxy's address (127.0.0.1 for a tunnel on the same host; under docker"
+        " compose, the gateway address of the compose network).",
         settings.base_url,
     )
     return True
