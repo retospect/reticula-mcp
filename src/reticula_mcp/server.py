@@ -296,13 +296,9 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
 
     @mcp.tool(structured_output=False)
     async def get(
-        # Draft sentence, for the trial.
-        ref: Annotated[
-            str,
-            Field(
-                description=_REF + " Up to 10 at once, separated by spaces or commas."
-            ),
-        ],
+        # Several refs (up to 10, spaces or commas) work, but are not said here:
+        # the sentence cost start-first in the trial; search's reply says it.
+        ref: Annotated[str, Field(description=_REF)],
         history: Annotated[
             bool,
             Field(
@@ -316,14 +312,8 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
                 description="How many link steps around the note to show (default 1)."
             ),
         ] = 1,
-        # Draft text, for the trial. `part` stays the last parameter.
-        part: Annotated[
-            str | None,
-            Field(
-                description="A hub with many notes shows them in lettered groups:"
-                ' the letters of one, such as "B" or "BC", list it.'
-            ),
-        ] = None,
+        # Trial arm A: a group of a big hub is read through ref
+        # ("9ab6128c:A"), which the hub's own listing says; no parameter.
         *,
         ctx: Context,
     ) -> str:
@@ -334,7 +324,7 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
         Deleted notes answer with their address only.
         """
         return await run(
-            ctx, search_handlers.get, ref=ref, history=history, depth=depth, part=part
+            ctx, search_handlers.get, ref=ref, history=history, depth=depth
         )
 
     @mcp.tool(structured_output=False)

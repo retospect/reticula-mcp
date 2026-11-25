@@ -73,9 +73,7 @@ def test_a_ref_twice_is_read_once(conn: Conn, ana: Account) -> None:
     assert out.count("--- ") == 2 and "--- 2 of 2:" in out
 
 
-def test_more_than_ten_refs_or_part_with_several_is_refused(
-    conn: Conn, ana: Account
-) -> None:
+def test_more_than_ten_refs_are_refused(conn: Conn, ana: Account) -> None:
     notes = [
         mk_note(conn, ana, f"note {i}", title=f"N{i}") for i in range(MAX_REFS + 1)
     ]
@@ -83,9 +81,6 @@ def test_more_than_ten_refs_or_part_with_several_is_refused(
         get(conn, ana, ref=" ".join(notes))
     assert err.value.code == "BadInput" and "at most 10 refs" in err.value.message
     assert get(conn, ana, ref=" ".join(notes[:MAX_REFS])).count("--- ") == MAX_REFS
-    with pytest.raises(ReticulaError) as err:
-        get(conn, ana, ref=f"{notes[0]} {notes[1]}", part="A")
-    assert err.value.code == "BadInput"
 
 
 def test_split_refs() -> None:

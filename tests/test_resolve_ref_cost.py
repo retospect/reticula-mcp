@@ -21,8 +21,9 @@ import pytest
 
 from reticula_mcp.db.pool import Conn
 from reticula_mcp.errors import ReticulaError
+from reticula_mcp.graph import handlers as graph_handlers
 from reticula_mcp.permissions import readable_among_sql, readable_nodes_sql
-from reticula_mcp.resolve import resolve_ref
+from reticula_mcp.resolve import ends_with_params, ends_with_sql, resolve_ref
 from tests.graph_support import mk_hub, mk_note, share
 from tests.helpers import make_atom
 from tests.search_support import file_under, hub_of, use_hash_embedder
@@ -45,10 +46,8 @@ NEW_BY_ADDRESS = (
 NEW_BY_SUFFIX = (
     "SELECT n.* FROM node n"
     " WHERE n.id IN ("
-    + readable_among_sql(
-        "SELECT a.id FROM node a WHERE right(a.address, %(n)s) = %(suffix)s"
-    )
-    + ") AND right(n.address, %(n)s) = %(suffix)s ORDER BY n.id LIMIT 6"
+    + readable_among_sql(f"SELECT a.id FROM node a WHERE {ends_with_sql('a.address')}")
+    + ") ORDER BY n.id LIMIT 6"
 )
 SEEDS = list(range(1000, 1100))
 
@@ -64,9 +63,8 @@ def test_the_statements_here_are_those_of_resolve_ref() -> None:
         "readable_among_sql('SELECT a.id FROM node a WHERE a.address = %(ref)s')"
         in source
     )
-    assert (
-        '"SELECT a.id FROM node a WHERE right(a.address, %(n)s) = %(suffix)s"' in source
-    )
+    assert "f\"SELECT a.id FROM node a WHERE {ends_with_sql('a.address')}\"" in source
+    assert ") ORDER BY n.id LIMIT 6" in source
     assert "readable_nodes_sql" not in source
 
 
@@ -95,8 +93,7 @@ def test_the_answers_are_those_of_before(world: World, seed: int) -> None:  # no
                     OLD_BY_SUFFIX, (viewer, len(suffix), suffix)
                 ).fetchall()
                 new = conn.execute(
-                    NEW_BY_SUFFIX,
-                    {"viewer": viewer, "n": len(suffix), "suffix": suffix},
+                    NEW_BY_SUFFIX, {"viewer": viewer, **ends_with_params(suffix)}
                 ).fetchall()
                 assert _ids(old) == _ids(new) and old == new, (seed, viewer, suffix)
 
@@ -165,10 +162,61 @@ def test_a_lookup_by_address_reads_a_few_rows(conn, make_account):
     new = _rows_read(conn, NEW_BY_ADDRESS, {"ref": address, "viewer": ada.id})
     assert old >= NOTES, old  # the count sees a full pass
     assert new <= 20, new
-    # by suffix: one pass over the addresses for the suffix (an index for it is
-    # another change), and nothing more per readable note
+    # by suffix: the index node_address_tail finds the addresses with it
     suffix = address[-8:]
     old = _rows_read(conn, OLD_BY_SUFFIX, (ada.id, 8, suffix))
-    new = _rows_read(conn, NEW_BY_SUFFIX, {"viewer": ada.id, "n": 8, "suffix": suffix})
+    new = _rows_read(
+        conn, NEW_BY_SUFFIX, {"viewer": ada.id, **ends_with_params(suffix)}
+    )
     assert old >= 2 * NOTES, old
-    assert new <= NOTES + 30, new
+    assert new <= 20, new
+
+
+def test_the_suffix_is_looked_up_through_the_index(conn, make_account):
+    """Also in a generic plan: the statement is prepared and run more than
+    five times, as on a long-lived connection."""
+    ada = make_account()
+    notes = [make_atom(conn, ada, f"kiln log {i}") for i in range(50)]
+    conn.execute("ANALYZE node")
+    conn.execute("SET LOCAL plan_cache_mode = force_generic_plan")
+    conn.execute("SET LOCAL enable_seqscan = off")
+    suffix = notes[7]["address"][-8:]
+    params = {"viewer": ada.id, **ends_with_params(suffix)}
+    plan = conn.execute("EXPLAIN (FORMAT JSON) " + NEW_BY_SUFFIX, params).fetchone()
+    assert "node_address_tail" in json.dumps(plan)
+    for _ in range(7):
+        rows = conn.execute(NEW_BY_SUFFIX, params, prepare=True).fetchall()
+        assert [r["address"] for r in rows] == [notes[7]["address"]]
+
+
+@pytest.mark.parametrize("suffix", ["0", "f", "-", "a-b", "ff0", "00000000-0000"])
+def test_the_range_holds_every_address_with_the_suffix(conn, suffix):
+    tail = ends_with_params(suffix)
+    row = conn.execute(
+        "SELECT reverse(x) ~>=~ %(tail_from)s AND reverse(x) ~<~ %(tail_to)s AS inside"
+        " FROM (VALUES ('ret:p/' || %(tail)s), (%(tail)s), ('zz' || %(tail)s)) v(x)",
+        tail,
+    ).fetchall()
+    assert all(r["inside"] for r in row)
+
+
+def test_a_withdrawn_note_answers_by_short_id_as_by_address(
+    conn, make_account, monkeypatch
+):
+    from reticula_mcp.search import handlers
+
+    use_hash_embedder(monkeypatch)
+    ada, ben, cleo = make_account(), make_account(), make_account()
+    hub = mk_hub(conn, ada, "Studio")
+    share(conn, ada, hub, ben, "read")
+    gone = mk_note(conn, ada, "an old note", hub=hub)
+    graph_handlers.delete(conn, ada, ref=gone)
+    for viewer in (ada, ben):
+        by_address = handlers.get(conn, viewer, ref=gone)
+        assert f"{gone[-8:]} withdrawn" in by_address
+        assert handlers.get(conn, viewer, ref=gone[-8:]) == by_address
+    # somebody who could never read it learns nothing either way
+    for ref in (gone, gone[-8:]):
+        with pytest.raises(ReticulaError) as exc:
+            handlers.get(conn, cleo, ref=ref)
+        assert "[NotFound]" in str(exc.value)

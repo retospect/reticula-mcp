@@ -22,6 +22,30 @@ _SUFFIX_RE = re.compile(r"^[0-9a-f-]+$")
 Row = dict[str, Any]
 
 
+def ends_with_sql(column: str) -> str:
+    """A boolean SQL expression: the address in ``column`` ends with the
+    suffix of :func:`ends_with_params`. The range on ``reverse(column)`` is
+    what the index ``node_address_tail`` (migration 0002, ``reverse(address)
+    text_pattern_ops``) answers, also in a generic plan; ``right`` keeps it
+    exact. Without the range every address is read."""
+    return (
+        f"reverse({column}) ~>=~ %(tail_from)s AND reverse({column}) ~<~ %(tail_to)s"
+        f" AND right({column}, %(tail_len)s) = %(tail)s"
+    )
+
+
+def ends_with_params(suffix: str) -> dict[str, Any]:
+    """The parameters of :func:`ends_with_sql` for ``suffix`` (not empty)."""
+    tail_from = suffix[::-1]
+    tail_to = tail_from[:-1] + chr(ord(tail_from[-1]) + 1)
+    return {
+        "tail": suffix,
+        "tail_len": len(suffix),
+        "tail_from": tail_from,
+        "tail_to": tail_to,
+    }
+
+
 def resolve_ref(
     conn: Conn, viewer: Account, ref: str, *, allow_tombstoned: bool = False
 ) -> Row:
@@ -71,10 +95,10 @@ def resolve_ref(
         "SELECT n.* FROM node n"
         " WHERE n.id IN ("
         + readable_among_sql(
-            "SELECT a.id FROM node a WHERE right(a.address, %(n)s) = %(suffix)s"
+            f"SELECT a.id FROM node a WHERE {ends_with_sql('a.address')}"
         )
-        + ") AND right(n.address, %(n)s) = %(suffix)s ORDER BY n.id LIMIT 6",
-        {"viewer": viewer.id, "n": len(suffix), "suffix": suffix},
+        + ") ORDER BY n.id LIMIT 6",
+        {"viewer": viewer.id, **ends_with_params(suffix)},
     ).fetchall()
     if not rows:
         raise ReticulaError(NOT_FOUND, f"no readable note ends in {suffix!r}")

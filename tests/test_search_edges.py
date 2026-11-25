@@ -974,7 +974,7 @@ def test_search_keeps_a_note_with_a_5000_character_title_on_one_line(
     assert len(rows) == 1 and len(rows[0]) < 250
     assert out.splitlines()[2:] == [
         '  text: "short text"',
-        "next: get(ref) reads one in full (ref = the short id at the line start)",
+        handlers.NEXT_GET,
     ]
     # get shows it cut too: the head line stays one short line
     assert len(get(conn, alice, note["address"]).splitlines()[0]) < 250

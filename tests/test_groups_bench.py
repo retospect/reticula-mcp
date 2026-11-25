@@ -115,6 +115,11 @@ def load(conn: Conn, who: Account, hub: str, count: int, seed: str, tag: str) ->
         )
 
 
+def get_part(conn: Conn, viewer: Account, hub: str, letters: str, **kw: object) -> str:
+    """A lettered group of a hub: its id, a colon and the letters."""
+    return get(conn, viewer, ref=f"{hub}:{letters}", **kw)
+
+
 _spent: dict[str, list[float]] = {}
 
 
@@ -147,7 +152,7 @@ def test_cost(fresh_db_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
         def case(size: int, part: str | None) -> Callable[[], str]:
             if part is None:
                 return lambda: get(conn, me, ref=hubs[size])
-            return lambda: get(conn, me, ref=hubs[size], part=part)
+            return lambda: get_part(conn, me, hubs[size], part)
 
         for mode, model in (("vectors", MODEL), ("words only", None)):
             monkeypatch.setattr(groups, "_model", lambda model=model: model)
@@ -200,4 +205,4 @@ def test_cost(fresh_db_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
         print("\n--- the listing of the hub of 220, as get prints it")
         print(get(conn, me, ref=hubs[220]))
         print("\n--- part='A' of it")
-        print(get(conn, me, ref=hubs[220], part="A"))
+        print(get_part(conn, me, hubs[220], "A"))

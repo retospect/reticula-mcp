@@ -311,12 +311,41 @@ def link(
             "only the author can add relations to a note",
             hint="write your own note that supersedes or links to it",
         )
+    in_use = (
+        None
+        if remove or rel in api.BUILT_IN_RELS
+        else api.relation_names_in_use(conn, viewer.person_id)
+    )
     updated = api.add_relation(
         conn, viewer, node["id"], rel, target["address"], remove=remove
     )
     changed = updated["head_record_id"] != node["head_record_id"]
     verb = ("removed" if remove else "added") if changed else "no change:"
-    return f"{verb} {rel} {_name(node)} -> {_name(target)}"
+    out = f"{verb} {rel} {_name(node)} -> {_name(target)}"
+    if changed and in_use is not None:
+        out += _new_rel_line(rel, in_use)
+    return out
+
+
+def _new_rel_line(rel: str, in_use: list[tuple[str, int]]) -> str:
+    """A line when ``rel`` is a name this account has not used and the starting
+    instruction does not recommend: the names in use, and a near one if any."""
+    names = [name for name, _ in in_use]
+    if rel in names or rel in api.KNOWN_RELS:
+        return ""
+    shown = in_use[: api.RELS_SHOWN]
+    listed = (
+        "in use: " + ", ".join(f"{name} ({n})" for name, n in shown)
+        if shown
+        else "no other relation names in use yet"
+    )
+    if len(in_use) > len(shown):
+        listed += f", and {len(in_use) - len(shown)} more"
+    # the recommended names first: a name in use may itself be a wrong one
+    candidates = list(api.KNOWN_RELS) + [n for n in names if n not in api.KNOWN_RELS]
+    near = api.close_relation_name(rel, candidates)
+    line = f'\nnew relation name "{rel}"; {listed}.'
+    return line + (f" Did you mean {near}?" if near else "")
 
 
 def delete(conn: Conn, viewer: Account, *, ref: str) -> str:

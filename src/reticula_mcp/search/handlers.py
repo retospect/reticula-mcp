@@ -66,7 +66,10 @@ def _checked_kind(conn: Conn, viewer: Account, kind: str | None) -> str | None:
     return kind
 
 
-NEXT_GET = "next: get(ref) reads one in full (ref = the short id at the line start)"
+NEXT_GET = (
+    "next: get(ref) reads one in full (ref = the short id at the line start);"
+    ' get(ref="<id> <id> <id>") reads several at once'
+)
 
 
 def _result_lines(
@@ -330,19 +333,16 @@ def get(
     ref: str,
     history: bool = False,
     depth: int = 1,
-    part: str | None = None,
 ) -> str:
     refs = split_refs(ref)
     if len(refs) <= 1:
-        return read_ref(conn, viewer, ref, history=history, depth=depth, part=part)
+        return read_ref(conn, viewer, ref, history=history, depth=depth)
     if len(refs) > MAX_REFS:
         raise ReticulaError(
             BAD_INPUT,
             f"at most {MAX_REFS} refs in one get; this asks for {len(refs)}",
             hint="split them over several calls",
         )
-    if part is not None:
-        raise ReticulaError(BAD_INPUT, "part is for one hub: give one ref with it")
     answers = []
     for n, one in enumerate(refs, 1):
         try:

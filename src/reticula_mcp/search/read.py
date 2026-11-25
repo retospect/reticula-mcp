@@ -40,7 +40,7 @@ from reticula_mcp.permissions import (
     readable_hub_sql,
     readable_nodes_sql,
 )
-from reticula_mcp.resolve import resolve_ref
+from reticula_mcp.resolve import ends_with_params, ends_with_sql, resolve_ref
 from reticula_mcp.search import groups, handles, render
 from reticula_mcp.search.rows import fetch_rows, visible_subset
 
@@ -95,10 +95,10 @@ def read_ref(
     *,
     history: bool,
     depth: int,
-    part: str | None = None,
 ) -> str:
     asked = int(depth)
     depth = max(1, min(asked, MAX_DEPTH))
+    ref, part = groups.split_letters(ref)
     base, offset = _split_offset(ref)
     try:
         node = resolve_ref(conn, viewer, base)
@@ -134,13 +134,15 @@ def _withdrawn(conn: Conn, viewer: Account, ref: str) -> Row | None:
     person, slash, _ = ref.partition("/")
     if slash and fmt.is_person_id(person):
         ref = "ret:" + ref  # an address written without its scheme
+    tail: dict[str, Any] = {}
     if ref.startswith("ret:"):
         cond, arg = "n.address = %(ref)s", ref
     else:
         suffix = ref.lower()
         if not _SUFFIX_RE.match(suffix) or len(suffix.replace("-", "")) < 6:
             return None
-        cond, arg = "right(n.address, length(%(ref)s)) = %(ref)s", suffix
+        cond, arg = ends_with_sql("n.address"), suffix
+        tail = ends_with_params(suffix)
     rows = conn.execute(
         f"""
         SELECT n.id, n.address FROM node n
@@ -154,6 +156,7 @@ def _withdrawn(conn: Conn, viewer: Account, ref: str) -> Row | None:
         LIMIT 2
         """,
         {
+            **tail,
             "ref": arg,
             "person": viewer.person_id,
             "hubs": readable_hub_ids(conn, viewer),
@@ -1131,17 +1134,17 @@ def _grouped(conn: Conn, viewer: Account, hub: Row) -> list[str] | None:
 def _render_part(
     conn: Conn, viewer: Account, row: Row, part: str, *, history: bool, offset: int
 ) -> str:
-    """``get(ref=<hub>, part="AB")``: one lettered group of a big hub."""
+    """``get(ref="<hub>:AB")``: one lettered group of a big hub."""
     if row["kind"] != "hub":
         raise ReticulaError(
             BAD_INPUT,
-            f"part is for a hub; {render.short_ref(row['address'])} is a {row['kind']}",
+            f"letters after the id are for a hub; {render.short_ref(row['address'])}"
+            f" is a {row['kind']}",
         )
     if offset or history:
         raise ReticulaError(
             BAD_INPUT,
-            "part lists a group of the current notes: not with a page in ref"
-            " or history=true",
+            "a group lists the current notes: not with a page or history=true",
         )
     ref = render.short_ref(row["address"])
     notes, _total = groups.load(conn, viewer, row["id"])
