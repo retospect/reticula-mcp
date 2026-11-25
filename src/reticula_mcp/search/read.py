@@ -983,7 +983,7 @@ def _grouped(conn: Conn, viewer: Account, hub: Row) -> list[str] | None:
     if len(notes) <= groups.FLAT:
         return None
     tree = groups.build(notes)
-    return groups.overview(tree, render.short_ref(hub["address"]), total)
+    return groups.overview(tree, render.short_ref(hub["address"]), total, notes)
 
 
 def _render_part(

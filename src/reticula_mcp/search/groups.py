@@ -17,10 +17,10 @@ How a set is split (the rule precis measured and Reto chose, balance first):
 - Into ``k = min(26, ceil(n / GROUP_SIZE))`` groups whose sizes differ by one
   at most: ``n mod k`` groups of ``q + 1`` and the rest of ``q``.
 - Features: the stored vector of each note (the current model, the head
-  version). When more than one note in ten has none (the indexer is behind,
-  or the hash embedder of the tests), the words of title and text for all
-  (TF-IDF). A few notes without a vector get the mean vector of the notes
-  whose words are nearest to theirs.
+  version) when every note has one; else the words of title and text for
+  all (TF-IDF): the indexer is behind, or the hash embedder of the tests. A
+  mix would move the groups each time a vector arrives; this way they change
+  once, and the answer says which it is.
 - k-means on the unit vectors, seeded by k-means++, where each round assigns
   under the quotas: every pair of note and group by similarity, best first, a
   pair taken while the note is free and the group has room.
@@ -63,8 +63,6 @@ LETTERS = string.ascii_uppercase
 LABEL_WORDS = 3
 #: More notes than this: the newest of them are grouped, and the answer says so.
 MOST = 5_000
-#: Share of notes without a vector above which the words are the features.
-MISSING_SHARE = 0.10
 #: Characters of a note's text that its words are taken from.
 TEXT_CHARS = 2_000
 #: Words kept as features of the lexical form.
@@ -72,8 +70,6 @@ VOCABULARY = 1_000
 ROUNDS = 12
 #: Starts of the k-means of the first split; the best is kept. One below it.
 TRIES = 2
-#: Notes whose words decide the vector of a note that has none.
-NEIGHBOURS = 5
 
 _WORD = re.compile(r"[a-z]+")
 
@@ -175,29 +171,21 @@ def _lexical(docs: Sequence[set[str]]) -> np.ndarray:
     return _unit(mat)
 
 
+def by_meaning(notes: Sequence[Note]) -> bool:
+    """Whether the vectors are the features: only when every note has one, of
+    one size. Otherwise the words, for all of them, so that a vector that
+    arrives from the indexer between two calls does not move the groups;
+    they change once, when the last one is there."""
+    if not notes or any(n.vector is None for n in notes):
+        return False
+    return len({len(n.vector) for n in notes}) == 1  # type: ignore[arg-type]
+
+
 def _features(notes: Sequence[Note], docs: Sequence[set[str]]) -> np.ndarray:
-    have = [i for i, n in enumerate(notes) if n.vector is not None]
-    if not notes or len(notes) - len(have) > MISSING_SHARE * len(notes) or not have:
+    if not by_meaning(notes):
         return _lexical(docs)
-    dims = {len(notes[i].vector) for i in have}  # type: ignore[arg-type]
-    if len(dims) != 1:
-        return _lexical(docs)
-    mat = np.zeros((len(notes), dims.pop()), dtype=np.float32)
-    for i in have:
-        mat[i] = np.asarray(notes[i].vector, dtype=np.float32)
-    mat = _unit(mat)
-    missing = [i for i, n in enumerate(notes) if n.vector is None]
-    if missing:
-        lex = _lexical(docs)
-        rows = np.asarray(have)
-        for i in missing:
-            sims = lex[rows] @ lex[i]
-            near = rows[np.argsort(-sims, kind="stable")[:NEIGHBOURS]]
-            if float(sims.max()) <= 0:
-                near = rows
-            mat[i] = mat[near].mean(axis=0)
-        mat = _unit(mat)
-    return mat
+    mat = np.stack([np.asarray(n.vector, dtype=np.float32) for n in notes])
+    return _unit(mat)
 
 
 def _quotas(n: int, k: int) -> tuple[int, int]:
@@ -468,13 +456,26 @@ def _group_lines(group: Group, ref: str) -> list[str]:
     return out
 
 
-def overview(group: Group, ref: str, total: int) -> list[str]:
-    """What ``get`` on a big hub shows in place of its newest-first page."""
+def overview(group: Group, ref: str, total: int, notes: Sequence[Note]) -> list[str]:
+    """What ``get`` on a big hub shows in place of its newest-first page. Its
+    first line says what the groups go by: meaning (every note has a vector),
+    or the words, and when some notes are still being indexed, that the
+    groups and letters change once they are."""
     lines = []
     if total > len(group.ids):
         lines.append(f"grouped: the newest {len(group.ids):,} of the {total:,} notes")
+    waiting = sum(n.vector is None for n in notes) if _model() else 0
+    if by_meaning(notes):
+        basis = "by meaning"
+    elif waiting:
+        basis = (
+            f"by their words ({waiting} not indexed yet; when they are, the groups"
+            " go by meaning and the letters change)"
+        )
+    else:
+        basis = "by their words"
     lines.append(
-        f"{len(group.ids)} notes in {len(group.children)} groups by subject, each"
+        f"{len(group.ids)} notes in {len(group.children)} groups {basis}, each"
         " labelled with words of its notes (the letters hold for this listing"
         " only: keep a note's id, not its letters):"
     )

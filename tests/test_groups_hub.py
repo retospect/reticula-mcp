@@ -86,7 +86,7 @@ def test_a_hub_of_26_notes_is_unchanged(
     hub = mk_hub(conn, ana, "Small")
     fill(conn, ana, hub, 26)
     out = get(conn, ana, ref=hub)
-    assert "groups by subject" not in out
+    assert " groups by " not in out
     monkeypatch.setattr(read_module, "_grouped", lambda conn, viewer, top: None)
     assert get(conn, ana, ref=hub) == out
 
@@ -97,7 +97,7 @@ def test_more_than_26_notes_show_groups_and_every_note_has_one_path(
     hub = mk_hub(conn, ana, "Big")
     notes = fill(conn, ana, hub, 40)
     out = get(conn, ana, ref=hub)
-    assert "40 notes in 5 groups by subject" in out
+    assert "40 notes in 5 groups by their words," in out
     lines = group_lines(out)
     assert sorted(lines) == ["A", "B", "C", "D", "E"]
     assert sorted(n for _, n in lines.values()) == [8] * 5
@@ -185,7 +185,7 @@ def test_what_the_viewer_may_not_read_is_not_reached_counted_or_labelled(
     for i in range(5):
         mk_note(conn, bea, f"zyzzyva private {i} quokka", hub=hub, private=True)
     out = get(conn, ana, ref=hub)
-    assert "30 notes in 4 groups by subject" in out
+    assert "30 notes in 4 groups by their words," in out
     assert "zyzzyva" not in out and "quokka" not in out
     reached = walk(conn, ana, hub)
     assert sorted(reached) == sorted(short_ref(n) for n in seen)
@@ -193,7 +193,7 @@ def test_what_the_viewer_may_not_read_is_not_reached_counted_or_labelled(
         part = get(conn, ana, ref=hub, part=letter)
         assert "zyzzyva" not in part and "quokka" not in part
     # cid reads the private sub-hub: other notes, other groups
-    assert "42 notes in 6 groups by subject" in get(conn, cid, ref=hub)
+    assert "42 notes in 6 groups by their words," in get(conn, cid, ref=hub)
 
 
 def test_notes_in_a_readable_sub_hub_are_grouped_and_the_sub_hub_line_stays(
@@ -205,7 +205,7 @@ def test_notes_in_a_readable_sub_hub_are_grouped_and_the_sub_hub_line_stays(
     sub_notes = fill(conn, ana, sub, 15, start=20)
     out = get(conn, ana, ref=hub)
     assert "sub-hubs:" in out and '"Sub"' in out
-    assert "35 notes in 5 groups by subject" in out
+    assert "35 notes in 5 groups by their words," in out
     reached = walk(conn, ana, hub)
     assert sorted(set(reached)) == sorted(short_ref(n) for n in top_notes + sub_notes)
     assert len(reached) == len(set(reached))
@@ -229,7 +229,7 @@ def test_stored_vectors_are_used_when_nearly_every_note_has_one(
             (str(vec), sql_node_id(conn, address)),
         )
     out = get(conn, ana, ref=hub)
-    assert "40 notes in 5 groups by subject" in out
+    assert "40 notes in 5 groups by meaning," in out
     # 40 notes in four directions of ten, five groups of eight: four groups
     # of one direction each, and the two left of every direction in the fifth.
     # The words would have made five groups of one subject each.
@@ -239,3 +239,57 @@ def test_stored_vectors_are_used_when_nearly_every_note_has_one(
         members = listed(get(conn, ana, ref=hub, part=letter))
         pure += len({direction[m] for m in members}) == 1
     assert pure == 4
+
+
+def add_vector(conn: Conn, address: str, i: int) -> None:
+    vec = [0.0] * 8
+    vec[i % 4] = 1.0
+    conn.execute(
+        "INSERT INTO embedding (node_id, model, dim, vec, version_hash)"
+        " SELECT n.id, 'test-model', 8, %s::vector, n.head_version"
+        " FROM node n WHERE n.id = %s",
+        (str(vec), sql_node_id(conn, address)),
+    )
+
+
+def test_two_listings_agree_and_every_letter_opens_its_group(
+    conn: Conn, ana: Account
+) -> None:
+    """What RETICULA4 found on 01b2cff, as a test: list twice, then open each
+    letter of the first listing; its line must be the listing's line."""
+    hub = mk_hub(conn, ana, "Conference")
+    fill(conn, ana, hub, 60)
+    first, second = get(conn, ana, ref=hub), get(conn, ana, ref=hub)
+    assert first == second
+    lines = group_lines(first)
+    assert len(lines) == 8
+    for letter, (label, size) in lines.items():
+        part = get(conn, ana, ref=hub, part=letter)
+        assert f"group {letter} of 8: {label} ({size} notes;" in part
+
+
+def test_vectors_arriving_do_not_move_the_groups_until_all_are_there(
+    conn: Conn, ana: Account, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With a real model, notes get their vectors one by one from the indexer.
+    Until the last one is there the groups go by the words, the same at every
+    call, and the first line says how many are still to come."""
+    monkeypatch.setattr(groups, "_model", lambda: "test-model")
+    hub = mk_hub(conn, ana, "Arriving")
+    notes = fill(conn, ana, hub, 40)
+    seen = []
+    for done in (0, 1, 20, 39):
+        conn.execute("DELETE FROM embedding WHERE model = 'test-model'")
+        for i, address in enumerate(notes[:done]):
+            add_vector(conn, address, i)
+        out = get(conn, ana, ref=hub)
+        assert f"groups by their words ({40 - done} not indexed yet;" in out
+        seen.append(group_lines(out))
+        for letter, (label, size) in group_lines(out).items():
+            part = get(conn, ana, ref=hub, part=letter)
+            assert f"group {letter} of 5: {label} ({size} notes;" in part
+    assert all(s == seen[0] for s in seen)
+    add_vector(conn, notes[39], 39)
+    out = get(conn, ana, ref=hub)
+    assert "40 notes in 5 groups by meaning," in out
+    assert get(conn, ana, ref=hub) == out

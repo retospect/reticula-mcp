@@ -670,7 +670,7 @@ def test_a_hub_of_3000_members_answers_in_groups_with_bounded_statements(
     sql = spy_on_sql(monkeypatch)
     out = get(conn, alice, hub["address"])
     assert sql.rows < 3_200 and len(sql.statements) < 100
-    assert "3000 notes in 26 groups by subject" in out
+    assert "3000 notes in 26 groups by their words," in out
     assert f'the newest notes first: search(query="", hub="{ref}")' in out
     page = get(conn, alice, f"{ref}+20")  # pages as before
     assert titles(page) == [f"Note {i}" for i in range(21, 41)]

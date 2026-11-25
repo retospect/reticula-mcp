@@ -3,8 +3,12 @@ the same notes, labels, and the two kinds of features. No database."""
 
 from __future__ import annotations
 
+import hashlib
+import os
 import random
 import re
+import subprocess
+import sys
 
 import numpy as np
 import pytest
@@ -154,14 +158,16 @@ def test_label_words_are_letters_only_whatever_the_text() -> None:
             assert re.fullmatch(r"[a-z]{3,20}", word), word
 
 
-def test_a_few_notes_without_a_vector_still_get_a_place() -> None:
-    notes = topic_notes(100, vectors=True)
-    notes = [
-        Note(n.id, n.text, None) if i % 12 == 0 else n for i, n in enumerate(notes)
+def test_one_note_without_a_vector_means_the_words_for_all() -> None:
+    """A vector arriving must not move the groups: with one missing, the
+    groups are those of the words alone, exactly."""
+    with_vectors = topic_notes(100, vectors=True)
+    one_missing = [
+        Note(n.id, n.text, None) if i == 7 else n for i, n in enumerate(with_vectors)
     ]
-    tree = build(notes)
-    found = sorted(i for leaf in leaves(tree) for i in leaf.ids)
-    assert found == sorted(n.id for n in notes)
+    words_only = [Note(n.id, n.text, None) for n in with_vectors]
+    assert not groups.by_meaning(one_missing) and groups.by_meaning(with_vectors)
+    assert _digest(build(one_missing)) == _digest(build(words_only))
 
 
 def test_many_notes_without_a_vector_use_the_words() -> None:
@@ -174,3 +180,32 @@ def test_many_notes_without_a_vector_use_the_words() -> None:
     )
     tree = build(notes)
     assert len(tree.children) == 5
+
+
+def _digest(group: Group) -> str:
+    def shape(g: Group) -> object:
+        return (g.path, g.ids, g.label, [shape(c) for c in g.children])
+
+    return hashlib.sha256(repr(shape(group)).encode()).hexdigest()
+
+
+_OTHER_PROCESS = """
+from reticula_mcp.search.groups import build
+from tests.test_groups import _digest, topic_notes
+for vectors in (False, True):
+    print(_digest(build(topic_notes(300, vectors=vectors))))
+"""
+
+
+def test_another_process_gives_the_same_tree() -> None:
+    """A restarted server: another hash seed, the same groups and letters."""
+    here = [_digest(build(topic_notes(300, vectors=v))) for v in (False, True)]
+    for seed in ("1", "2"):
+        done = subprocess.run(
+            [sys.executable, "-c", _OTHER_PROCESS],
+            capture_output=True,
+            text=True,
+            check=True,
+            env={**os.environ, "PYTHONHASHSEED": seed},
+        )
+        assert done.stdout.split() == here
