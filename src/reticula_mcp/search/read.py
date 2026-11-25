@@ -30,7 +30,7 @@ from reticula_mcp import format as fmt
 from reticula_mcp.accounts import Account
 from reticula_mcp.db.pool import Conn
 from reticula_mcp.errors import BAD_INPUT, NOT_FOUND, ReticulaError
-from reticula_mcp.graph.access import readers_above
+from reticula_mcp.graph.access import adders_from_above, readers_above
 from reticula_mcp.graph.paper import ext_key_from_payload
 from reticula_mcp.permissions import current_nodes_sql, readable_nodes_sql
 from reticula_mcp.resolve import resolve_ref
@@ -637,11 +637,14 @@ def _access_line(conn: Conn, viewer: Account, hub: Row) -> str | None:
         " WHERE g.hub_node_id = %s AND g.mode IN ('read', 'add') ORDER BY g.id",
         (hub["id"],),
     ).fetchall()
+    # a grant is named as it was given; a hub above may give more
+    adders = adders_from_above(conn, viewer.person_id, hub["id"])
     for g in grants:
         if g["grantee"] == hub["author"]:
             continue  # the owner is already named
         who = f"@{g['handle']}" if g["handle"] else g["grantee"]
-        parts.append(f"{who} {g['mode']}")
+        more = " (add through a hub above)" if g["grantee"] in adders else ""
+        parts.append(f"{who} {g['mode']}{more}")
     # the grants on the hub itself are not everyone who reads it
     above, others = readers_above(conn, viewer.person_id, hub["id"])
     for p in above:

@@ -100,6 +100,30 @@ def readers_above(
     return shown, any(not r["visible"] for r in rows)
 
 
+def adders_from_above(conn: Conn, viewer_person_id: str, hub_node_id: int) -> set[str]:
+    """The people with a read grant on the hub itself who can add to it all the
+    same, through a hub above, as far as the viewer may know.
+
+    The access list prints a grant as it was given. For these people that is
+    less than they may do, and the list says so. The viewer is told only where
+    they may see the list of the hub above that gives the access (the rule of
+    :func:`readers_above`).
+    """
+    rows = conn.execute(
+        "SELECT g.grantee FROM hub_grant g"
+        " WHERE g.hub_node_id = %(hub)s AND g.mode = 'read'"
+        " AND shown_access(g.grantee, %(hub)s) = 'add'"
+        " AND EXISTS ("
+        "   SELECT 1 FROM hub_ancestors(%(hub)s) a JOIN node n ON n.id = a.hub_id"
+        "   WHERE coalesce(shown_access(%(viewer)s, n.id) = 'add', false)"
+        "   AND (n.author = g.grantee OR (n.audience = 'hub' AND EXISTS ("
+        "     SELECT 1 FROM hub_grant up WHERE up.hub_node_id = n.id"
+        "     AND up.grantee = g.grantee AND up.mode = 'add'))))",
+        {"viewer": viewer_person_id, "hub": hub_node_id},
+    ).fetchall()
+    return {r["grantee"] for r in rows}
+
+
 def lock_hierarchy(conn: Conn) -> None:
     """Take the transaction-scoped hub-hierarchy lock."""
     conn.execute("SELECT pg_advisory_xact_lock(%s)", (_HIERARCHY_LOCK,))
