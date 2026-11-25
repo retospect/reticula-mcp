@@ -38,12 +38,14 @@ def can_read(conn: Conn, viewer: Account, node_id: int) -> bool:
 def can_add(conn: Conn, viewer: Account, hub_node_id: int) -> bool:
     """May ``viewer`` file atoms under hub ``hub_node_id``?
 
-    STUB (foundation): only the hub's author. The graph lane implements the
-    final rule: a grant with mode ``add`` on the hub or an ancestor hub, hub
-    ``accept: anyone``, and revocations (mode ``none``).
+    True for the hub's author (its admin), for anyone holding a grant with mode
+    ``add`` on the hub or on an ancestor hub, and for anyone when the hub's
+    payload says ``"accept": "anyone"`` (which does not make them readers). A
+    grant with mode ``none`` is no grant. Implemented by the SQL function
+    ``can_add_person`` (migration 0200), which shares its ancestor walk with
+    ``readable_nodes``.
     """
     row = conn.execute(
-        "SELECT 1 FROM node WHERE id = %s AND author = %s AND tombstoned_at IS NULL",
-        (hub_node_id, viewer.person_id),
+        "SELECT can_add_person(%s, %s) AS ok", (viewer.person_id, hub_node_id)
     ).fetchone()
-    return row is not None
+    return bool(row and row["ok"])

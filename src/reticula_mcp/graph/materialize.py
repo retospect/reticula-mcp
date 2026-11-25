@@ -1,0 +1,368 @@
+"""Materialise signed records into the graph tables, and rebuild them.
+
+``node``, ``membership``, ``hub_grant``, ``supersedes`` and ``link`` are views
+of the ``record`` log: every table row is a pure function of the records
+applied so far, in log order. :func:`apply_record` applies ONE record (every
+write path calls it in the writing transaction); :func:`rebuild` resets the
+tables and replays the whole log through the same function.
+
+Authority is checked here as well as in the handlers, as of the moment the
+record is applied (the log order), so a replay reproduces exactly what the
+original writes produced and a record ingested from elsewhere cannot widen
+anyone's access:
+
+* a membership counts only when filed by the atom's own author who could add
+  to the hub at that moment; an atom or hub reachable through a hub is only
+  ever one its author chose to file there;
+* a withdrawal is honoured from the statement's author and from the hub's
+  admin;
+* a grant is applied only when :func:`access.authorize_grant` allows it.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+from psycopg.types.json import Jsonb
+
+from reticula_mcp import format as fmt
+from reticula_mcp import records
+from reticula_mcp.db.pool import Conn
+from reticula_mcp.errors import ReticulaError
+from reticula_mcp.graph import access
+from reticula_mcp.graph.paper import ext_key_from_payload
+from reticula_mcp.search import hooks
+
+log = logging.getLogger(__name__)
+Row = dict[str, Any]
+
+# What the rebuild reads: every type that changes graph state.
+STATE_TYPES = ("atom", "member", "grant", "tombstone")
+
+
+def node_by_address(conn: Conn, address: str) -> Row | None:
+    return conn.execute("SELECT * FROM node WHERE address = %s", (address,)).fetchone()
+
+
+def _text(value: Any, default: str = "") -> str:
+    return value if isinstance(value, str) else default
+
+
+def _strings(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [v for v in value if isinstance(v, str)]
+
+
+def apply_record(conn: Conn, rec: records.Record, *, notify: bool = True) -> int | None:
+    """Apply one record to the graph tables. Returns the id of the node whose
+    row was created or changed (atoms, tombstones), else None.
+
+    Unknown types, blanked records and records that fail the authority checks
+    change nothing.
+    """
+    if rec.type not in STATE_TYPES or rec.blanked:
+        return None
+    try:
+        payload = rec.payload
+    except ValueError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    node_id: int | None = None
+    if rec.type == "atom":
+        node_id = _apply_atom(conn, rec, payload)
+    elif rec.type == "tombstone":
+        node_id = _apply_tombstone(conn, rec, payload)
+    elif rec.type == "member":
+        _apply_member(conn, rec, payload)
+    elif rec.type == "grant":
+        _apply_grant(conn, rec, payload)
+    if node_id is not None and notify:
+        hooks.on_node_changed(conn, node_id)
+    return node_id
+
+
+# --- atoms ------------------------------------------------------------------
+
+
+def _apply_atom(conn: Conn, rec: records.Record, payload: Row) -> int:
+    kind = _text(payload.get("kind")) or "note"
+    ext_key = ext_key_from_payload(payload) if kind == "paper" else None
+    title = payload.get("title")
+    row = conn.execute(
+        "INSERT INTO node (address, author, author_account_id, kind, head_record_id,"
+        " head_version, title, text, tags, payload, ext_key, audience, tombstoned_at,"
+        " created_at, updated_at)"
+        " VALUES (%(address)s, %(author)s,"
+        " (SELECT id FROM account WHERE person_id = %(author)s), %(kind)s,"
+        " %(record_id)s, %(version)s, %(title)s, %(text)s, %(tags)s, %(payload)s,"
+        " %(ext_key)s, %(audience)s, NULL, %(at)s, %(at)s)"
+        " ON CONFLICT (address) DO UPDATE SET"
+        " author_account_id = EXCLUDED.author_account_id, kind = EXCLUDED.kind,"
+        " head_record_id = EXCLUDED.head_record_id,"
+        " head_version = EXCLUDED.head_version, title = EXCLUDED.title,"
+        " text = EXCLUDED.text, tags = EXCLUDED.tags, payload = EXCLUDED.payload,"
+        " ext_key = EXCLUDED.ext_key, audience = EXCLUDED.audience,"
+        " updated_at = EXCLUDED.updated_at"
+        " RETURNING id",
+        {
+            "address": rec.address,
+            "author": rec.author,
+            "kind": kind,
+            "record_id": rec.id,
+            "version": rec.version_hash,
+            "title": title if isinstance(title, str) else None,
+            "text": _text(payload.get("text")),
+            "tags": _strings(payload.get("tags")),
+            "payload": Jsonb(payload),
+            "ext_key": ext_key,
+            "audience": rec.audience,
+            "at": rec.created_at,
+        },
+    ).fetchone()
+    assert row is not None
+    node_id = int(row["id"])
+    _refresh_relations(conn, node_id, payload)
+    return node_id
+
+
+def _refresh_relations(conn: Conn, node_id: int, payload: Row) -> None:
+    """``supersedes`` and ``link`` rows are a function of the head payload."""
+    conn.execute("DELETE FROM supersedes WHERE new_node_id = %s", (node_id,))
+    for address in dict.fromkeys(_strings(payload.get("supersedes"))):
+        old = node_by_address(conn, address)
+        if old is not None and old["id"] != node_id:
+            conn.execute(
+                "INSERT INTO supersedes (new_node_id, old_node_id) VALUES (%s, %s)"
+                " ON CONFLICT DO NOTHING",
+                (node_id, old["id"]),
+            )
+    conn.execute("DELETE FROM link WHERE src_node_id = %s", (node_id,))
+    links = payload.get("links")
+    if not isinstance(links, list):
+        return
+    for item in links:
+        if not isinstance(item, dict):
+            continue
+        rel, to = item.get("rel"), item.get("to")
+        if not isinstance(rel, str) or not isinstance(to, str) or not rel or not to:
+            continue
+        dst = node_by_address(conn, to)
+        conn.execute(
+            "INSERT INTO link (src_node_id, rel, dst_address, dst_node_id)"
+            " VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING",
+            (node_id, rel, to, dst["id"] if dst else None),
+        )
+
+
+def _apply_tombstone(conn: Conn, rec: records.Record, payload: Row) -> int:
+    """Keep the address; drop the content. A tombstone is terminal."""
+    first = conn.execute(
+        "SELECT min(created_at) AS at FROM record WHERE address = %s", (rec.address,)
+    ).fetchone()
+    created = first["at"] if first and first["at"] else rec.created_at
+    row = conn.execute(
+        "INSERT INTO node (address, author, author_account_id, kind, head_record_id,"
+        " head_version, title, text, tags, payload, ext_key, audience, tombstoned_at,"
+        " created_at, updated_at)"
+        " VALUES (%(address)s, %(author)s,"
+        " (SELECT id FROM account WHERE person_id = %(author)s), %(kind)s,"
+        " %(record_id)s, %(version)s, NULL, '', '{}', '{}'::jsonb, NULL,"
+        " %(audience)s, %(at)s, %(created)s, %(at)s)"
+        " ON CONFLICT (address) DO UPDATE SET"
+        " kind = CASE WHEN node.kind = 'unreplayed' THEN EXCLUDED.kind"
+        "   ELSE node.kind END,"
+        " audience = CASE WHEN node.kind = 'unreplayed' THEN EXCLUDED.audience"
+        "   ELSE node.audience END,"
+        " head_record_id = EXCLUDED.head_record_id,"
+        " head_version = EXCLUDED.head_version, title = NULL, text = '',"
+        " tags = '{}', payload = '{}'::jsonb, ext_key = NULL,"
+        " tombstoned_at = EXCLUDED.tombstoned_at, updated_at = EXCLUDED.updated_at"
+        " RETURNING id",
+        {
+            "address": rec.address,
+            "author": rec.author,
+            "kind": _text(payload.get("kind")) or "note",
+            "record_id": rec.id,
+            "version": rec.version_hash,
+            "audience": rec.audience,
+            "at": rec.created_at,
+            "created": created,
+        },
+    ).fetchone()
+    assert row is not None
+    node_id = int(row["id"])
+    conn.execute("DELETE FROM supersedes WHERE new_node_id = %s", (node_id,))
+    conn.execute("DELETE FROM link WHERE src_node_id = %s", (node_id,))
+    return node_id
+
+
+# --- memberships --------------------------------------------------------------
+
+
+def _apply_member(conn: Conn, rec: records.Record, payload: Row) -> None:
+    atom = node_by_address(conn, _text(payload.get("atom")))
+    hub = node_by_address(conn, _text(payload.get("hub")))
+    if atom is None or hub is None or hub["kind"] != "hub":
+        return
+    withdrawn = payload.get("withdrawn") is True
+    existing = conn.execute(
+        "SELECT id FROM membership WHERE address = %s", (rec.address,)
+    ).fetchone()
+    if withdrawn:
+        if existing is None and rec.author != hub["author"]:
+            return  # a stranger's withdrawal of someone else's filing: ignored
+        if rec.author == hub["author"]:
+            # the hub's admin removes the atom from the hub, whoever filed it
+            conn.execute(
+                "UPDATE membership SET withdrawn = true WHERE node_id = %s"
+                " AND hub_node_id = %s AND NOT withdrawn",
+                (atom["id"], hub["id"]),
+            )
+    else:
+        if rec.author != atom["author"]:
+            return  # you can only file your own atoms and hubs
+        if not access.can_add_person(conn, rec.author, hub["id"]):
+            return
+    conn.execute(
+        "INSERT INTO membership (address, node_id, hub_node_id, author, audience,"
+        " withdrawn, record_id, created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)"
+        " ON CONFLICT (address) DO UPDATE SET audience = EXCLUDED.audience,"
+        " withdrawn = EXCLUDED.withdrawn, record_id = EXCLUDED.record_id",
+        (
+            rec.address,
+            atom["id"],
+            hub["id"],
+            rec.author,
+            rec.audience,
+            withdrawn,
+            rec.id,
+            rec.created_at,
+        ),
+    )
+
+
+# --- grants -------------------------------------------------------------------
+
+
+def _apply_grant(conn: Conn, rec: records.Record, payload: Row) -> None:
+    hub = node_by_address(conn, _text(payload.get("hub")))
+    grantee = _text(payload.get("to"))
+    mode = _text(payload.get("mode"))
+    if hub is None or not fmt.is_person_id(grantee):
+        return
+    try:
+        access.authorize_grant(
+            conn, granter=rec.author, hub=hub, grantee=grantee, mode=mode
+        )
+    except ReticulaError as exc:
+        log.info("grant %s not applied: %s", rec.address, exc.message)
+        return
+    conn.execute(
+        "INSERT INTO hub_grant (hub_node_id, grantee, grantee_account_id, mode,"
+        " granted_by, address, record_id, created_at, updated_at)"
+        " VALUES (%(hub)s, %(grantee)s,"
+        " (SELECT id FROM account WHERE person_id = %(grantee)s), %(mode)s,"
+        " %(by)s, %(address)s, %(record_id)s, %(at)s, %(at)s)"
+        " ON CONFLICT (hub_node_id, grantee) DO UPDATE SET mode = EXCLUDED.mode,"
+        " granted_by = EXCLUDED.granted_by, address = EXCLUDED.address,"
+        " record_id = EXCLUDED.record_id, updated_at = EXCLUDED.updated_at,"
+        " grantee_account_id = EXCLUDED.grantee_account_id",
+        {
+            "hub": hub["id"],
+            "grantee": grantee,
+            "mode": mode,
+            "by": rec.author,
+            "address": rec.address,
+            "record_id": rec.id,
+            "at": rec.created_at,
+        },
+    )
+
+
+# --- rebuild ------------------------------------------------------------------
+
+
+def _seed_tombstoned(conn: Conn) -> None:
+    """Give every tombstoned address a placeholder node before the replay.
+
+    The content of its earlier versions was erased, so nothing in the log would
+    create the node until the tombstone itself is replayed; but filings and
+    grants that mention it come earlier. The tombstone payload carries the kind.
+    """
+    for row in conn.execute(
+        "SELECT id FROM record WHERE type = 'tombstone'"
+    ).fetchall():
+        rec = records.get_record(conn, row["id"])
+        if rec is None or rec.blanked:
+            continue
+        try:
+            payload = rec.payload
+        except ValueError:
+            continue
+        kind = _text(payload.get("kind")) if isinstance(payload, dict) else ""
+        first = conn.execute(
+            "SELECT id, version_hash, created_at FROM record WHERE address = %s"
+            " ORDER BY id LIMIT 1",
+            (rec.address,),
+        ).fetchone()
+        assert first is not None
+        conn.execute(
+            "INSERT INTO node (address, author, author_account_id, kind,"
+            " head_record_id, head_version, audience, created_at, updated_at)"
+            " VALUES (%(address)s, %(author)s,"
+            " (SELECT id FROM account WHERE person_id = %(author)s), %(kind)s,"
+            " %(id)s, %(version)s, %(audience)s, %(at)s, %(at)s)"
+            " ON CONFLICT (address) DO UPDATE SET kind = EXCLUDED.kind,"
+            " audience = EXCLUDED.audience",
+            {
+                "address": rec.address,
+                "author": rec.author,
+                "kind": kind or "note",
+                "id": first["id"],
+                "version": first["version_hash"],
+                "audience": rec.audience,
+                "at": first["created_at"],
+            },
+        )
+
+
+def rebuild(conn: Conn) -> dict[str, int]:
+    """Reset the graph tables and replay the record log into them.
+
+    ``node`` rows keep their local ids (the embedding table points at them):
+    they are blanked, then every atom and tombstone record rewrites them in
+    log order. Returns how many records of each type were replayed.
+    """
+    conn.execute("DELETE FROM link")
+    conn.execute("DELETE FROM supersedes")
+    conn.execute("DELETE FROM membership")
+    conn.execute("DELETE FROM hub_grant")
+    conn.execute(
+        "UPDATE node SET kind = 'unreplayed', title = NULL, text = '', tags = '{}',"
+        " payload = '{}'::jsonb, ext_key = NULL, audience = 'private',"
+        " tombstoned_at = NULL"
+    )
+    _seed_tombstoned(conn)
+    ids = [
+        r["id"]
+        for r in conn.execute(
+            "SELECT id FROM record WHERE type = ANY(%s) ORDER BY id",
+            (list(STATE_TYPES),),
+        )
+    ]
+    counts = dict.fromkeys(STATE_TYPES, 0)
+    touched: dict[int, None] = {}
+    for record_id in ids:
+        rec = records.get_record(conn, record_id)
+        if rec is None:
+            continue
+        counts[rec.type] += 1
+        node_id = apply_record(conn, rec, notify=False)
+        if node_id is not None:
+            touched[node_id] = None
+    for node_id in touched:
+        hooks.on_node_changed(conn, node_id)
+    return counts
