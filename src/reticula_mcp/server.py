@@ -465,10 +465,11 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
         *,
         ctx: Context,
     ) -> str:
-        """Delete one of YOUR OWN notes (tombstone).
+        """Delete one of YOUR OWN notes. This cannot be undone.
 
-        The address stays and answers as deleted, with no content. Only the
-        author can delete.
+        The address stays and answers as deleted, with no content. Delete only
+        what the person asked for: read a note with `get` before you delete it,
+        and tell the person what you deleted and what you kept.
         """
         return await run(ctx, graph_handlers.delete, write=True, ref=ref)
 
