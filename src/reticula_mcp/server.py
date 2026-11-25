@@ -39,6 +39,7 @@ from reticula_mcp.graph import handlers as graph_handlers
 from reticula_mcp.requestlog import RequestLog
 from reticula_mcp.seams import AuthWiring
 from reticula_mcp.search import handlers as search_handlers
+from reticula_mcp.search import handles
 from reticula_mcp.search import hooks as search_hooks
 
 log = logging.getLogger("reticula_mcp")
@@ -159,13 +160,16 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
                     db.connection() as conn,
                 ):
                     viewer = viewer_for_token(conn, token)
-                    if write:
-                        limit_writes(conn, viewer.id)
-                        return handler(conn, viewer, **params)
-                    # A tool that only reads asks once who reads which hubs.
-                    # A tool that writes never does: see permissions.read_call.
-                    with permissions.read_call():
-                        return handler(conn, viewer, **params)
+                    # words after ids, when this connection has them on
+                    with handles.during(conn, viewer):
+                        if write:
+                            limit_writes(conn, viewer.id)
+                            return handler(conn, viewer, **params)
+                        # A tool that only reads asks once who reads which
+                        # hubs. A tool that writes never does: see
+                        # permissions.read_call.
+                        with permissions.read_call():
+                            return handler(conn, viewer, **params)
             except ReticulaError as exc:
                 return exc.render()
             except psycopg.errors.QueryCanceled:
@@ -209,6 +213,14 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
                 " Omit to just show the profile."
             ),
         ] = None,
+        # Draft text, for the trial. `word_handles` stays the last parameter.
+        word_handles: Annotated[
+            str | None,
+            Field(
+                description='"on": each note\'s id is followed by words to say aloud,'
+                ' for this connection. "off" turns them off.'
+            ),
+        ] = None,
         *,
         ctx: Context,
     ) -> str:
@@ -217,7 +229,9 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
         Pass `handle` to change it; your person ID and all your notes keep their
         addresses. Handles are unique on this instance.
         """
-        return await run(ctx, content_handlers.profile, handle=handle)
+        return await run(
+            ctx, content_handlers.profile, handle=handle, word_handles=word_handles
+        )
 
     @mcp.tool(structured_output=False)
     async def search(

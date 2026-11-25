@@ -39,7 +39,7 @@ from reticula_mcp.permissions import (
     readable_nodes_sql,
 )
 from reticula_mcp.resolve import resolve_ref
-from reticula_mcp.search import groups, render
+from reticula_mcp.search import groups, handles, render
 from reticula_mcp.search.rows import fetch_rows, visible_subset
 
 Row = dict[str, Any]
@@ -549,7 +549,10 @@ def _render_note(
     # as in listings.
     full = str(row["title"]) if row.get("title") else None
     name = render.quote(full, 200) if full else _title(row)
-    head = f"{ref} {render.kind_word(row['kind'])} {name}"
+    spoken = handles.words(row["address"])  # "" unless switched on
+    head = (
+        f"{ref}{' ' + spoken if spoken else ''} {render.kind_word(row['kind'])} {name}"
+    )
     tag = render.trust_tag(row)
     if tag:
         head += f" [{tag}]"
@@ -1053,8 +1056,9 @@ def _render_hub(
         return _render_hub_page(conn, viewer, hub, history=history, offset=offset)
     ref = render.short_ref(hub["address"])
     path = _paths(conn, viewer, hub["id"], own=hub)
+    spoken = handles.words(hub["address"])  # "" unless switched on
     lines = [
-        f"{ref} hub {_title(hub)}",
+        f"{ref}{' ' + spoken if spoken else ''} hub {_title(hub)}",
         f"address: {hub['address']}",
         _byline(conn, viewer, hub),
         f"path: {path or _title(hub)}",

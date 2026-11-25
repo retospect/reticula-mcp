@@ -23,6 +23,8 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
+from reticula_mcp.search import handles
+
 Row = dict[str, Any]
 
 SHORT = 8  # hex characters of the UUID shown as a short ref
@@ -182,6 +184,9 @@ def row_line(
     readable hub it sits in, age, then ``more`` (fixed words from this code, never
     somebody's text). Every free-text part is JSON-quoted."""
     parts = [short_ref(row["address"]), kind_word(row["kind"])]
+    spoken = handles.words(row["address"])  # "" unless switched on
+    if spoken:
+        parts.insert(1, spoken)
     tag = trust_tag(row)
     if tag:
         parts.append(f"[{tag}]")

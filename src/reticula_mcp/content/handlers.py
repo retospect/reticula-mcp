@@ -18,9 +18,10 @@ from reticula_mcp import accounts, connection
 from reticula_mcp.accounts import Account
 from reticula_mcp.content import bootstrap
 from reticula_mcp.db.pool import Conn
+from reticula_mcp.errors import BAD_INPUT, ReticulaError
 from reticula_mcp.graph import access
 from reticula_mcp.permissions import read_through_above_sql, readable_nodes_sql
-from reticula_mcp.search import recent
+from reticula_mcp.search import handles, recent
 from reticula_mcp.search.read import member_counts
 from reticula_mcp.search.render import quote
 
@@ -343,8 +344,21 @@ def _identity_versions(conn: Conn, viewer: Account) -> int:
     return int(row["n"]) if row else 0
 
 
-def profile(conn: Conn, viewer: Account, *, handle: str | None = None) -> str:
-    """Show the account, or rename its handle."""
+def profile(
+    conn: Conn,
+    viewer: Account,
+    *,
+    handle: str | None = None,
+    word_handles: str | None = None,
+) -> str:
+    """Show the account, or rename its handle, or switch word handles on or off
+    for this connection (search/handles.py)."""
+    if word_handles is not None:
+        if handle is not None:
+            raise ReticulaError(
+                BAD_INPUT, "one change at a time: handle or word_handles"
+            )
+        return handles.switch(conn, viewer, word_handles)
     if handle is not None:
         old = viewer.handle
         viewer = accounts.set_handle(conn, viewer, handle)
