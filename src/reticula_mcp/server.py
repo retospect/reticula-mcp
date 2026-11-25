@@ -28,7 +28,7 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from reticula_mcp import __version__, permissions
+from reticula_mcp import __version__, connection, permissions
 from reticula_mcp.auth import build_auth, throttle
 from reticula_mcp.config import Settings, parse_rate
 from reticula_mcp.content import handlers as content_handlers
@@ -153,7 +153,11 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
 
         def work() -> str:
             try:
-                with db.connection() as conn:
+                # which connection the call came through (connection.py)
+                with (
+                    connection.during(token.claims if token else None),
+                    db.connection() as conn,
+                ):
                     viewer = viewer_for_token(conn, token)
                     if write:
                         limit_writes(conn, viewer.id)
@@ -278,6 +282,8 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
 
     @mcp.tool(structured_output=False)
     async def get(
+        # Several refs (up to 10, spaces or commas) work, but are not said here:
+        # the sentence cost start-first in the trial; search's reply says it.
         ref: Annotated[str, Field(description=_REF)],
         history: Annotated[
             bool,
@@ -292,6 +298,8 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
                 description="How many link steps around the note to show (default 1)."
             ),
         ] = 1,
+        # Trial arm A: a group of a big hub is read through ref
+        # ("9ab6128c:A"), which the hub's own listing says; no parameter.
         *,
         ctx: Context,
     ) -> str:

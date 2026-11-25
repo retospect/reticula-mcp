@@ -65,7 +65,10 @@ def _checked_kind(conn: Conn, viewer: Account, kind: str | None) -> str | None:
     return kind
 
 
-NEXT_GET = "next: get(ref) reads one in full (ref = the short id at the line start)"
+NEXT_GET = (
+    "next: get(ref) reads one in full (ref = the short id at the line start);"
+    ' get(ref="<id> <id> <id>") reads several at once'
+)
 
 
 def _result_lines(
@@ -330,4 +333,35 @@ def get(
     history: bool = False,
     depth: int = 1,
 ) -> str:
-    return read_ref(conn, viewer, ref, history=history, depth=depth)
+    refs = split_refs(ref)
+    if len(refs) <= 1:
+        return read_ref(conn, viewer, ref, history=history, depth=depth)
+    if len(refs) > MAX_REFS:
+        raise ReticulaError(
+            BAD_INPUT,
+            f"at most {MAX_REFS} refs in one get; this asks for {len(refs)}",
+            hint="split them over several calls",
+        )
+    answers = []
+    for n, one in enumerate(refs, 1):
+        try:
+            text = read_ref(conn, viewer, one, history=history, depth=depth)
+        except ReticulaError as exc:  # this ref fails; the others still answer
+            text = exc.render()
+        answers.append(f"--- {n} of {len(refs)}: {one} ---\n{text}")
+    return "\n".join(answers)
+
+
+#: Refs one ``get`` reads.
+MAX_REFS = 10
+_REF_SPLIT = re.compile(r"[\s,]+")
+
+
+def split_refs(ref: str) -> list[str]:
+    """The refs in ``ref``, separated by spaces or commas, each once, in order.
+    No ref has a space or a comma in it (an address, an id suffix, a page)."""
+    seen: list[str] = []
+    for one in _REF_SPLIT.split(ref.strip()):
+        if one and one not in seen:
+            seen.append(one)
+    return seen

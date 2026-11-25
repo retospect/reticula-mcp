@@ -41,7 +41,7 @@ from reticula_mcp.permissions import (
     readable_nodes_sql,
 )
 from reticula_mcp.resolve import resolve_ref
-from reticula_mcp.search import render
+from reticula_mcp.search import groups, render
 from reticula_mcp.search.rows import fetch_rows, visible_subset
 
 Row = dict[str, Any]
@@ -89,10 +89,16 @@ def _split_offset(ref: str) -> tuple[str, int]:
 
 
 def read_ref(
-    conn: Conn, viewer: Account, ref: str, *, history: bool, depth: int
+    conn: Conn,
+    viewer: Account,
+    ref: str,
+    *,
+    history: bool,
+    depth: int,
 ) -> str:
     asked = int(depth)
     depth = max(1, min(asked, MAX_DEPTH))
+    ref, part = groups.split_letters(ref)
     base, offset = _split_offset(ref)
     try:
         node = resolve_ref(conn, viewer, base)
@@ -103,6 +109,8 @@ def read_ref(
                 return _render_withdrawn(gone)
         raise
     row = fetch_rows(conn, viewer, [node["id"]], text_chars=None)[node["id"]]
+    if part is not None:
+        return _render_part(conn, viewer, row, part, history=history, offset=offset)
     if row["kind"] == "hub":
         return _render_hub(
             conn, viewer, row, history=history, depth=depth, asked=asked, offset=offset
@@ -910,8 +918,19 @@ def _load_bodies(
         sub_ids = _newest(
             conn, viewer, hub_ids, hubs=True, history=history, limit=SUBHUBS_SHOWN
         )
-    note_ids = _newest(
-        conn, viewer, hub_ids, hubs=False, history=history, limit=limit, offset=offset
+    # limit 0: no page of notes (a hub shown in lettered groups)
+    note_ids = (
+        _newest(
+            conn,
+            viewer,
+            hub_ids,
+            hubs=False,
+            history=history,
+            limit=limit,
+            offset=offset,
+        )
+        if limit
+        else {}
     )
     all_subs = sorted({i for ids in sub_ids.values() for i in ids})
     all_notes = sorted({i for ids in note_ids.values() for i in ids})
@@ -1096,6 +1115,54 @@ def _render_hub_page(
     return "\n".join(lines)
 
 
+def _grouped(conn: Conn, viewer: Account, hub: Row) -> list[str] | None:
+    """The lettered groups (search/groups.py) when the hub and its sub-hubs
+    hold more than ``groups.FLAT`` notes the viewer may read, else None."""
+    notes, total = groups.load(conn, viewer, hub["id"])
+    if len(notes) <= groups.FLAT:
+        return None
+    tree = groups.build(notes)
+    return groups.overview(tree, render.short_ref(hub["address"]), total, notes)
+
+
+def _render_part(
+    conn: Conn, viewer: Account, row: Row, part: str, *, history: bool, offset: int
+) -> str:
+    """``get(ref="<hub>:AB")``: one lettered group of a big hub."""
+    if row["kind"] != "hub":
+        raise ReticulaError(
+            BAD_INPUT,
+            f"letters after the id are for a hub; {render.short_ref(row['address'])}"
+            f" is a {row['kind']}",
+        )
+    if offset or history:
+        raise ReticulaError(
+            BAD_INPUT,
+            "a group lists the current notes: not with a page or history=true",
+        )
+    ref = render.short_ref(row["address"])
+    notes, _total = groups.load(conn, viewer, row["id"])
+    tree = groups.build(notes)
+    group = groups.find_part(tree, part)
+    parent = tree.find(group.path[:-1])
+    siblings = len(parent.children) if parent else 0
+    lines = [
+        f"{ref} hub {_title(row)}",
+        f"address: {row['address']}",
+        groups.part_head(group, siblings),
+    ]
+    members: list[str] = []
+    if not group.children:
+        rows = fetch_rows(conn, viewer, list(group.ids), text_chars=200)
+        members = [
+            render.row_line(rows[i], viewer.person_id, show_hub=False)
+            for i in group.ids
+            if i in rows
+        ]
+    lines += groups.part_lines(group, ref, members)
+    return "\n".join(lines)
+
+
 def _render_hub(
     conn: Conn,
     viewer: Account,
@@ -1122,10 +1189,15 @@ def _render_hub(
     if history:
         lines.extend(_history_lines(conn, hub["address"]))
     lines.extend(_cut_hub_text(hub))
-    top = _load_body(conn, viewer, hub, history=history, limit=MEMBERS_SHOWN)
+    grouped = None if history else _grouped(conn, viewer, hub)
+    # the groups take the place of the newest-first page: no page is loaded
+    limit = 0 if grouped is not None else MEMBERS_SHOWN
+    top = _load_body(conn, viewer, hub, history=history, limit=limit)
     used = sum(ln.count("\n") + 1 for ln in lines) + top.cost + RESERVED_LINES
     skipped = _expand(conn, viewer, top, history=history, depth=depth, used=used)
-    lines.extend(_body_lines(top, "", history))
+    if grouped is None or top.subs:
+        lines.extend(_body_lines(top, "", history))
+    lines.extend(grouped or [])
     if skipped:
         lines.append(_budget_line(skipped))
     if asked is not None and asked > MAX_DEPTH:
