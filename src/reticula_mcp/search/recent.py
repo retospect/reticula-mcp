@@ -36,13 +36,11 @@ Not events: a deletion, a note taken out of a hub, a share taken away.
 
 What the viewer may read
 ------------------------
-Every listed id is one that ``readable_nodes(viewer)`` returns; so is every
-note in the total behind "N more". The function is asked about the notes that
-changed (``_readable_among``), and nothing here decides whether a note is
-readable. A note that a newer readable note replaces is left out, unless
-``include_superseded`` is given. That is the rule of ``current_nodes``,
-applied to those notes with its own SQL function (``supersession_hides``):
-``current_nodes`` cannot be asked about a few ids. With ``hub``, the hub's
+Every listed id is one that ``current_among(viewer, ids)`` returns for the
+notes that changed (``current_nodes`` asked about those ids alone), or with
+``include_superseded`` one that ``readable_nodes(viewer)`` returns
+(``_readable_among``); so is every note in the total behind "N more". Nothing
+here decides whether a note is readable or current. With ``hub``, the hub's
 subtree is ``find.subtree_sql``, and the kinds left out are those
 ``find.scope`` leaves out.
 
@@ -317,11 +315,9 @@ def _best_sql(
     ``others``: not the viewer's own notes, for a count of other people's). The
     filings are found from their records, through an array, so that the index
     on ``membership (record_id)`` is used for each and the table is not read.
-    ``sup`` (not with ``history``): the notes that supersede a candidate.
-    ``vis``: the candidates, and those newer notes, that the viewer can read
-    (``readable_nodes``). ``hidden``: the candidates a readable newer note
-    hides; the rule of ``current_nodes``, with the same two functions, for
-    the candidates alone. ``scope``: the readable candidates that are left, of
+    ``vis``: the candidates the viewer can read and, unless ``history``, that
+    no readable newer note replaces (``current_among``, asked about the
+    candidates alone). ``scope``: the candidates in ``vis``, of
     the kind asked for, no debug notes unless asked for by kind (as
     ``find.scope`` has it), and nothing the system account wrote unless a
     kind is asked for. ``base`` is since when the viewer reads the note where
@@ -360,32 +356,14 @@ def _best_sql(
             UNION
             SELECT s.id FROM shared s"""
     )
-    sup = (
-        ""
+    # what the viewer may read of the candidates, and without history only
+    # what is current: current_among (0205), current_nodes asked about these
+    # ids alone
+    vis = (
+        _readable_among("SELECT c.id FROM cand c")
         if history
-        else """
-        sup AS MATERIALIZED (
-            SELECT su.old_node_id AS old, su.new_node_id AS new
-            FROM supersedes su
-            WHERE su.old_node_id = ANY (ARRAY(SELECT c.id FROM cand c))
-        ),"""
-    )
-    asked = "SELECT c.id FROM cand c" + (
-        "" if history else " UNION ALL SELECT s.new FROM sup s"
-    )
-    hidden = (
-        ""
-        if history
-        else """
-        hidden AS MATERIALIZED (
-            SELECT DISTINCT s.old AS id
-            FROM sup s JOIN vis w ON w.id = s.new
-            CROSS JOIN LATERAL supersession_hides(s.old, s.new) p
-            WHERE p.hides
-        ),"""
-    )
-    not_hidden = (
-        "" if history else " AND NOT EXISTS (SELECT 1 FROM hidden h WHERE h.id = n.id)"
+        else "SELECT a.node_id AS id FROM current_among(%(viewer)s,"
+        " ARRAY(SELECT c.id FROM cand c)) a"
     )
     return f"""
         WITH hubs AS MATERIALIZED (
@@ -399,10 +377,10 @@ def _best_sql(
                  AS s(id, at)
         ),
         cand AS MATERIALIZED ({cand}
-        ),{sup}
+        ),
         vis AS MATERIALIZED (
-            {_readable_among(asked)}
-        ),{hidden}
+            {vis}
+        ),
         scope AS MATERIALIZED (
             SELECT n.id, n.kind, n.author, n.created_at, n.updated_at,
                    n.author <> %(person)s AS other,
@@ -419,7 +397,7 @@ def _best_sql(
               AND (%(kind)s::text IS NOT NULL
                    OR NOT EXISTS (SELECT 1 FROM account a
                                   WHERE a.person_id = n.author
-                                    AND a.status = 'system')){not_hidden}{hub}
+                                    AND a.status = 'system')){hub}
         ),
         filing AS MATERIALIZED (
             SELECT s.id, s.kind, s.other, s.fixed, s.base, s.created_at AS written,
