@@ -26,7 +26,9 @@ EXPECTED_TABLES = {
 def test_migration_files_are_numbered_and_unique():
     found = discover()
     assert [m.version for m in found] == sorted({m.version for m in found})
-    assert all(m.version < 100 for m in found), "foundation owns 0001-0099"
+    # foundation 0001-0099, sign-in 01xx, graph 02xx, search 03xx, content 04xx,
+    # integration 09xx
+    assert all(m.version < 500 or 900 <= m.version < 1000 for m in found)
 
 
 def test_fresh_database_gets_everything_and_second_run_is_a_noop(blank_db_url):
