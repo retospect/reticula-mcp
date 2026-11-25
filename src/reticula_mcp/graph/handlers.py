@@ -271,39 +271,25 @@ def link(
     to: str,
     rel: str = "part-of",
     remove: bool = False,
+    from_hub: str | None = None,
 ) -> str:
     rel = (rel or "part-of").strip()
     node = resolve_ref(conn, viewer, ref)
+    if from_hub is not None and (rel != "part-of" or remove):
+        raise ReticulaError(
+            BAD_INPUT,
+            "from_hub moves a filing: it needs rel='part-of' and no remove",
+        )
     if rel == "part-of":
         hub = _resolve_hub(conn, viewer, to, adding=not remove)
         if remove:
             api.remove_membership(conn, viewer, node["id"], hub["id"])
             return f"removed {_name(node)} from hub {_name(hub)}"
-        _require_can_add(conn, viewer, hub)
-        own = node["author"] == viewer.person_id
-        if not own and node["kind"] == "hub":
-            raise ReticulaError(
-                FORBIDDEN,
-                "you can only file your own hubs under a hub",
-                hint="a hub's filing decides who inherits access to what lies"
-                " beneath it, so only its author can change it",
-            )
-        before = conn.execute(
-            "SELECT 1 FROM membership WHERE node_id = %s AND hub_node_id = %s"
-            " AND author = %s AND NOT withdrawn",
-            (node["id"], hub["id"], viewer.person_id),
-        ).fetchone()
-        api.add_membership(conn, viewer, node["id"], hub["id"])
-        verb = "already filed" if before else "filed"
-        out = f"{verb} {_name(node)} under hub {_name(hub)}"
-        if own:
-            return out
-        return (
-            f"{out} as your statement, to organise it.\n"
-            "Hub members who cannot already read this note will not see it: only"
-            " its author can share it into the hub.\n"
-            "next: ask the author to link it to the hub themselves"
-        )
+        if from_hub is not None:
+            # one transaction: refused as a whole if either half is refused
+            with conn.transaction():
+                return _move(conn, viewer, node, hub, from_hub)
+        return _file(conn, viewer, node, hub)
     target = resolve_ref(conn, viewer, to)
     if node["author"] != viewer.person_id:
         raise ReticulaError(
@@ -325,6 +311,59 @@ def link(
     if changed and in_use is not None:
         out += _new_rel_line(rel, in_use)
     return out
+
+
+_NOT_OWN = (
+    " as your statement, to organise it.\n"
+    "Hub members who cannot already read this note will not see it: only"
+    " its author can share it into the hub.\n"
+    "next: ask the author to link it to the hub themselves"
+)
+
+
+def _check_filing(conn: Conn, viewer: Account, node: Row, hub: Row) -> bool:
+    """Refuse a filing the viewer may not make; True when the note is theirs."""
+    _require_can_add(conn, viewer, hub)
+    own = node["author"] == viewer.person_id
+    if not own and node["kind"] == "hub":
+        raise ReticulaError(
+            FORBIDDEN,
+            "you can only file your own hubs under a hub",
+            hint="a hub's filing decides who inherits access to what lies"
+            " beneath it, so only its author can change it",
+        )
+    return own
+
+
+def _file(conn: Conn, viewer: Account, node: Row, hub: Row) -> str:
+    own = _check_filing(conn, viewer, node, hub)
+    before = conn.execute(
+        "SELECT 1 FROM membership WHERE node_id = %s AND hub_node_id = %s"
+        " AND author = %s AND NOT withdrawn",
+        (node["id"], hub["id"], viewer.person_id),
+    ).fetchone()
+    api.add_membership(conn, viewer, node["id"], hub["id"])
+    verb = "already filed" if before else "filed"
+    out = f"{verb} {_name(node)} under hub {_name(hub)}"
+    return out if own else out + _NOT_OWN
+
+
+def _move(conn: Conn, viewer: Account, node: Row, hub: Row, from_ref: str) -> str:
+    """Withdraw the filing under ``from_ref`` and file under ``hub``. The caller
+    runs this in one transaction, so a refusal of either half undoes both; the
+    cycle check of the new filing sees the state after the withdrawal."""
+    old = _resolve_hub(conn, viewer, from_ref, adding=False)
+    if old["id"] == hub["id"]:
+        raise ReticulaError(
+            BAD_INPUT,
+            "from_hub and to are the same hub",
+            hint="to file it there, leave out from_hub",
+        )
+    own = _check_filing(conn, viewer, node, hub)
+    api.remove_membership(conn, viewer, node["id"], old["id"])
+    api.add_membership(conn, viewer, node["id"], hub["id"])
+    out = f"moved {_name(node)} from hub {_name(old)} to hub {_name(hub)}"
+    return out if own else out + _NOT_OWN
 
 
 def _new_rel_line(rel: str, in_use: list[tuple[str, int]]) -> str:
