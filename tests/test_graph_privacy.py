@@ -287,3 +287,28 @@ def test_a_hub_under_a_shared_hub_is_never_called_shared_with_nobody(
         f"shared with @{dan.handle}, and with @{ben.handle}, @{cleo.handle}"
         " through a hub above it," in line_for(content.start(conn, ada), "Hardware")
     )
+
+
+def test_start_counts_the_notes_that_get_lists(conn, make_account):
+    """A deleted note and a note replaced by a newer one are not counted, and a
+    hub filed under the hub is counted as a hub: the hub line of `start` and
+    the member list of `get` say the same."""
+    from reticula_mcp.search import handlers as search
+
+    ada, ben = make_account(handle="ada"), make_account(handle="ben")
+    hub = mk_hub(conn, ada, "Bench")
+    share(conn, ada, hub, ben, "add")
+    mk_note(conn, ada, "kept", hub=hub)
+    old = mk_note(conn, ada, "first wording", hub=hub)
+    mk_note(conn, ada, "second wording", hub=hub, supersedes=[old])
+    gone = mk_note(conn, ada, "thrown away", hub=hub)
+    handlers.delete(conn, ada, ref=gone)
+    mk_note(conn, ada, "for ada only", hub=hub, private=True)
+    mk_hub(conn, ada, "Bench drawer", parent=hub)
+
+    for viewer, notes in ((ada, 3), (ben, 2)):
+        line = line_for(content.start(conn, viewer), '"Bench"')
+        assert line.endswith(f" {notes} notes, 1 hub"), line
+        assert line_for(content.profile(conn, viewer), '"Bench"') == line
+        shown = search.get(conn, viewer, ref=hub)
+        assert f"of {notes}):" in line_for(shown, "members (")

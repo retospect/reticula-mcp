@@ -141,6 +141,7 @@ Texts an assistant reads before it acts are tested, not reviewed. A change to th
 * each connected assistant gets its own revocable token;
 * sign-ups are rate-limited;
 * email verification is designed in and switched off.
+* known and not ours: a request to `/mcp` without any token gets `401` with `error="invalid_token"` in `WWW-Authenticate`, where RFC 6750 (section 3) wants no error code; the `mcp` package's bearer middleware writes that header (`mcp/server/auth/middleware/bearer_auth.py`), and its own OAuth client ignores the code.
 
 **graph** (`graph/`, migrations 0200-0299):
 * a note written in a shared hub is readable by every member with no publish step;

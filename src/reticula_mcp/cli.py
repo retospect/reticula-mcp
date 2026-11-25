@@ -19,6 +19,38 @@ from reticula_mcp.config import Settings
 from reticula_mcp.errors import BAD_INPUT, UNAVAILABLE, ReticulaError
 
 
+def _check_schema_age(settings: Settings, conn: Any) -> None:
+    """Refuse a database that a newer version has used, or say that the
+    operator chose to run on it."""
+    from reticula_mcp.db.migrate import newer_schema_message, unknown
+
+    newer = unknown(conn)
+    if not newer:
+        return
+    if not settings.allow_newer_schema:
+        raise ReticulaError(
+            BAD_INPUT,
+            newer_schema_message(newer),
+            hint="start that newer version again, or restore a dump taken before"
+            " the upgrade. To run this version on the newer schema anyway, set"
+            " RETICULA_ALLOW_NEWER_SCHEMA=1 (docs/operating.md, Upgrade)",
+        )
+    print(
+        f"warning: {newer_schema_message(newer)}; running on the newer schema"
+        " because RETICULA_ALLOW_NEWER_SCHEMA is set",
+        file=sys.stderr,
+    )
+
+
+def _refuse_newer_schema(settings: Settings) -> None:
+    """The check of ``_check_schema_age`` for a command that does not migrate
+    and does not serve: such a command reads and writes the same tables."""
+    from reticula_mcp.db import connect
+
+    with connect(settings.require_database_url()) as conn:
+        _check_schema_age(settings, conn)
+
+
 def _migrate(settings: Settings) -> int:
     from reticula_mcp import accounts
     from reticula_mcp.content import hooks
@@ -27,7 +59,8 @@ def _migrate(settings: Settings) -> int:
     from reticula_mcp.db.pool import configure_connection
 
     with connect(settings.require_database_url()) as conn:
-        ran = migrate(conn)
+        _check_schema_age(settings, conn)
+        ran = migrate(conn, allow_newer=settings.allow_newer_schema)
         # On a new database the vector type did not exist when this connection
         # was opened, so its adapter is registered only now.
         conn.commit()
@@ -67,6 +100,8 @@ def _serve(settings: Settings, auto_migrate: bool) -> int:
     if auto_migrate:
         _migrate(settings)
     with connect(settings.require_database_url()) as conn:
+        if not auto_migrate:
+            _check_schema_age(settings, conn)
         todo = pending(conn)
     if todo:
         raise ReticulaError(
@@ -192,13 +227,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.port:
                 env["RETICULA_PORT"] = str(args.port)
         settings = Settings.from_env(env)
-        func = getattr(args, "func", None)
-        if func is not None:
-            return int(func(settings, args))
         if args.command == "serve":
             return _serve(settings, args.migrate)
         if args.command == "migrate":
             return _migrate(settings)
+        # Every other command works on the tables as this version knows them.
+        _refuse_newer_schema(settings)
+        func = getattr(args, "func", None)
+        if func is not None:
+            return int(func(settings, args))
         if args.command == "token":
             return _token(settings, args.email, args.label, args.ttl_days)
         if args.command == "account":

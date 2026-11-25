@@ -52,6 +52,9 @@ class Settings:
     # Stateless streamable HTTP: no server-side MCP sessions, so a restart or a
     # second worker never strands a connected assistant.
     stateless_http: bool = True
+    # Start although the database has migrations this version does not have (a
+    # newer version has used it). For an emergency step back only.
+    allow_newer_schema: bool = False
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
@@ -86,6 +89,8 @@ class Settings:
             embed_model=get("EMBED_MODEL"),
             stateless_http=(get("STATELESS_HTTP", "true") or "true").lower()
             not in ("0", "false", "no", "off"),
+            allow_newer_schema=(get("ALLOW_NEWER_SCHEMA", "") or "").lower()
+            in ("1", "true", "yes", "on"),
         )
         settings.validate()
         return settings

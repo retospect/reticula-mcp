@@ -2,25 +2,37 @@
 
 This page is for the person who runs the server. Settings are listed in the [README](../README.md).
 
-The commands are written for the Docker Compose files in [`deploy/`](../deploy) and are run from that directory. They were run as written here against a throwaway copy of the stack, with Docker Compose 5.8 on macOS, where Docker runs inside a Linux virtual machine. To run the server without Docker, see [Without Docker](#without-docker) at the end.
+The commands are written for the Docker Compose files in [`deploy/`](../deploy) and are run from that directory. They were run as written here against a throwaway copy of the stack, with Docker Compose 5.8 on macOS, where Docker runs inside a Linux virtual machine. On Linux, the project's Check run on GitHub builds the image from the checkout, starts the stack of `compose.dev.yaml` and runs the smoke test against it on every change. On 2026-11-25 that was Ubuntu 26.04 with Docker Compose 5.1.3. No older version of Compose was tried. To run the server without Docker, see [Without Docker](#without-docker) at the end.
 
 ## Start
 
-1. Create the settings file.
+1. Get the files. They are in the repository on GitHub; the package on PyPI does not contain them. Clone the repository at the tag of the release you want to run, and go to its `deploy` directory.
 
    ```
-   cd deploy
+   git clone --branch v<release> --depth 1 https://github.com/retospect/reticula-mcp.git
+   cd reticula-mcp/deploy
+   ```
+
+   For release 0.1.0 the option is `--branch v0.1.0`. The releases are listed on [PyPI](https://pypi.org/project/reticula-mcp/#history). `git` prints a warning that the tag is not a commit and a note about a detached HEAD. Both are expected.
+
+   The files under `deploy/` at a tag belong to that release, and so does this guide. Read it at the same tag: the main branch can describe things a release does not have yet.
+
+2. Create the settings file.
+
+   ```
    cp .env.example .env
    ```
 
    Set two values in `.env`:
 
    - `RETICULA_DB_PASSWORD`: generate one with `openssl rand -hex 24`.
-   - `RETICULA_VERSION`: a release from PyPI.
+   - `RETICULA_VERSION`: the release you cloned, without the `v`. For the tag `v0.1.0` it is `0.1.0`.
 
    Leave `RETICULA_PUBLIC_URL` and `RETICULA_TRUSTED_PROXIES` empty for now.
 
-2. Start the database and the server.
+   If port 8787 is taken on your machine, set `RETICULA_PORT` to a free one. It is the port published on `127.0.0.1`. Write it in place of 8787 in every command of this guide. Inside the container the server stays on 8787, and its log names that port.
+
+3. Start the database and the server.
 
    ```
    docker compose up -d --build --wait
@@ -32,17 +44,21 @@ The commands are written for the Docker Compose files in [`deploy/`](../deploy) 
    docker compose -f compose.yaml -f compose.source.yaml up -d --build --wait
    ```
 
-   The build of release 0.1.0 took 19 seconds, the first build of a checkout 30 seconds. With the image built, the command returned after 11 to 12 seconds, with both containers healthy. The server container waits for the database, applies pending migrations and then serves.
+   The build of release 0.1.0 took 19 seconds, the first build of a checkout 30 seconds. With the image built, the command returned after 11 to 13 seconds, with both containers healthy. The server container waits for the database, applies pending migrations and then serves.
 
-3. Check health.
+   `docker compose ps` shows the state of both containers. If the command does not return, or ends with an error, read `docker compose logs app` and `docker compose logs db`. With `RETICULA_DB_PASSWORD` left empty it stops at once with `required variable RETICULA_DB_PASSWORD is missing a value`.
+
+   The compose file fixes the project name to `reticula`. A second copy on the same machine needs a name of its own, or its commands act on the containers of the first copy. Give it one with `docker compose -p <name>` on every command, or by setting `COMPOSE_PROJECT_NAME`, and give it its own `RETICULA_PORT` and `RETICULA_SUBNET` in its `.env`.
+
+4. Check health.
 
    ```
-   curl -s http://127.0.0.1:8787/healthz
+   curl -s -w '\n%{http_code}\n' http://127.0.0.1:8787/healthz
    ```
 
-   The answer is status 200 and `{"status":"ok","version":"0.1.0"}`, with the installed version. When the database does not answer, the status is 503. `docker compose ps` shows the same result as `healthy` or `unhealthy`.
+   The answer is `{"status":"ok","version":"0.1.0"}`, with the installed version, and `200` on the next line. When the database does not answer, it is `{"status":"unavailable","version":"0.1.0"}` and `503`. `docker compose ps` shows the same result as `healthy` or `unhealthy`.
 
-4. Run the smoke test. It needs [uv](https://docs.astral.sh/uv/).
+5. Run the smoke test. It needs [uv](https://docs.astral.sh/uv/).
 
    ```
    ../scripts/smoke http://127.0.0.1:8787
@@ -52,13 +68,19 @@ The commands are written for the Docker Compose files in [`deploy/`](../deploy) 
 
    Each run leaves one account named `smoke-<id>@example.com`, one registered client and one erased note. The last lines of the output list them. Each run also counts as one sign-up from your address, so with the default limit the sixth run within an hour fails at `sign-up` with status 429. To sign in to an account from an earlier run instead, pass `--email` and put its password in `SMOKE_PASSWORD`.
 
-5. When a public name exists, see the next section.
+   A second script, `../scripts/oauth-client-check`, takes the same arguments and lets the OAuth client of the MCP Python SDK sign in, call `start` and renew its token; it prints 12 lines that must start with `ok`, and it leaves an account named `sdk-<id>@example.com` and counts as a sign-up too.
+
+6. Decide how assistants reach the server before you connect the first one. An assistant that runs on this machine can use `http://127.0.0.1:8787/mcp` as it is. For every other assistant, do the next section first: a later change of the public address disconnects every assistant that signed in.
+
+7. Connect an assistant and create the first account. The steps are in the README, under [Connecting an assistant](../README.md#connecting-an-assistant). To create an account from the command line instead, see [Accounts, tokens and connections](#accounts-tokens-and-connections).
 
 ## Put a public name in front
 
 The server is published on `127.0.0.1` only and speaks plain HTTP. A tunnel or a reverse proxy on the same machine terminates TLS and forwards to `http://127.0.0.1:8787`.
 
-1. Point the tunnel or proxy at `http://127.0.0.1:8787`.
+Do this before the first assistant connects. Once the public URL is set, an assistant can no longer sign in through `http://127.0.0.1:8787/mcp`, and a later change of the URL disconnects every assistant that signed in.
+
+1. Point the tunnel or proxy at `http://127.0.0.1:8787`. For Tailscale Funnel the commands are under [Tailscale Funnel](#tailscale-funnel) below, as one list that includes the steps here. Any other tunnel or reverse proxy that terminates TLS and forwards plain HTTP fits as well. This guide has no commands for those.
 
 2. Set two values in `.env`. The first is the address people use, with the port if it is not 443 and without a trailing slash. The second is explained in the next section.
 
@@ -81,9 +103,11 @@ The server is published on `127.0.0.1` only and speaks plain HTTP. A tunnel or a
 
    All 14 lines must start with `ok`, and the `authorize` line must end with `cookie Secure`.
 
+5. Check that client addresses are counted correctly, with the two commands under [Check the setting](#check-the-setting).
+
 What changes once `RETICULA_PUBLIC_URL` is set:
 
-- Every address the server hands out starts with the public URL: the OAuth metadata, the sign-in redirect and the `WWW-Authenticate` challenge. This holds for requests that arrive on the loopback port too. The smoke test against `http://127.0.0.1:8787` therefore fails at `discovery` from now on. `/healthz` on the loopback port keeps working.
+- Every address the server hands out starts with the public URL: the OAuth metadata (OAuth is the sign-in protocol an assistant's connector uses), the sign-in redirect and the `WWW-Authenticate` challenge. This holds for requests that arrive on the loopback port too. The smoke test against `http://127.0.0.1:8787` therefore fails at `discovery` from now on, and so does the sign-in of an assistant that was given the loopback address. A token minted with `reticula-mcp token` still works on the loopback port. `/healthz` on the loopback port keeps working.
 - The sign-in cookie is marked `Secure` whenever the public URL starts with `https://`.
 - Tokens issued at sign-in are bound to the public URL. After a change of the URL, every connected assistant gets status 401 and has to connect again. Tokens minted with `reticula-mcp token` are not bound and keep working.
 - `/mcp` answers only requests whose `Host` header is the host and port of the public URL, or a loopback name such as `127.0.0.1:8787`. See the table below.
@@ -98,7 +122,7 @@ The limits on sign-ups, client registrations and failed sign-ins are counted per
 | The proxy is a container in the compose network and sets `X-Forwarded-For` | the address of that container (give it a fixed one) |
 | The tunnel forwards plain TCP, or sets no `X-Forwarded-For` | empty |
 
-`172.31.88.1` is the gateway of the compose network. A process on the host that connects to the published port reaches the server from that address, not from `127.0.0.1`. `compose.yaml` fixes the subnet of its network to `172.31.88.0/24` so that this address stays the same.
+`172.31.88.1` is the gateway of the compose network. A process on the host that connects to the published port reaches the server from that address, not from `127.0.0.1`. That was measured on macOS and on Linux: in the Check run of 2026-11-25 (Ubuntu 26.04, Docker Compose 5.1.3) a request from the runner to the published port of the dev stack arrived from `172.31.87.1`, the gateway of that stack's network. `compose.yaml` fixes the subnet of its network to `172.31.88.0/24` so that this address stays the same.
 
 Measured, with the gateway address trusted and requests sent from the host to the published port:
 
@@ -142,9 +166,15 @@ curl -s -o /dev/null http://127.0.0.1:8787/healthz
 docker compose logs app | grep 'GET /healthz' | grep -v ' 127.0.0.1:' | tail -1
 ```
 
-The address in front of the port in that line is the one to trust. Lines from `127.0.0.1` are the container's own health check.
+The line looks like this:
 
-Then check the whole path. Register a client through the public name, with a made-up `X-Forwarded-For`, and read the address it was counted under:
+```
+app-1  | INFO:     172.31.88.1:53992 - "GET /healthz HTTP/1.1" 200 OK
+```
+
+The address in front of the port, here `172.31.88.1`, is the one to trust. Lines from `127.0.0.1` are the container's own health check.
+
+Then check the whole path, with `RETICULA_TRUSTED_PROXIES` set to that address. Register a client through the public name, with a made-up `X-Forwarded-For`, and read the address it was counted under. The first command prints `201`.
 
 ```
 curl -s -o /dev/null -w '%{http_code}\n' -X POST https://notes.example.com/register \
@@ -156,9 +186,9 @@ docker compose exec -T db psql -U reticula -d reticula -c \
 
 | Newest `subject` | Meaning |
 |---|---|
-| your own public address | correct |
 | `203.0.113.99` | the tunnel passes client headers through: set `RETICULA_TRUSTED_PROXIES` back to empty |
 | the gateway address | no header arrives: leave the setting empty, all clients share one bucket |
+| any other address | correct: it is the address the tunnel saw the `curl` come from. Through a public tunnel that is the public address of the machine you ran it on |
 
 ### Change the subnet
 
@@ -175,11 +205,56 @@ Never add `-v` to `down`: it deletes the database. If the stack is already stuck
 
 ### Tailscale Funnel
 
-- Funnel serves only the machine's own `ts.net` name, on ports 443, 8443 and 10000. It cannot serve a domain of your own.
-- On a machine that already uses Funnel on 443, a second service goes on another port with `--https=<port>`. `RETICULA_PUBLIC_URL` must then carry that port.
-- A port other than 443 works only for assistants that connect from your own machines, such as Claude Code. Claude's custom connectors (claude.ai, the desktop and mobile apps) connect from Anthropic's servers and accept port 443 only: "Claude can't connect to a URL that specifies another port" (Claude support, "Get started with custom connectors using remote MCP", read on 2026-11-25). For those, run Reticula on a machine whose port 443 is free, or put a reverse proxy with a name of its own in front.
-- `tailscale funnel reset` removes every service of the machine, not one.
-- In its HTTPS mode Funnel writes `X-Forwarded-For` itself and replaces a value sent by the client: measured with Tailscale 1.104.7 on 2026-11-25, where a request with a made-up header was counted under the caller's real address. With `tailscaled` on the host this is the first row of the table above: trust the gateway address. It passes the `Host` header on with its port, which is what `/mcp` expects when `RETICULA_PUBLIC_URL` carries the port. Its TCP modes add no header (read from the Tailscale source, not measured): leave `RETICULA_TRUSTED_PROXIES` empty for those. Run the check above on your version.
+Funnel is the part of [Tailscale](https://tailscale.com/) that gives a machine a public HTTPS name and forwards requests from the internet to a port on that machine. The machine must be in a tailnet, which is Tailscale's word for your private network of machines.
+
+Each statement about Tailscale below is one of two kinds. "Measured" was seen on a running instance of this server behind Funnel, with Tailscale 1.104.7 on 2026-11-25. "Tailscale documentation" was read on 2026-11-25 in Tailscale's pages on [Funnel](https://tailscale.com/kb/1223/funnel), the [`tailscale funnel` command](https://tailscale.com/kb/1311/tailscale-funnel) and [HTTPS certificates](https://tailscale.com/kb/1153/enabling-https), and was not tried for this guide.
+
+1. Switch on what Funnel needs (Tailscale documentation):
+
+   - Tailscale 1.38.3 or later on the machine.
+   - MagicDNS for the tailnet.
+   - HTTPS certificates for the tailnet: in the admin console, on the DNS page, "Enable HTTPS" under "HTTPS Certificates".
+   - The `funnel` node attribute for this machine in the tailnet policy file. If it is missing, the command of the next step opens a web page that offers to add it. It can also be added on the "Access controls" page of the admin console.
+
+2. Start the tunnel, on the machine that runs the server.
+
+   ```
+   tailscale funnel --bg --https=<port> http://127.0.0.1:8787
+   ```
+
+   Measured: this form of the command, with a port other than 443. It may need `sudo`. Tailscale documentation: `<port>` is 443, 8443 or 10000, and Funnel offers no other port. `--bg` keeps the tunnel running in the background, also after a restart of the machine. The command prints the public address after the line `Available on the internet:`. The name is the machine's own, `<machine>.<tailnet>.ts.net`. Funnel cannot serve a domain of your own.
+
+   Use 443 unless the machine already serves something else on it. See the note on ports below.
+
+3. Set the public URL in `.env` to the address the command printed, without a trailing slash, and with the port if it is not 443. Trust the gateway address.
+
+   ```
+   RETICULA_PUBLIC_URL=https://<machine>.<tailnet>.ts.net
+   RETICULA_TRUSTED_PROXIES=172.31.88.1
+   ```
+
+4. Apply the settings. This recreates the server container only.
+
+   ```
+   docker compose up -d --wait
+   ```
+
+5. Check the result.
+
+   ```
+   tailscale funnel status
+   ../scripts/smoke https://<machine>.<tailnet>.ts.net
+   ```
+
+   The first command lists the tunnel (Tailscale documentation). The smoke test must print 14 lines that start with `ok`. Then run the two commands under [Check the setting](#check-the-setting).
+
+What else to know:
+
+- Ports. A port other than 443 works only for assistants that connect from your own machines, such as Claude Code. Claude's custom connectors (claude.ai, the desktop and mobile apps) connect from Anthropic's servers and accept port 443 only: "Claude can't connect to a URL that specifies another port" (Claude support, "Get started with custom connectors using remote MCP", read on 2026-11-25). For those, run Reticula on a machine whose port 443 is free, or put a reverse proxy with a name of its own in front. On a machine that already uses Funnel on 443, a second service goes on 8443 or 10000, and `RETICULA_PUBLIC_URL` must then carry that port.
+- Client addresses. Measured: in its HTTPS mode Funnel writes `X-Forwarded-For` itself and replaces a value sent by the client. A request with a made-up header was counted under the caller's real address. With `tailscaled` on the host this is the first row of the settings table under [A tunnel or proxy on the same host](#a-tunnel-or-proxy-on-the-same-host): trust the gateway address. Its TCP modes add no header (read from the Tailscale source, not measured): leave `RETICULA_TRUSTED_PROXIES` empty for those.
+- The `Host` header. Measured: Funnel passes the header on with its port, which is what `/mcp` expects when `RETICULA_PUBLIC_URL` carries the port.
+- Turning it off. To stop one tunnel, run its command again with `off` at the end. `tailscale funnel reset` clears the whole Funnel configuration of the machine, not one tunnel (both Tailscale documentation).
+- `tailscale serve` is the same tunnel for the machines of your tailnet only, without the public internet. Tailscale's pages on Serve do not say whether it writes `X-Forwarded-For`, and it was not measured here. Set `RETICULA_TRUSTED_PROXIES` to the gateway address, run [Check the setting](#check-the-setting), and keep the value only if the table there says it is correct.
 
 ## Limits
 
@@ -215,13 +290,54 @@ At the default log level the server writes one line per request: the peer addres
 
 4. Check `/healthz` and run the smoke test.
 
-The server container applies pending migrations when it starts and logs one line per file, for example `applied 0101_oauth_indexes.sql`. In the drill the command took 26 seconds. Tokens issued before the upgrade worked after it, and notes written before it read back unchanged.
+The server container applies pending migrations when it starts and logs one line per file, for example `applied 0203_shared_rules.sql`. The drill went from 0.1.0 to a build of 0.1.1 from source, which adds that one migration. The command took 28 seconds when it had to build the image, and 8 to 9 seconds on later switches, when Docker still had the layers of the image. The server was away for about a second: `/healthz` was asked every 0.1 seconds during a switch that applied migration 0203, and the longest time without an answer was 1.1 seconds.
 
-Migrations only move forward and each file runs in its own transaction. A migration file that has already been applied is never edited; changes arrive as new files. If the server reports that an applied file has changed, you are running mismatched code and database: do not continue. To go back to the old version, restore the dump from step 1 as described under Restore, with the old `RETICULA_VERSION`.
+Tokens issued before the upgrade worked after it: the access and refresh tokens of a sign-in, and a token minted with `reticula-mcp token`. An account signed in with the password it had before. Notes written before the upgrade read back unchanged: 112 recorded replies of `start`, `profile`, `search`, `get` and `share` were the same before and after.
+
+Migrations only move forward and each file runs in its own transaction. A migration file that has already been applied is never edited; changes arrive as new files. If the server reports that an applied file has changed, you are running mismatched code and database: do not continue.
 
 The version-zero note format may still change. Read the release notes before you upgrade across a format change.
 
 If the search index needs rebuilding after an upgrade, run `docker compose exec app reticula-mcp reindex`. The index holds only derived data, so rebuilding it changes no notes.
+
+### Go back to the older version
+
+The supported way back is the restore: restore the dump from step 1 as described under Restore, with the old `RETICULA_VERSION`. Everything written after that dump is lost.
+
+The old `RETICULA_VERSION` alone, without a restore, puts the older version on a database that the newer one has migrated. The older version does not know what those migrations changed. From 0.1.1 on the server refuses to start there. `docker compose up -d --build --wait` then ends, in the drill after 4 to 20 seconds, with
+
+```
+container reticula-app-1 is unhealthy
+```
+
+and `docker compose logs app` shows two lines for every attempt to start:
+
+```
+app-1  | [error:BadInput] the database has migrations this version does not have (0203_shared_rules): a newer version has used it
+app-1  | hint: start that newer version again, or restore a dump taken before the upgrade. To run this version on the newer schema anyway, set RETICULA_ALLOW_NEWER_SCHEMA=1 (docs/operating.md, Upgrade)
+```
+
+The name in brackets is the migration this version has no file for. These lines are from the drill, where a build without the file of migration 0203 stood in for the older version. The server refuses before it applies anything; the migration ledger was the same afterwards. Docker starts the container again and again, with a pause that grows each time: 9 attempts in the first 31 seconds, the last one 13 seconds after the one before. Each attempt adds the same two lines to the log. Between the attempts `docker compose ps` shows the status `Restarting (1)`. The port does not answer.
+
+The other commands refuse in the same way. On the refused stack `docker compose run --rm app reticula-mcp token --email someone@example.com --label laptop` printed the same two lines without the `app-1  |` prefix, minted no token and ended with status 1. Use `docker compose run --rm app` there and not `docker compose exec app`: the container that `exec` needs keeps restarting, and in the drill `exec` printed nothing and ended with status 137.
+
+There are three ways out:
+
+- Start the newer version again: set its `RETICULA_VERSION` and repeat step 3.
+- Restore the dump, as above.
+- Set `RETICULA_ALLOW_NEWER_SCHEMA=1` in `.env` and repeat step 3.
+
+With `RETICULA_ALLOW_NEWER_SCHEMA=1` the older version starts on the newer schema and checks nothing further. Its log has one more line:
+
+```
+app-1  | warning: the database has migrations this version does not have (0203_shared_rules): a newer version has used it; running on the newer schema because RETICULA_ALLOW_NEWER_SCHEMA is set
+```
+
+A command such as `reticula-mcp token` prints the same line and then does its work.
+
+That is safe only when the release notes of the newer version say that its migrations change no table. Otherwise the older version reads and writes tables in a form it does not know. Take the variable out of `.env` again once the newer version runs. While it is set, nothing is refused.
+
+0.1.0 has no such check: it starts on a newer schema and says nothing. Migration 0203 is the only one that 0.1.1 adds. It defines three SQL functions and changes no table. In the drill 0.1.0 ran on the database that the 0.1.1 build had migrated. It gave the same 112 replies as that build on the same data, its smoke test passed, notes written under the 0.1.1 build read back, and tokens issued under it worked. That is a measurement for this pair of versions, not a promise for any other.
 
 ## Back up
 
@@ -237,7 +353,9 @@ The embedding model is not in the dump. It is downloaded again when needed.
 
 ## Restore
 
-Restore into an empty database. The steps below replace the data of an existing stack. On a new machine, start at step 2 with the same `.env`.
+Restore into an empty database. The steps below replace the data of an existing stack. Everything written after the dump was taken is lost. On a new machine, start at step 2 with the same `.env`.
+
+The volume name in step 1 starts with the project name, which the compose file fixes to `reticula`. For a copy that was started under another project name, the volume is `<name>_reticula-db`, and every command below needs the same `-p <name>` or `COMPOSE_PROJECT_NAME`. Without it the commands act on the stack called `reticula`.
 
 1. Stop the stack and remove the database volume. This deletes the current data.
 
@@ -258,7 +376,7 @@ Restore into an empty database. The steps below replace the data of an existing 
    docker compose exec -T db pg_restore -U reticula --no-owner --exit-on-error --dbname reticula < reticula-20261125.dump
    ```
 
-4. Start the server. If the dump is older than the installed version, the server brings the schema up to date.
+4. Start the server. If the dump is older than the installed version, the server brings the schema up to date. If the dump is from a newer version, the server refuses to start, as described under "Go back to the older version".
 
    ```
    docker compose up -d --build --wait
@@ -268,20 +386,38 @@ Restore into an empty database. The steps below replace the data of an existing 
 
 In the drill the restored instance had the same number of rows in every table as the original. `docker compose exec app reticula-mcp rebuild` printed the same counts on both. Notes read back, shared and private. Accounts keep their person IDs, keys and tokens, so connected assistants keep working, as long as `RETICULA_PUBLIC_URL` is the same as before. With a different public URL, tokens issued at sign-in got status 401 and tokens minted with `reticula-mcp token` still worked.
 
+The same steps took an instance back after an upgrade. A dump taken under 0.1.0 was restored after the upgrade to a build of 0.1.1, with `RETICULA_VERSION=0.1.0`: steps 1 to 3 took 7 seconds and step 4 another 7. Every table had the row counts from before the upgrade, 112 recorded replies were the same as before it, and the notes written after the dump were gone. Started on that database again, the 0.1.1 build applied its migration as in the first upgrade.
+
 ## Accounts, tokens and connections
 
-The commands run inside the server container. They read the database directly.
+The commands run inside the server container. They read the database directly. Type them in `deploy/`, like every `docker compose` command of this guide.
 
-Create an account without the sign-in page. This also works when sign-ups are closed. It asks for a password twice. `--handle` is optional.
+Create an account without the sign-in page. This also works when sign-ups are closed. `--handle` is optional.
 
 ```
 docker compose exec app reticula-mcp account create --email someone@example.com --handle someone
 ```
 
-Mint a token for a client that cannot do the sign-in flow. The token is printed once and stored only as a hash. Omit `--ttl-days` for a token without an expiry.
+It asks `Password:` and `Again:`, shows nothing while you type, and answers `created @someone` with the person ID. The password needs at least 10 characters. The e-mail address is not verified: no mail is sent in this release.
+
+The prompt needs a terminal. In a script, or wherever there is none, add `-T` and send the password twice on standard input:
+
+```
+printf '%s\n%s\n' "$PASSWORD" "$PASSWORD" | docker compose exec -T app reticula-mcp account create --email someone@example.com
+```
+
+Without a terminal and without that input the command ends with `[error:BadInput] password must be 10-1024 characters`.
+
+Mint a token for a client that cannot do the sign-in flow. A token here is a bearer token: a secret string the client sends with every request in the header `Authorization: Bearer <token>`, and whoever holds it acts as the account. It is printed once and stored only as a hash. Omit `--ttl-days` for a token without an expiry.
 
 ```
 docker compose exec app reticula-mcp token --email someone@example.com --label laptop --ttl-days 90
+```
+
+Claude Code is a client that takes such a header. This form of its command was run against a running instance on 2026-11-25. `reticula` is the name the server gets in Claude Code, and the address is the one the client reaches the server under, with `/mcp` at the end.
+
+```
+claude mcp add --transport http reticula http://127.0.0.1:8787/mcp --header "Authorization: Bearer <token>"
 ```
 
 List what an account has. Connected assistants come first, operator tokens minted with `reticula-mcp token` in a second block. Each row has an id.

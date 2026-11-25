@@ -1,6 +1,6 @@
 # Reticula MCP
 
-Reticula MCP is a server that gives an AI assistant a long-term memory it can share. The assistant saves small notes through MCP tools. Notes are filed under hubs, and a hub can be shared with other people who have an account on the same server. Every note has a permanent global address and an Ed25519 signature from the moment it is written. The server is written in Python and stores everything in PostgreSQL with pgvector.
+Reticula MCP is a server that gives an AI assistant a long-term memory it can share. The assistant saves small notes through MCP tools (MCP, the Model Context Protocol, is how an assistant calls tools on a server). Notes are filed under hubs, and a hub can be shared with other people who have an account on the same server. Every note has a permanent global address and an Ed25519 signature from the moment it is written. The server is written in Python and stores everything in PostgreSQL with pgvector.
 
 Reticula MCP is not related to the Reticulum mesh network and does not run on it.
 
@@ -24,9 +24,50 @@ What phase one is not:
 
 ## Quick start: run your own server
 
+This path runs the database and the server in Docker. You need Docker with Docker Compose, and git. The path without Docker follows below.
+
+1. Get the files of a release. They are in the repository, not in the package on PyPI. Clone it at the tag of the release and go to its `deploy` directory:
+
+   ```
+   git clone --branch v<release> --depth 1 https://github.com/retospect/reticula-mcp.git
+   cd reticula-mcp/deploy
+   ```
+
+   For release 0.1.0 the option is `--branch v0.1.0`.
+
+2. Create the settings file:
+
+   ```
+   cp .env.example .env
+   ```
+
+   Open `.env` and set `RETICULA_DB_PASSWORD`, for example to the output of `openssl rand -hex 24`. `RETICULA_VERSION` must be the release you cloned, without the `v`.
+
+3. Start the database and the server:
+
+   ```
+   docker compose up -d --build --wait
+   ```
+
+   The command builds the image, starts two containers and returns when both are healthy.
+
+4. Check it:
+
+   ```
+   curl http://127.0.0.1:8787/healthz
+   ```
+
+   The answer is `{"status":"ok","version":"0.1.0"}`, with the version you run. The server listens on `127.0.0.1:8787`. The MCP endpoint is `/mcp` and the health check is `/healthz`.
+
+5. Connect an assistant, as described under "Connecting an assistant" below. The first sign-in creates your account.
+
+[docs/operating.md](https://github.com/retospect/reticula-mcp/blob/main/docs/operating.md#start) is the guide to this setup. It has the same steps with what each one prints and what to do when one fails, among them a taken port 8787 and a second copy on one machine. It also covers a smoke test, a public name, limits, logs, upgrades, backups and restores. Read it at the tag of your release.
+
+### Without Docker
+
 You need Python 3.12 or newer with [uv](https://docs.astral.sh/uv/), and a PostgreSQL database with the pgvector extension. The tests run on PostgreSQL 17; other recent versions are untested. The database role that runs the first migration must be allowed to create the extensions `vector`, `citext` and `pg_trgm`. The `postgres` superuser in the image below can.
 
-1. Start a database. Save this as `compose.yaml`, change the password, and run `docker compose up -d`:
+1. Start a database. If you have none, this file runs one in Docker. Save it as `db.yaml`, change the password, and run `docker compose -f db.yaml up -d`:
 
    ```yaml
    services:
@@ -44,7 +85,7 @@ You need Python 3.12 or newer with [uv](https://docs.astral.sh/uv/), and a Postg
      reticula-db:
    ```
 
-2. Tell the server where the database is:
+2. Tell the server where the database is. The URL carries the password from the file, so change it here too:
 
    ```
    export RETICULA_DATABASE_URL=postgresql://postgres:change-me@127.0.0.1:5432/reticula
@@ -61,29 +102,26 @@ You need Python 3.12 or newer with [uv](https://docs.astral.sh/uv/), and a Postg
 
 4. Check it: `curl http://127.0.0.1:8787/healthz` answers `{"status":"ok",...}`.
 
-### Database and server together
-
-The repository has a compose file that runs the database and a released server from PyPI side by side: [deploy/compose.yaml](https://github.com/retospect/reticula-mcp/blob/main/deploy/compose.yaml). The server then listens on `127.0.0.1:8787`. The steps are in [docs/operating.md](https://github.com/retospect/reticula-mcp/blob/main/docs/operating.md#start): the settings file, the start command, the health check and a smoke test. The same guide covers a public name, limits, logs, upgrades, backups and restores.
-
 ### Settings
 
-All settings are environment variables. There are no config files.
+All settings are environment variables. There are no config files. Under Docker Compose they are lines in `deploy/.env`. The compose file sets `RETICULA_DATABASE_URL` and `RETICULA_HOST` itself, and does not pass on `RETICULA_STATELESS_HTTP`.
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `RETICULA_DATABASE_URL` | none, required | PostgreSQL connection URL. |
 | `RETICULA_PUBLIC_URL` | none | The base URL clients use, without a trailing slash. Set it whenever clients reach the server under any name other than localhost. It is used for the sign-in flow and added to the allowed Host and Origin headers. The URL you give an assistant is this value plus `/mcp`. It must start with `https://` unless the host is `localhost` or `127.0.0.1`. |
 | `RETICULA_HOST` | `127.0.0.1` | Address to listen on. `serve --host` overrides it. Without `RETICULA_PUBLIC_URL` the server takes its own address from this value, and `0.0.0.0` counts as `127.0.0.1`. Any other address that is not this machine needs `RETICULA_PUBLIC_URL` with `https://`, or the server refuses to start. |
-| `RETICULA_PORT` | `8787` | Port to listen on. `serve --port` overrides it. |
+| `RETICULA_PORT` | `8787` | Port to listen on. `serve --port` overrides it. Under Docker Compose it is the port published on `127.0.0.1` instead; the server inside the container stays on 8787. |
 | `RETICULA_SIGNUP` | `open` | `open` or `closed`. `closed` stops new sign-ups on the sign-in page. Accounts can still be created with the command line. |
 | `RETICULA_SIGNUP_RATE` | `5/hour` | Sign-up attempts allowed per client IP address. Units: second, minute, hour, day. |
 | `RETICULA_REGISTER_RATE` | `20/hour` | Connector registrations allowed per client IP address. Each assistant registers once when it is connected. |
 | `RETICULA_WRITE_RATE` | `600/hour` | Writes (`put`, `edit`, `link`, `share`, `delete`) allowed per account. Over the limit the tool answers `RateLimited` and says when to try again. |
-| `RETICULA_TRUSTED_PROXIES` | empty | Comma-separated IP addresses or CIDR ranges whose `X-Forwarded-For` header is believed. Empty trusts nobody. Behind a reverse proxy or tunnel with this empty, every client looks like the proxy, so all clients share one rate-limit bucket (sign-ups, failed sign-ins, connector registrations). The right value depends on the setup: `127.0.0.1` for a proxy on the same machine as a server started as above, the gateway of the compose network under Docker Compose. See [A tunnel or proxy on the same host](https://github.com/retospect/reticula-mcp/blob/main/docs/operating.md#a-tunnel-or-proxy-on-the-same-host). |
+| `RETICULA_TRUSTED_PROXIES` | empty | Comma-separated IP addresses or CIDR ranges whose `X-Forwarded-For` header is believed. Empty trusts nobody. Behind a reverse proxy or tunnel with this empty, every client looks like the proxy, so all clients share one rate-limit bucket (sign-ups, failed sign-ins, connector registrations). The right value depends on the setup: `127.0.0.1` for a proxy on the same machine as a server started without Docker, the gateway of the compose network under Docker Compose. See [A tunnel or proxy on the same host](https://github.com/retospect/reticula-mcp/blob/main/docs/operating.md#a-tunnel-or-proxy-on-the-same-host). |
 | `RETICULA_KNOWN_CLIENTS` | `claude.ai,claude.com` | Comma-separated hosts that an assistant's connector returns to after sign-in. The sign-in page warns when a connection would hand access to any other host. Connections that return to this computer never warn. |
 | `RETICULA_EMBEDDER` | `auto` | `auto`, `hash` or `fastembed`. `fastembed` runs a local model and needs the extra `reticula-mcp[fastembed]`. `hash` needs nothing and has no real sense of meaning; keyword matching still works. `auto` uses `fastembed` when it is installed and `hash` otherwise. |
 | `RETICULA_EMBED_MODEL` | `BAAI/bge-small-en-v1.5` | Model name for the `fastembed` embedder. The model is downloaded once, on first use. |
 | `RETICULA_STATELESS_HTTP` | `true` | Keep no MCP session state on the server, so a restart does not strand a connected assistant. |
+| `RETICULA_ALLOW_NEWER_SCHEMA` | unset | The server refuses to start on a database that a newer version has used, because it does not know what that version changed. `1` starts it anyway, with a warning. For an emergency step back to an older version only. |
 
 To get the local embedding model, run `uvx --from 'reticula-mcp[fastembed]' reticula-mcp serve`.
 
@@ -91,26 +129,37 @@ To get the local embedding model, run `uvx --from 'reticula-mcp[fastembed]' reti
 
 The server speaks streamable HTTP and does not terminate TLS itself. Put it behind something that does when it leaves your machine.
 
-The setup this project documents is [Tailscale](https://tailscale.com/). On a tailnet you run the server on one machine and reach it from your other machines by its tailnet name. Run `tailscale serve` in front of port 8787 and set `RETICULA_PUBLIC_URL` to the `https://` name it prints. Plain `http://` under a tailnet name does not work: sign-in needs `https://` everywhere except on the machine itself, and the server refuses to start with any other `http://` address.
+The setup this project documents is [Tailscale](https://tailscale.com/). On a tailnet, which is Tailscale's word for your private network of machines, you run the server on one machine and reach it from your other machines by its tailnet name. Run `tailscale serve` in front of port 8787 and set `RETICULA_PUBLIC_URL` to the `https://` name it prints. Plain `http://` under a tailnet name does not work: sign-in needs `https://` everywhere except on the machine itself, and the server refuses to start with any other `http://` address.
 
-A cloud-hosted assistant makes the request from the provider's servers. Those are not on your tailnet. For them the server must be reachable on the public internet over HTTPS. Use Tailscale Funnel (`tailscale funnel`), or any reverse proxy or tunnel that terminates TLS and forwards to port 8787. Funnel serves only the machine's `ts.net` name, on port 443, 8443 or 10000; a domain of your own needs a reverse proxy or another tunnel. According to Anthropic's documentation, Claude's custom connectors accept port 443 only, so the other two ports serve only assistants that connect from your own machines, such as Claude Code. Set `RETICULA_PUBLIC_URL` to the public name. [Put a public name in front](https://github.com/retospect/reticula-mcp/blob/main/docs/operating.md#put-a-public-name-in-front) in the operating guide has the steps, the value of `RETICULA_TRUSTED_PROXIES` for your setup and a check that it is right. The flags of the `tailscale` command differ between versions: read `tailscale serve --help` and `tailscale funnel --help` for yours. This project has not tested every assistant product against these setups, so check the connector with your own client. Any other way of making the URL reachable works as well.
+A cloud-hosted assistant makes the request from the provider's servers. Those are not on your tailnet. For them the server must be reachable on the public internet over HTTPS. Use Tailscale Funnel (`tailscale funnel`), or any reverse proxy or tunnel that terminates TLS and forwards to port 8787. Funnel serves only the machine's `ts.net` name, on port 443, 8443 or 10000; a domain of your own needs a reverse proxy or another tunnel. According to Anthropic's documentation, Claude's custom connectors accept port 443 only, so the other two ports serve only assistants that connect from your own machines, such as Claude Code. Set `RETICULA_PUBLIC_URL` to the public name, and do it before the first assistant connects: a later change disconnects every assistant that signed in. [Put a public name in front](https://github.com/retospect/reticula-mcp/blob/main/docs/operating.md#put-a-public-name-in-front) in the operating guide has the steps, the value of `RETICULA_TRUSTED_PROXIES` for your setup and a check that it is right. [Tailscale Funnel](https://github.com/retospect/reticula-mcp/blob/main/docs/operating.md#tailscale-funnel) in the same guide has the Funnel commands in order, and says what is not known about `tailscale serve`. The flags of the `tailscale` command differ between versions: read `tailscale serve --help` and `tailscale funnel --help` for yours. This project has not tested every assistant product against these setups, so check the connector with your own client. Any other way of making the URL reachable works as well.
 
 ## Connecting an assistant
 
-1. In the assistant's settings, add a custom connector (a remote MCP server) and paste the URL: your `RETICULA_PUBLIC_URL` plus `/mcp`, for example `https://reticula.example.com/mcp`. On the machine that runs the server, `http://127.0.0.1:8787/mcp` works.
-2. The assistant opens the sign-in page. Sign in, or create an account with an e-mail address and a password of at least 10 characters. The page sends you back to the assistant.
+1. Add the server to the assistant as a custom connector (a remote MCP server). The URL is your `RETICULA_PUBLIC_URL` plus `/mcp`, for example `https://reticula.example.com/mcp`. While `RETICULA_PUBLIC_URL` is not set, an assistant on the machine that runs the server can use `http://127.0.0.1:8787/mcp`. Once it is set, the sign-in works only through the public URL.
+
+   - Claude (claude.ai and the desktop app): open "Customize", then "Connectors", click "+ Add", then "Add custom connector", and enter a name and the URL. The dialog then shows the sign-in settings it detected. Reticula registers each connector automatically and has no client ID or secret for you to enter. On a Team or Enterprise plan an owner adds it first under "Organization settings", "Connectors"; members then find it under "Customize", "Connectors" and click "Connect". This is read from Anthropic's support article [Get started with custom connectors using remote MCP](https://support.claude.com/en/articles/11175166) on 2026-11-25; the menus may have moved since. Claude connects from Anthropic's servers, so the URL must be public and on port 443.
+   - Claude Code: `claude mcp add --transport http reticula https://reticula.example.com/mcp`, then type `/mcp` inside Claude Code and follow the steps in the browser. `reticula` is the name the server gets in Claude Code. This is read from the [documentation of Claude Code](https://code.claude.com/docs/en/mcp) on 2026-11-25.
+
+2. The assistant opens the sign-in page in your browser. The page is titled "Connect to Reticula", names the application that will get access to your notes, and lets you choose between "Sign in" and "Create account". To create an account, give an e-mail address, a password of at least 10 characters and, if you want to choose it, a handle; the button "Create account and connect" sends you back to the assistant.
+
+   The e-mail address is not verified in this release: the server sends no mail. `start` therefore shows the account as `verified: no`. That limits nothing; the account works in full.
+
 3. Ask the assistant to call `start`. It receives who it is, a starting instruction and your hubs, and then saves its first note.
 
 Each connected assistant gets its own token, which can be revoked on its own.
 
-A local client that cannot do the sign-in flow can use a token minted on the server. Run these where `RETICULA_DATABASE_URL` is set, with `uvx` in front if that is how you run the server. Under Docker Compose, put `docker compose exec app` in front instead:
+What was tried for this release: the sign-in flow with the scripted client of `scripts/smoke` and with the OAuth client of the MCP Python SDK (discovery, registration, the sign-in page, the token), and Claude Code with a minted token. The SDK's client also called `start` and renewed an expired token, once over plain HTTP on the machine itself and once over HTTPS through a reverse proxy. In both cases a script filled in the sign-in page; no browser was used. `scripts/oauth-client-check` repeats the SDK client's run against a running server. The browser sign-in from Claude Code and from claude.ai was not walked against a server of this release. The server offers automatic registration of a connector and nothing else, so if a dialog asks how to register, that is the choice that matches.
+
+A local client that cannot do the sign-in flow can use a token minted on the server. Under Docker Compose, run these in the `deploy` directory:
 
 ```
-reticula-mcp account create --email me@example.com
-reticula-mcp token --email me@example.com --label laptop
+docker compose exec app reticula-mcp account create --email me@example.com
+docker compose exec app reticula-mcp token --email me@example.com --label laptop
 ```
 
-`account create` asks for a password of at least 10 characters (add `--handle name` to choose the handle). `token` prints a bearer token once; only a hash is stored. `--ttl-days N` makes it expire. Send it in the header `Authorization: Bearer <token>`. For example, with Claude Code:
+Without Docker, leave out `docker compose exec app` and run them where `RETICULA_DATABASE_URL` is set, with `uvx` in front if that is how you run the server.
+
+`account create` asks for a password of at least 10 characters, twice, and needs a terminal for that (add `--handle name` to choose the handle). `token` prints a bearer token once: a secret string that stands for the account, so whoever holds it can read and write the account's notes. Only a hash is stored. `--ttl-days N` makes it expire. Send it in the header `Authorization: Bearer <token>`. A minted token works on `http://127.0.0.1:8787/mcp` whether `RETICULA_PUBLIC_URL` is set or not. For example, with Claude Code:
 
 ```
 claude mcp add --transport http reticula http://127.0.0.1:8787/mcp --header "Authorization: Bearer <token>"

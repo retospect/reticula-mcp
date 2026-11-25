@@ -8,6 +8,11 @@
 - `start` and `profile` showed `read` on a hub to two people who can add to it: the owner of a hub above it, and a person with read on the hub and add on a hub above. Both now see `add (from a parent hub)`. The access list says the same of such a reader: `@cleo read (granted by @ben); add through a hub above this one`. Nobody's access changed, only what is printed.
 - Search finds a note by a short title inside a long query: `greenhouse gateway SD card replaced` now finds the note titled "Gateway". A title of filler words or numbers only does not match this way.
 - With Docker, `RETICULA_EMBED_MODEL` in `.env` sets the embedding model.
+- Docs: the README quick start is the Docker Compose path; the operating guide starts with cloning the repository at the release tag and has the Tailscale Funnel steps in order.
+- `scripts/oauth-client-check` connects with the OAuth client of the MCP Python SDK (sign-in, `start`, token refresh, replay of a used refresh token); Check runs it.
+- `start` and `profile` count the notes of a hub as `get` lists them: a deleted note and a note replaced by a newer one are no longer counted, and a hub filed under the hub is named as a hub (`3 notes, 1 hub`).
+- The server refuses to start on a database that a newer version has used (a migration in the ledger that this version has no file for), and so does every other command of `reticula-mcp`. `RETICULA_ALLOW_NEWER_SCHEMA=1` starts it anyway. 0.1.0 does not check this.
+- Migrations: 0.1.1 adds one, `0203_shared_rules`. It defines three SQL functions and changes no table.
 
 ## 0.1.0 (2026-11-25)
 
