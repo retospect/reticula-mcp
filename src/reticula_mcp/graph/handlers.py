@@ -341,7 +341,8 @@ def _new_rel_line(rel: str, in_use: list[tuple[str, int]]) -> str:
     )
     if len(in_use) > len(shown):
         listed += f", and {len(in_use) - len(shown)} more"
-    candidates = names + [k for k in api.KNOWN_RELS if k not in names]
+    # the recommended names first: a name in use may itself be a wrong one
+    candidates = list(api.KNOWN_RELS) + [n for n in names if n not in api.KNOWN_RELS]
     near = api.close_relation_name(rel, candidates)
     line = f'\nnew relation name "{rel}"; {listed}.'
     return line + (f" Did you mean {near}?" if near else "")
