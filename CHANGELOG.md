@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased
+
 ## 0.1.1 (2026-11-25)
 
 - Access to a hub covers the hubs filed under it. That is so in 0.1.0 too; its entry below does not say it.
