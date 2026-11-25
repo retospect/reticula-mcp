@@ -76,6 +76,14 @@ def test_variants_are_recognised(conn, make_account, used, new):
     assert out.endswith(f"Did you mean {used}?"), out
 
 
+def test_a_recommended_name_is_suggested_before_a_name_in_use(conn, make_account):
+    z = make_account()
+    a, b, c = notes(conn, z, 3)
+    relate(conn, z, a, b, "relates-to")  # a wrong name, already in use
+    out = relate(conn, z, b, c, "relate-to")  # one edit from both
+    assert out.endswith("Did you mean related-to?"), out
+
+
 def test_a_different_name_gets_no_suggestion(conn, make_account):
     z = make_account()
     a, b, c = notes(conn, z, 3)
