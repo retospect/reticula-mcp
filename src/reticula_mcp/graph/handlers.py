@@ -18,6 +18,7 @@ from reticula_mcp.errors import (
     ReticulaError,
 )
 from reticula_mcp.graph import access, api
+from reticula_mcp.permissions import readable_nodes_sql
 from reticula_mcp.resolve import resolve_person, resolve_ref
 
 Row = dict[str, Any]
@@ -93,6 +94,23 @@ def _require_can_add(conn: Conn, viewer: Account, hub: Row) -> None:
     )
 
 
+def _hubs_of_superseded(conn: Conn, viewer: Account, node: Row) -> list[Row]:
+    """Hubs the notes ``node`` supersedes are filed in, that the viewer can read
+    and add to."""
+    addresses = [
+        a for a in (node["payload"] or {}).get("supersedes", []) if isinstance(a, str)
+    ]
+    rows = conn.execute(
+        "SELECT DISTINCT h.id, h.address FROM node old"
+        " JOIN membership m ON m.node_id = old.id AND NOT m.withdrawn"
+        " JOIN node h ON h.id = m.hub_node_id"
+        " WHERE old.address = ANY(%s) AND h.kind = 'hub' AND h.tombstoned_at IS NULL"
+        f" AND h.id IN ({readable_nodes_sql('%s')}) ORDER BY h.id",
+        (addresses, viewer.id),
+    ).fetchall()
+    return [r for r in rows if access.can_add_person(conn, viewer.person_id, r["id"])]
+
+
 def put(
     conn: Conn,
     viewer: Account,
@@ -155,6 +173,18 @@ def put(
         if hub_row is None and node["audience"] != "private"
         else "next: search or get to find it again"
     )
+    if hub_row is None and node["audience"] != "private" and supersedes:
+        # a correction nobody else can see until it is filed where the original is
+        homes = _hubs_of_superseded(conn, viewer, node)
+        if homes:
+            calls = " or ".join(
+                f"link(ref={node['address'][-8:]}, to={h['address'][-8:]})"
+                for h in homes[:2]
+            )
+            nxt = (
+                f"next: only you can read this until it is filed where the original"
+                f" is: {calls}"
+            )
     return f"saved {node['kind']} {node['address']}{where}\n{nxt}"
 
 
@@ -265,6 +295,25 @@ def delete(conn: Conn, viewer: Account, *, ref: str) -> str:
     )
 
 
+def _own_private_notes(conn: Conn, viewer: Account, hub_node_id: int) -> list[str]:
+    """Addresses of the viewer's OWN private notes filed in the hub or under it
+    (newest first). Nobody else's notes are looked at."""
+    rows = conn.execute(
+        "WITH RECURSIVE sub(id) AS ("
+        " SELECT %(hub)s::bigint"
+        " UNION SELECT m.node_id FROM membership m JOIN sub ON m.hub_node_id = sub.id"
+        "  JOIN node c ON c.id = m.node_id AND c.kind = 'hub'"
+        "  WHERE NOT m.withdrawn)"
+        " SELECT DISTINCT n.address, n.id FROM node n"
+        " JOIN membership m ON m.node_id = n.id AND NOT m.withdrawn"
+        " WHERE m.hub_node_id IN (SELECT id FROM sub) AND n.author = %(person)s"
+        " AND n.audience = 'private' AND n.tombstoned_at IS NULL"
+        " ORDER BY n.id DESC",
+        {"hub": hub_node_id, "person": viewer.person_id},
+    ).fetchall()
+    return [r["address"] for r in rows]
+
+
 def _handle(conn: Conn, person_id: str) -> str:
     account = get_account_by_person_id(conn, person_id)
     return f"@{account.handle}" if account else person_id
@@ -323,7 +372,10 @@ def share(
     note = ""
     if mode == "add" and (hub_row["payload"] or {}).get("preset") == "personal":
         mode = "read"
-        note = " (personal hub: read only; edit(preset='group') to let people add)"
+        note = (
+            "\nnote: only the owner adds in a personal hub, so they got read."
+            f' edit(ref={hub_row["address"][-8:]}, preset="group") lets members add.'
+        )
     api.set_grant(conn, viewer, hub_row["id"], grantee.person_id, mode)
     who = f"@{grantee.handle}"
     where = hub_row["address"]
@@ -336,7 +388,12 @@ def share(
         )
         return f"{who} no longer has access to {where}{extra}"
     what = "read and add" if mode == "add" else "read"
-    return (
-        f"{who} can now {what} in {where} and in the hubs under it{note}\n"
-        "next: put(text=..., hub=<this hub>) to add something for them"
-    )
+    out = f"{who} can now {what} in {where} and in the hubs under it{note}"
+    hidden = _own_private_notes(conn, viewer, hub_row["id"])
+    if hidden:
+        out += (
+            f"\nnote: {len(hidden)} of your notes in this hub are private and stay"
+            " hidden from its members;"
+            f" edit(ref={hidden[0][-8:]}, private=false) shows one."
+        )
+    return out + "\nnext: put(text=..., hub=<this hub>) to add something for them"
