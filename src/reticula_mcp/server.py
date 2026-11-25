@@ -46,8 +46,9 @@ log = logging.getLogger("reticula_mcp")
 MCP_PATH = "/mcp"
 
 INSTRUCTIONS = (
-    "Reticula is a shared memory graph: small notes you keep for the person you work"
-    " with, on their account. Call `start` first in a new conversation. `search` before"
+    "Reticula is the person's own long-term memory: small notes you keep for the person"
+    " you work with, on their account, readable by any assistant they use later."
+    " Call `start` first in a new conversation. `search` before"
     " answering from memory and before writing; `get` reads a note or hub; `put`"
     " remembers something (one idea per note, a clear title). A note outside a hub is"
     " readable only by its author; a note in a `hub` is readable by the hub's members."
@@ -496,7 +497,9 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
 
         The address stays and answers as deleted, with no content. Delete only
         what the person asked for: read a note with `get` before you delete it,
-        and tell the person what you deleted and what you kept.
+        and tell the person what you deleted and what you kept. Delete only the
+        notes that say what the person named. A note that came up in the same
+        search and says something else stays.
         """
         return await run(ctx, graph_handlers.delete, write=True, ref=ref)
 
