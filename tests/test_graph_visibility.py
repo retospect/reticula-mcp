@@ -174,8 +174,9 @@ def test_membership_filed_by_someone_else_than_the_author_is_ignored(
     assert not can_read(conn, alice, victim)
 
 
-def test_foreign_atoms_cannot_be_filed_through_the_tools(conn, make_account):
-    """A reader who can see Bob's note cannot publish it to a hub of their own."""
+def test_foreign_atoms_filed_by_a_reader_confer_no_access(conn, make_account):
+    """A reader who can see Bob's note may organise it into a hub of their own,
+    but that never shows it to the hub's other members."""
     alice, bob, mallory, eve = (make_account() for _ in range(4))
     shared = mk_hub(conn, alice, "Shared")
     share(conn, alice, shared, bob)
@@ -183,9 +184,8 @@ def test_foreign_atoms_cannot_be_filed_through_the_tools(conn, make_account):
     bobs = mk_note(conn, bob, "for the shared hub only", hub=shared)
     mine = mk_hub(conn, mallory, "Mallory's")
     share(conn, mallory, mine, eve)
-    assert code_of(handlers.link, conn, mallory, ref=bobs, to=mine) == "Forbidden"
+    handlers.link(conn, mallory, ref=bobs, to=mine)
     assert not can_read(conn, eve, bobs)
-    # nor supersede-by-link their way into eve's view
     assert not can_read(conn, eve, shared)
 
 
