@@ -19,7 +19,15 @@ PUBS = {n: bytes.fromhex(k["public_hex"]) for n, k in VECTORS["keys"].items()}
 
 def test_vector_file_is_self_describing():
     assert VECTORS["format_version"] == 0
-    for section in ("conventions", "keys", "persons", "uuid7", "hub_ids", "records", "verification"):
+    for section in (
+        "conventions",
+        "keys",
+        "persons",
+        "uuid7",
+        "hub_ids",
+        "records",
+        "verification",
+    ):
         assert VECTORS[section]
     types = {r["inputs"]["type"] for r in VECTORS["records"]}
     assert {"atom", "member", "grant", "tombstone", "identity"} <= types
@@ -118,7 +126,9 @@ def test_check_envelope_reports_real_problems():
     other = fmt.format_address(
         VECTORS["persons"][1]["expected_person_id"], good["address"].split("/")[1]
     )
-    assert any("person part" in p for p in fmt.check_envelope(dict(good, address=other)))
+    assert any(
+        "person part" in p for p in fmt.check_envelope(dict(good, address=other))
+    )
     assert fmt.check_envelope({"v": 0})
 
 

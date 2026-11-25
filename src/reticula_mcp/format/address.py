@@ -110,7 +110,11 @@ def is_valid_address(text: object) -> bool:
     return True
 
 
-def new_address(person_id: str, *, timestamp_ms: int | None = None,
-                random_bytes: bytes | None = None) -> str:
+def new_address(
+    person_id: str,
+    *,
+    timestamp_ms: int | None = None,
+    random_bytes: bytes | None = None,
+) -> str:
     """Mint a fresh address under ``person_id``."""
     return format_address(person_id, uuid7(timestamp_ms, random_bytes))

@@ -20,7 +20,12 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
-from reticula_mcp.format.address import is_hub_id, is_person_id, is_valid_address, parse_address
+from reticula_mcp.format.address import (
+    is_hub_id,
+    is_person_id,
+    is_valid_address,
+    parse_address,
+)
 
 FORMAT_VERSION = 0
 
@@ -238,7 +243,9 @@ def check_envelope(envelope: Mapping[str, Any]) -> list[str]:
         problems.append(f"unsupported alg {alg!r} (v0 verifies {DEFAULT_ALG!r} only)")
     if envelope["salt"] != SALT_NONE:
         problems.append("unsupported salt scheme")
-    if isinstance(envelope["payload"], str) and isinstance(envelope["content_hash"], str):
+    if isinstance(envelope["payload"], str) and isinstance(
+        envelope["content_hash"], str
+    ):
         if envelope["content_hash"] != content_hash(payload_bytes(envelope)):
             problems.append("content_hash does not match payload")
     else:

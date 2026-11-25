@@ -66,16 +66,31 @@ def main() -> None:
             }
         )
     hub_cases = [
-        {"hub_address": addrs["hub"], "expected": fmt.hub_id_from_address(addrs["hub"])},
+        {
+            "hub_address": addrs["hub"],
+            "expected": fmt.hub_id_from_address(addrs["hub"]),
+        },
         {"hub_address": "ret:x/y", "expected": fmt.hub_id_from_address("ret:x/y")},
     ]
     hub_id = hub_cases[0]["expected"]
 
     canon_cases = [
-        {"input": {"b": 1, "a": [True, None, "x"]}, "expected": '{"a":[true,null,"x"],"b":1}'},
-        {"input": {"t": "Größe ≈ 3 µm 日本語 🙂"}, "expected": '{"t":"Größe ≈ 3 µm 日本語 🙂"}'},
-        {"input": {"q": 'a"b\\c\n\t\u0001'}, "expected": '{"q":"a\\"b\\\\c\\n\\t\\u0001"}'},
-        {"input": {"é": 1, "e": 2, "z": {"y": 0, "x": -5}}, "expected": '{"e":2,"z":{"x":-5,"y":0},"é":1}'},
+        {
+            "input": {"b": 1, "a": [True, None, "x"]},
+            "expected": '{"a":[true,null,"x"],"b":1}',
+        },
+        {
+            "input": {"t": "Größe ≈ 3 µm 日本語 🙂"},
+            "expected": '{"t":"Größe ≈ 3 µm 日本語 🙂"}',
+        },
+        {
+            "input": {"q": 'a"b\\c\n\t\u0001'},
+            "expected": '{"q":"a\\"b\\\\c\\n\\t\\u0001"}',
+        },
+        {
+            "input": {"é": 1, "e": 2, "z": {"y": 0, "x": -5}},
+            "expected": '{"e":2,"z":{"x":-5,"y":0},"é":1}',
+        },
     ]
     for c in canon_cases:
         assert fmt.canonical_text(c["input"]) == c["expected"], c
@@ -122,76 +137,171 @@ def main() -> None:
         return vh
 
     key_entries = [
-        {"id": "root", "use": "sign", "role": "root", "alg": "ed25519", "pub": keys["alice.root"]["public_b64u"]},
-        {"id": "k1", "use": "sign", "role": "delegate", "alg": "ed25519", "pub": keys["alice.k1"]["public_b64u"]},
-        {"id": "e1", "use": "encrypt", "alg": "x25519", "pub": fmt.b64u(bytes(range(32)))},
+        {
+            "id": "root",
+            "use": "sign",
+            "role": "root",
+            "alg": "ed25519",
+            "pub": keys["alice.root"]["public_b64u"],
+        },
+        {
+            "id": "k1",
+            "use": "sign",
+            "role": "delegate",
+            "alg": "ed25519",
+            "pub": keys["alice.k1"]["public_b64u"],
+        },
+        {
+            "id": "e1",
+            "use": "encrypt",
+            "alg": "x25519",
+            "pub": fmt.b64u(bytes(range(32))),
+        },
     ]
     add(
-        "identity-v1", "alice.root", type="identity", address=addrs["identity"],
-        created=fmt.format_created(T0), audience="public",
-        payload={"handle": "alice", "keys": key_entries, "verified": {"value": False, "at": None}},
+        "identity-v1",
+        "alice.root",
+        type="identity",
+        address=addrs["identity"],
+        created=fmt.format_created(T0),
+        audience="public",
+        payload={
+            "handle": "alice",
+            "keys": key_entries,
+            "verified": {"value": False, "at": None},
+        },
     )
     add(
-        "identity-v2-verified", "alice.root", type="identity", address=addrs["identity"],
-        created=fmt.format_created(T0 + 500), audience="public", parent_names=["identity-v1"],
-        payload={"handle": "alice", "keys": key_entries, "verified": {"value": True, "at": fmt.format_created(T0 + 400)}},
+        "identity-v2-verified",
+        "alice.root",
+        type="identity",
+        address=addrs["identity"],
+        created=fmt.format_created(T0 + 500),
+        audience="public",
+        parent_names=["identity-v1"],
+        payload={
+            "handle": "alice",
+            "keys": key_entries,
+            "verified": {"value": True, "at": fmt.format_created(T0 + 400)},
+        },
     )
     add(
-        "hub-atom", "alice.k1", type="atom", address=addrs["hub"],
+        "hub-atom",
+        "alice.k1",
+        type="atom",
+        address=addrs["hub"],
         created=fmt.format_created(T0 + 1000),
-        payload={"kind": "hub", "title": "Lab notes", "text": "Shared notes for the lab.",
-                 "preset": "group", "invite": "members", "accept": "members"},
+        payload={
+            "kind": "hub",
+            "title": "Lab notes",
+            "text": "Shared notes for the lab.",
+            "preset": "group",
+            "invite": "members",
+            "accept": "members",
+        },
     )
     add(
-        "note-v1", "alice.k1", type="atom", address=addrs["note"],
-        created=fmt.format_created(T0 + 2000), hub=hub_id,
-        payload={"kind": "note", "title": "Größe", "text": "Pore Größe ≈ 3 µm — 日本語 🙂",
-                 "tags": ["materials", "porosity"],
-                 "origin": {"by": "agent", "model": "test-model"}},
+        "note-v1",
+        "alice.k1",
+        type="atom",
+        address=addrs["note"],
+        created=fmt.format_created(T0 + 2000),
+        hub=hub_id,
+        payload={
+            "kind": "note",
+            "title": "Größe",
+            "text": "Pore Größe ≈ 3 µm — 日本語 🙂",
+            "tags": ["materials", "porosity"],
+            "origin": {"by": "agent", "model": "test-model"},
+        },
     )
     add(
-        "note-v2", "alice.k1", type="atom", address=addrs["note"],
-        created=fmt.format_created(T0 + 3000), hub=hub_id, parent_names=["note-v1"],
-        payload={"kind": "note", "title": "Größe", "text": "Pore size ≈ 3.2 µm (corrected)",
-                 "links": [{"rel": "part-of", "to": addrs["hub"]}]},
+        "note-v2",
+        "alice.k1",
+        type="atom",
+        address=addrs["note"],
+        created=fmt.format_created(T0 + 3000),
+        hub=hub_id,
+        parent_names=["note-v1"],
+        payload={
+            "kind": "note",
+            "title": "Größe",
+            "text": "Pore size ≈ 3.2 µm (corrected)",
+            "links": [{"rel": "part-of", "to": addrs["hub"]}],
+        },
     )
     add(
-        "note-private", "alice.k1", type="atom", address=addrs["other"],
-        created=fmt.format_created(T0 + 3500), hub=hub_id, audience="private",
+        "note-private",
+        "alice.k1",
+        type="atom",
+        address=addrs["other"],
+        created=fmt.format_created(T0 + 3500),
+        hub=hub_id,
+        audience="private",
         payload={"kind": "debug", "text": "only me"},
     )
     add(
-        "member-v1", "alice.k1", type="member", address=addrs["member"],
-        created=fmt.format_created(T0 + 4000), hub=hub_id,
+        "member-v1",
+        "alice.k1",
+        type="member",
+        address=addrs["member"],
+        created=fmt.format_created(T0 + 4000),
+        hub=hub_id,
         payload={"atom": addrs["note"], "hub": addrs["hub"], "withdrawn": False},
     )
     add(
-        "member-v2-withdrawn", "alice.k1", type="member", address=addrs["member"],
-        created=fmt.format_created(T0 + 5000), hub=hub_id, parent_names=["member-v1"],
+        "member-v2-withdrawn",
+        "alice.k1",
+        type="member",
+        address=addrs["member"],
+        created=fmt.format_created(T0 + 5000),
+        hub=hub_id,
+        parent_names=["member-v1"],
         payload={"atom": addrs["note"], "hub": addrs["hub"], "withdrawn": True},
     )
     add(
-        "grant-bob", "alice.k1", type="grant", address=fmt.format_address(alice, fmt.uuid7(T0 + 6000, bytes(range(10)))),
-        created=fmt.format_created(T0 + 6000), hub=hub_id,
+        "grant-bob",
+        "alice.k1",
+        type="grant",
+        address=fmt.format_address(alice, fmt.uuid7(T0 + 6000, bytes(range(10)))),
+        created=fmt.format_created(T0 + 6000),
+        hub=hub_id,
         payload={"hub": addrs["hub"], "to": bob, "mode": "add", "wrapped_key": None},
     )
     add(
-        "tombstone", "alice.k1", type="tombstone", address=addrs["note"],
-        created=fmt.format_created(T0 + 7000), hub=hub_id, parent_names=["note-v2"],
+        "tombstone",
+        "alice.k1",
+        type="tombstone",
+        address=addrs["note"],
+        created=fmt.format_created(T0 + 7000),
+        hub=hub_id,
+        parent_names=["note-v2"],
         payload={"derived": False},
     )
     add(
-        "unknown-type-with-extras", "alice.k1", type="x-future",
+        "unknown-type-with-extras",
+        "alice.k1",
+        type="x-future",
         address=fmt.format_address(alice, fmt.uuid7(T0 + 8000, bytes(range(10, 20)))),
-        created=fmt.format_created(T0 + 8000), audience="x-circle",
+        created=fmt.format_created(T0 + 8000),
+        audience="x-circle",
         extra={"zeta": [1, {"b": None, "a": "β"}], "alpha": "ünknown"},
         payload={"whatever": ["future", {"shape": True}]},
     )
     add(
-        "atom-unknown-kind-and-fields", "alice.k1", type="atom", address=addrs["paper"],
-        created=fmt.format_created(T0 + 9000), hub=hub_id,
+        "atom-unknown-kind-and-fields",
+        "alice.k1",
+        type="atom",
+        address=addrs["paper"],
+        created=fmt.format_created(T0 + 9000),
+        hub=hub_id,
         extra={"sidecar": {"n": 1}},
-        payload={"kind": "flux-capacitor", "text": "t", "ext": {"doi": "10.1000/x"}, "novel": [1, 2, 3]},
+        payload={
+            "kind": "flux-capacitor",
+            "text": "t",
+            "ext": {"doi": "10.1000/x"},
+            "novel": [1, 2, 3],
+        },
     )
 
     by_name = {r["name"]: r for r in records}
@@ -202,16 +312,42 @@ def main() -> None:
     flipped_sig = bytearray(sig_b)
     flipped_sig[0] ^= 0x80
     failures = [
-        {"name": "control-valid", "signer_key": "alice.k1", "text_form": good, "expect_valid": True},
-        {"name": "flipped-envelope-byte", "signer_key": "alice.k1",
-         "text_form": fmt.encode_signed(bytes(flipped_env), sig_b), "expect_valid": False},
-        {"name": "flipped-signature-byte", "signer_key": "alice.k1",
-         "text_form": fmt.encode_signed(env_b, bytes(flipped_sig)), "expect_valid": False},
-        {"name": "wrong-key", "signer_key": "bob.k1", "text_form": good, "expect_valid": False},
-        {"name": "malformed-no-dot", "signer_key": "alice.k1", "text_form": good.replace(".", ""), "expect_valid": False},
+        {
+            "name": "control-valid",
+            "signer_key": "alice.k1",
+            "text_form": good,
+            "expect_valid": True,
+        },
+        {
+            "name": "flipped-envelope-byte",
+            "signer_key": "alice.k1",
+            "text_form": fmt.encode_signed(bytes(flipped_env), sig_b),
+            "expect_valid": False,
+        },
+        {
+            "name": "flipped-signature-byte",
+            "signer_key": "alice.k1",
+            "text_form": fmt.encode_signed(env_b, bytes(flipped_sig)),
+            "expect_valid": False,
+        },
+        {
+            "name": "wrong-key",
+            "signer_key": "bob.k1",
+            "text_form": good,
+            "expect_valid": False,
+        },
+        {
+            "name": "malformed-no-dot",
+            "signer_key": "alice.k1",
+            "text_form": good.replace(".", ""),
+            "expect_valid": False,
+        },
     ]
     for f in failures:
-        assert fmt.verify_signed(f["text_form"], pubs[f["signer_key"]]) == f["expect_valid"], f
+        assert (
+            fmt.verify_signed(f["text_form"], pubs[f["signer_key"]])
+            == f["expect_valid"]
+        ), f
 
     doc = {
         "name": "reticula-format-vectors",
@@ -241,7 +377,9 @@ def main() -> None:
         "records": records,
         "verification": failures,
     }
-    OUT.write_text(json.dumps(doc, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+    OUT.write_text(
+        json.dumps(doc, indent=1, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
     print(f"wrote {OUT} ({len(records)} records)")
 
 

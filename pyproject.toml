@@ -100,6 +100,11 @@ warn_unused_ignores = true
 files = ["src", "tests"]
 
 [[tool.mypy.overrides]]
+# tests index fetched rows and Optional results without ceremony
+module = ["tests.*"]
+disable_error_code = ["union-attr", "index", "arg-type"]
+
+[[tool.mypy.overrides]]
 module = ["pgvector.*", "fastembed.*"]
 ignore_missing_imports = true
 

@@ -28,7 +28,10 @@ def person_id(root_pub: bytes) -> str:
 
 
 def hub_id(address: str) -> str:
-    return "h" + b32(hashlib.sha256(b"reticula/hub/v0\x00" + address.encode()).digest())[:26]
+    return (
+        "h"
+        + b32(hashlib.sha256(b"reticula/hub/v0\x00" + address.encode()).digest())[:26]
+    )
 
 
 def uuid7(ts_ms: int, rnd: bytes) -> str:
