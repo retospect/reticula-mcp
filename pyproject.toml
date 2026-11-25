@@ -1,0 +1,45 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "reticula-mcp"
+version = "0.0.1"
+description = "Reticula MCP: a shared memory graph of small signed notes for people and their assistants, served over the Model Context Protocol."
+readme = "README.md"
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+authors = [{ name = "Reto Stamm", email = "reto@retostamm.com" }]
+keywords = [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "memory",
+    "knowledge-graph",
+    "shared-memory",
+    "federation",
+    "signed-notes",
+    "postgres",
+    "pgvector",
+    "claude",
+]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Topic :: Database",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/retospect/reticula-mcp"
+Repository = "https://github.com/retospect/reticula-mcp"
+Issues = "https://github.com/retospect/reticula-mcp/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/reticula_mcp"]

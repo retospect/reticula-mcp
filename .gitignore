@@ -1,0 +1,25 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.venv/
+.coverage
+htmlcov/
+
+# secrets and local instance state
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+instance/
+
+# local agent settings
+.claude/
+
+.DS_Store
+*.swp
