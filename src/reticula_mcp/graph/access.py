@@ -34,6 +34,19 @@ def can_add_person(conn: Conn, person_id: str, hub_node_id: int) -> bool:
     return bool(row["ok"])
 
 
+def shown_access(conn: Conn, person_id: str, hub_node_id: int) -> str | None:
+    """The access to show a person and to gate the access list on.
+
+    ``hub_access`` inherits ``add`` from a parent hub also into a personal hub,
+    where only the owner adds. Such a person reads the hub and nothing more, so
+    they are shown ``read`` and get the reader's view of who has access.
+    """
+    mode = hub_access(conn, person_id, hub_node_id)
+    if mode == "add" and not can_add_person(conn, person_id, hub_node_id):
+        return "read"
+    return mode
+
+
 def lock_hierarchy(conn: Conn) -> None:
     """Take the transaction-scoped hub-hierarchy lock."""
     conn.execute("SELECT pg_advisory_xact_lock(%s)", (_HIERARCHY_LOCK,))

@@ -87,6 +87,12 @@ def _hub_rows(conn: Conn, viewer: Account) -> list[dict[str, Any]]:
 
 def _hub_line(conn: Conn, viewer: Account, row: dict[str, Any]) -> str:
     mode = "owner" if row["own"] else _inherited_mode(conn, viewer, row["id"])
+    shown = (
+        None if row["own"] else access.shown_access(conn, viewer.person_id, row["id"])
+    )
+    if shown == "read" and mode.startswith("add"):
+        # add on a parent does not reach into a personal hub
+        mode = "read" + mode[3:]
     # Anyone can share a hub with anyone, so its title is a stranger's text:
     # quoted, one line, cut short.
     name = quote(row["title"], HUB_TITLE_LIMIT) if row["title"] else "(untitled hub)"
@@ -107,7 +113,7 @@ def _hub_line(conn: Conn, viewer: Account, row: dict[str, Any]) -> str:
         more = f" and {len(names) - 3} more" if len(names) > 3 else ""
         shared = f"{', '.join(names[:3])}{more}" if names else "nobody"
         count = f"  shared with {shared},"
-    elif access.hub_access(conn, viewer.person_id, row["id"]) == "add":
+    elif shown == "add":
         people = row["grants"] + 1  # everyone with a grant, plus the owner
         count = f"  {people} people have access,"
     else:

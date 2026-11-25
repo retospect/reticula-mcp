@@ -163,3 +163,48 @@ def test_debug_listing_includes_a_note_only_through_its_authors_statement(
     # the author's own statement puts it on the operator's list
     handlers.link(conn, alice, ref=note["address"], to=debug_hub["address"])
     assert [n.address for n in debug.list_debug_notes(conn)] == [note["address"]]
+
+
+def test_add_on_a_parent_does_not_show_who_reads_a_personal_hub_below(
+    conn, make_account
+):
+    """Carol can add to the parent. Bob's personal hub sits under it and only Bob
+    adds there, so Carol is a reader of it: she is shown `read`, no head count and
+    no other reader, in `start`, `share`, `get` and the hub listing."""
+    from reticula_mcp.graph import access
+    from reticula_mcp.search import handlers as search
+
+    owner, bob, carol, dan = (make_account() for _ in range(4))
+    parent = mk_hub(conn, owner, "Parent")
+    share(conn, owner, parent, bob, "add")
+    share(conn, owner, parent, carol, "add")
+    diary = mk_hub(conn, bob, "Bobs diary", parent=parent, preset="personal")
+    share(conn, bob, diary, dan, "read")
+    diary_id = conn.execute(
+        "SELECT id FROM node WHERE address = %s", (diary,)
+    ).fetchone()["id"]
+    assert not access.can_add_person(conn, carol.person_id, diary_id)
+    assert access.shown_access(conn, carol.person_id, diary_id) == "read"
+
+    line = line_for(content.start(conn, carol), "Bobs diary")
+    assert "have access" not in line and "people" not in line
+    assert " read (from a parent hub)" in line and " add" not in line
+    listing = handlers.share(conn, carol, hub=diary)
+    assert dan.handle not in listing and "only to people who can add" in listing
+    assert f"@{carol.handle} read" in listing
+    shown = search.get(conn, carol, ref=diary)
+    assert dan.handle not in shown
+    rows = search.search(conn, carol, query="", kind="hub")
+    assert "read" in line_for(rows, "Bobs diary")
+    assert " add " not in line_for(rows, "Bobs diary")
+    with pytest.raises(ReticulaError):
+        handlers.put(conn, carol, text="x", hub=diary)
+
+    # on the parent itself nothing changes for her
+    assert "3 people have access" in line_for(content.start(conn, carol), "Parent")
+    assert f"@{bob.handle} add" in handlers.share(conn, carol, hub=parent)
+    # and Bob, the owner, still sees his reader
+    assert f"shared with @{dan.handle}," in line_for(
+        content.start(conn, bob), "Bobs diary"
+    )
+    assert f"@{dan.handle} read" in handlers.share(conn, bob, hub=diary)

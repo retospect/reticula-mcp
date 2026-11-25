@@ -347,7 +347,7 @@ def _list_access(conn: Conn, viewer: Account, hub: Row) -> str:
     """Who has access. The full list goes to the hub's admin and to people who
     can add to it; anyone else sees the owner and their own entry only (a display
     rule: the permissions are unchanged)."""
-    mode = access.hub_access(conn, viewer.person_id, hub["id"])
+    mode = access.shown_access(conn, viewer.person_id, hub["id"])
     lines = [f"access to {_label(hub)}", f"{_handle(conn, hub['author'])} admin"]
     if viewer.person_id == hub["author"] or mode == "add":
         rows = conn.execute(

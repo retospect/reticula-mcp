@@ -79,7 +79,10 @@ def _result_lines(
     hubs = [i for i in ids if i in rows and rows[i]["kind"] == "hub"]
     if hub_details and hubs:
         found = conn.execute(
-            "SELECT n.id, hub_access(%(person)s, n.id) AS mode FROM node n"
+            # add inherited into a personal hub (only its owner adds) shows as read
+            "SELECT n.id, CASE WHEN hub_access(%(person)s, n.id) = 'add'"
+            " AND NOT can_add_person(%(person)s, n.id) THEN 'read'"
+            " ELSE hub_access(%(person)s, n.id) END AS mode FROM node n"
             " WHERE n.id = ANY(%(ids)s)",
             {"person": viewer.person_id, "ids": hubs},
         ).fetchall()
