@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# scripts/dev-cert: a self-signed certificate for the dev stack's reverse proxy.
+#
+#   scripts/dev-cert [name]        default name: reticula.test
+#
+# Writes deploy/dev-proxy/certs/cert.pem and key.pem (git ignores both). The
+# name is made up and resolves nowhere: tell the client where it is, for
+# example  scripts/smoke https://reticula.test:8443 --resolve reticula.test=127.0.0.1
+# --cacert deploy/dev-proxy/certs/cert.pem
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+name="${1:-reticula.test}"
+dir=deploy/dev-proxy/certs
+mkdir -p "$dir"
+openssl req -x509 -newkey rsa:2048 -nodes -days 30 \
+    -subj "/CN=${name}" \
+    -addext "subjectAltName=DNS:${name}" \
+    -addext "basicConstraints=critical,CA:FALSE" \
+    -addext "keyUsage=critical,digitalSignature,keyEncipherment" \
+    -addext "extendedKeyUsage=serverAuth" \
+    -keyout "$dir/key.pem" -out "$dir/cert.pem" 2>/dev/null
+# The proxy container runs as another user and reads the files through a
+# read-only mount.
+chmod 644 "$dir/cert.pem" "$dir/key.pem"
+echo "wrote $dir/cert.pem and $dir/key.pem for ${name}, valid 30 days"

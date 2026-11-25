@@ -1,0 +1,9 @@
+# What the image build may read. The `source` target needs four paths from the
+# repository root; the `release` target reads nothing from its context.
+*
+!pyproject.toml
+!README.md
+!LICENSE
+!src
+**/__pycache__
+**/*.py[cod]

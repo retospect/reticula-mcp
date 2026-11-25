@@ -1,0 +1,17 @@
+# The dev stack's reverse proxy (compose profile "proxy"): TLS for a made-up
+# name with a self-signed certificate from scripts/dev-cert, in front of the
+# app. It stands in for a tunnel or reverse proxy on the same host.
+{
+	# The certificate is ours; nothing is requested from a certificate authority.
+	auto_https off
+	admin off
+}
+
+https://reticula.test:8443 {
+	tls /certs/cert.pem /certs/key.pem
+
+	# Caddy replaces any X-Forwarded-For a client sent with the client's own
+	# address (it has no trusted proxies of its own), so the app can believe
+	# the header when the request comes from this proxy.
+	reverse_proxy app:8787
+}
