@@ -26,14 +26,18 @@ def resolve_ref(
 ) -> Row:
     """Resolve a note/hub reference to its ``node`` row.
 
-    ``ref`` is a full address (``ret:<person>/<uuid>``) or a unique suffix of
-    the UUID (6+ hex characters) among nodes ``viewer`` can read. Raises
+    ``ref`` is a full address (``ret:<person>/<uuid>``, also accepted without
+    the ``ret:``) or a unique suffix of the UUID (6+ hex characters) among
+    nodes ``viewer`` can read. Raises
     ``BadInput`` for malformed refs, ``NotFound`` when nothing readable
     matches, ``Conflict`` (listing candidates) when a suffix is ambiguous.
     ``allow_tombstoned``: a FULL address may also resolve to a tombstoned
     node (so ``get`` can answer "deleted" instead of "not found").
     """
     ref = ref.strip()
+    person, slash, _ = ref.partition("/")
+    if slash and fmt.is_person_id(person):
+        ref = ADDRESS_SCHEME + ref  # an address written without its scheme
     if ref.startswith(ADDRESS_SCHEME):
         try:
             fmt.parse_address(ref)

@@ -111,6 +111,9 @@ def _withdrawn(conn: Conn, viewer: Account, ref: str) -> Row | None:
     organises and tells nobody anything. Everything else stays
     indistinguishable from a missing address."""
     ref = ref.strip()
+    person, slash, _ = ref.partition("/")
+    if slash and fmt.is_person_id(person):
+        ref = "ret:" + ref  # an address written without its scheme
     if ref.startswith("ret:"):
         cond, arg = "n.address = %(ref)s", ref
     else:
@@ -208,9 +211,39 @@ def _paths(conn: Conn, viewer: Account, node_id: int, own: Row | None = None) ->
 @dataclass
 class _Chain:
     lines: list[str]
-    # other people's notes that supersede this one and that the viewer, as the
-    # author of this one, has not disputed: short refs
+    # other people's notes that hide this one from search and hub lists, when
+    # the viewer is the author of this one: short refs
     disputable: list[str]
+
+
+# The rule of ``current_nodes`` (migration 0202) for one pair: does the newer
+# atom ``n`` hide the original ``o`` from those who can read ``n``? The same
+# author always does. Another person does only when both are filed in a common
+# hub, each by its own author, the original is neither a hub nor an
+# instruction, and the original's author has not linked ``disputes`` to it.
+# ``_chain_lines`` checks the result against the function itself, and
+# tests/test_search_review.py pins that the two agree.
+_HIDES = """
+    (o.author = n.author
+     OR (o.kind NOT IN ('hub', 'instruction')
+         AND EXISTS (
+             SELECT 1 FROM membership mo
+             JOIN membership mn ON mn.hub_node_id = mo.hub_node_id
+             JOIN node h ON h.id = mo.hub_node_id
+             WHERE mo.node_id = o.id AND NOT mo.withdrawn
+               AND mo.audience = 'hub' AND mo.author = o.author
+               AND mn.node_id = n.id AND NOT mn.withdrawn
+               AND mn.audience = 'hub' AND mn.author = n.author
+               AND h.kind = 'hub' AND h.tombstoned_at IS NULL)
+         AND NOT EXISTS (
+             SELECT 1 FROM link l
+             WHERE l.src_node_id = o.id AND l.rel = 'disputes'
+               AND l.dst_address = n.address)))
+"""
+_PAIRS = (
+    " FROM supersedes s JOIN node o ON o.id = s.old_node_id"
+    " JOIN node n ON n.id = s.new_node_id"
+)
 
 
 def _address_as_written(address: str) -> str:
@@ -232,6 +265,11 @@ def _chain_lines(conn: Conn, viewer: Account, node: Row) -> _Chain:
     nor pushes a readable one off the list. Two exceptions show an address and
     nothing else: a linked address with no node on this instance, and, to the
     author of this note only, their own links to atoms they can no longer read.
+
+    "superseded by" and "supersedes" are said only of a pair where the newer
+    atom hides the original (``current_nodes``). A newer atom by someone else
+    that does not hide it is "corrected by @x" / "corrects", and the original
+    stays in search and hub lists.
     """
     readable = readable_nodes_sql("%(viewer)s")
     own = node["author"] == viewer.person_id
@@ -243,17 +281,26 @@ def _chain_lines(conn: Conn, viewer: Account, node: Row) -> _Chain:
         "cap": LINKS_SHOWN + 1,
     }
     old = conn.execute(
-        "SELECT o.id FROM supersedes s JOIN node o ON o.id = s.old_node_id"
+        f"SELECT o.id, {_HIDES} AS hides {_PAIRS}"
         f" WHERE s.new_node_id = %(node)s AND o.id IN ({readable})"
-        " ORDER BY o.id LIMIT %(cap)s",
+        " ORDER BY hides DESC, o.id LIMIT %(cap)s",
         params,
     ).fetchall()
     new = conn.execute(
-        "SELECT s.new_node_id AS id FROM supersedes s"
-        f" WHERE s.old_node_id = %(node)s AND s.new_node_id IN ({readable})"
-        " ORDER BY s.new_node_id LIMIT %(cap)s",
+        f"SELECT n.id, {_HIDES} AS hides {_PAIRS}"
+        f" WHERE s.old_node_id = %(node)s AND n.id IN ({readable})"
+        " ORDER BY hides DESC, n.id LIMIT %(cap)s",
         params,
     ).fetchall()
+    # current_nodes decides what is hidden. Should the copy of its rule above
+    # ever disagree with it, the wording follows the function.
+    if new:
+        hidden = not visible_subset(conn, viewer, [node["id"]], current=True)
+        if hidden != any(r["hides"] for r in new):
+            new = [{**r, "hides": hidden} for r in new]
+    if any(r["hides"] for r in old):
+        shown = visible_subset(conn, viewer, [r["id"] for r in old], current=True)
+        old = [{**r, "hides": r["hides"] and r["id"] not in shown} for r in old]
     out = conn.execute(
         "SELECT l.rel, l.dst_address, d.id AS dst_id,"
         f" (d.id IS NOT NULL AND d.id IN ({readable})) AS can_read"
@@ -285,22 +332,28 @@ def _chain_lines(conn: Conn, viewer: Account, node: Row) -> _Chain:
             f" {_title(r)}"
         )
 
+    def whom(i: int) -> str:
+        return render.who(rows[i], viewer.person_id) or "you"
+
     def by(i: int) -> str:
-        """Who wrote a superseding note, when it is not the author of this one."""
-        r = rows[i]
-        if r["author"] == node["author"]:
-            return ""
-        if r["author"] == viewer.person_id:
-            return " by you"
-        return f" by {render.who(r, viewer.person_id)}"
+        """Who wrote the other note of a pair, when not the author of this one."""
+        return "" if rows[i]["author"] == node["author"] else f" by {whom(i)}"
 
     lines: list[str] = []
-    olds = [r["id"] for r in old if r["id"] in rows]
+    old = [r for r in old if r["id"] in rows]
+    new = [r for r in new if r["id"] in rows]
+    olds = [r["id"] for r in old if r["hides"]]
     if olds:
-        lines.append("supersedes: " + "; ".join(show(i) for i in olds))
-    news = [r["id"] for r in new if r["id"] in rows]
+        lines.append("supersedes: " + "; ".join(show(i) + by(i) for i in olds))
+    for r in old:
+        if not r["hides"]:
+            lines.append(f"corrects: {show(r['id'])}{by(r['id'])}")
+    news = [r["id"] for r in new if r["hides"]]
     if news:
         lines.append("superseded by: " + "; ".join(show(i) + by(i) for i in news))
+    for r in new:
+        if not r["hides"]:
+            lines.append(f"corrected by {whom(r['id'])}: {show(r['id'])}")
     for r in out:
         if r["can_read"] and r["dst_id"] in rows:
             target = show(r["dst_id"])
@@ -316,12 +369,10 @@ def _chain_lines(conn: Conn, viewer: Account, node: Row) -> _Chain:
         lines.append("(more links not shown)")
     disputable: list[str] = []
     if own:
-        disputed = {r["dst_address"] for r in out if r["rel"] == "disputes"}
         disputable = [
             render.short_ref(rows[i]["address"])
             for i in news
             if rows[i]["author"] != viewer.person_id
-            and rows[i]["address"] not in disputed
         ]
     return _Chain(lines, disputable)
 
