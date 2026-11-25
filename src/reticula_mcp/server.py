@@ -46,8 +46,9 @@ log = logging.getLogger("reticula_mcp")
 MCP_PATH = "/mcp"
 
 INSTRUCTIONS = (
-    "Reticula is a shared memory graph: small notes you keep for the person you work"
-    " with, on their account. Call `start` first in a new conversation. `search` before"
+    "Reticula is the person's own long-term memory: small notes you keep for the person"
+    " you work with, on their account, readable by any assistant they use later."
+    " Call `start` first in a new conversation. `search` before"
     " answering from memory and before writing; `get` reads a note or hub; `put`"
     " remembers something (one idea per note, a clear title). A note outside a hub is"
     " readable only by its author; a note in a `hub` is readable by the hub's members."
