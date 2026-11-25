@@ -476,8 +476,9 @@ def overview(group: Group, ref: str, total: int, notes: Sequence[Note]) -> list[
         basis = "by their words"
     lines.append(
         f"{len(group.ids)} notes in {len(group.children)} groups {basis}, each"
-        " labelled with words of its notes (the letters hold for this listing"
-        " only: keep a note's id, not its letters):"
+        " labelled with words of its notes (the letters are for your calls and"
+        " hold for this listing only: name a group to the person by its words,"
+        " and keep a note's id, not its letters):"
     )
     return lines + _group_lines(group, ref)
 

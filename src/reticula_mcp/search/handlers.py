@@ -64,7 +64,10 @@ def _checked_kind(conn: Conn, viewer: Account, kind: str | None) -> str | None:
     return kind
 
 
-NEXT_GET = "next: get(ref) reads one in full (ref = the short id at the line start)"
+NEXT_GET = (
+    "next: get(ref) reads one in full (ref = the short id at the line start);"
+    ' get(ref="<id> <id> <id>") reads several at once'
+)
 
 
 def _result_lines(
