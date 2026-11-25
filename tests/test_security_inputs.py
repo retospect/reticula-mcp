@@ -92,7 +92,7 @@ def test_stored_records_still_rebuild(conn, make_account):
 
 @pytest.mark.parametrize(
     ("field", "limit"),
-    [("title", 200), ("anchor", 500), ("model", 100), ("ext_id", 300)],
+    [("title", 100), ("anchor", 500), ("model", 100), ("ext_id", 300)],
 )
 def test_a_field_over_its_cap_is_refused_naming_the_limit(
     conn, make_account, field, limit
@@ -104,7 +104,7 @@ def test_a_field_over_its_cap_is_refused_naming_the_limit(
     assert field in e.value.message and str(limit) in e.value.message
 
 
-@pytest.mark.parametrize(("field", "limit"), [("title", 200), ("anchor", 500)])
+@pytest.mark.parametrize(("field", "limit"), [("title", 100), ("anchor", 500)])
 def test_a_field_at_its_cap_is_accepted(conn, make_account, field, limit):
     out = handlers.put(conn, make_account(), text="x", **{field: "a" * limit})
     assert "saved" in out
@@ -128,11 +128,11 @@ def test_tag_count_and_tag_length_are_capped(conn, make_account):
 def test_edits_are_capped_too(conn, make_account):
     z = make_account()
     note = mk_note(conn, z, "x")
-    assert code_of(handlers.edit, conn, z, ref=note, title="t" * 201) == "BadInput"
+    assert code_of(handlers.edit, conn, z, ref=note, title="t" * 101) == "BadInput"
     assert code_of(handlers.edit, conn, z, ref=note, tags=["b" * 51]) == "BadInput"
     many = [f"t{i}" for i in range(21)]
     assert code_of(handlers.edit, conn, z, ref=note, tags=many) == "BadInput"
-    assert "updated" in handlers.edit(conn, z, ref=note, title="t" * 200)
+    assert "updated" in handlers.edit(conn, z, ref=note, title="t" * 100)
 
 
 # --- hub titles in start and profile ---------------------------------------------
@@ -151,7 +151,10 @@ def test_a_strangers_hub_title_is_quoted_cut_and_listed_apart(conn, make_account
     for out in (content.start(conn, v), content.profile(conn, v)):
         lines = out.splitlines()
         assert not any(ln.startswith(("SYSTEM", "share(")) for ln in lines), out
-        assert max(len(ln) for ln in lines) < 400
+        # the hub title is cut: no line that is not the server's own starter
+        # text is long (a paragraph of the starter may be one long line)
+        starter_lines = set(bootstrap.starter_instruction().text.splitlines())
+        assert max(len(ln) for ln in lines if ln not in starter_lines) < 400
         foreign = [ln for ln in lines if "Project Notes" in ln]
         assert len(foreign) == 1
         assert foreign[0].startswith('- @zed "Project Notes')

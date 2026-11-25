@@ -11,6 +11,7 @@ The caller owns the transaction. The names and signatures of
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
@@ -35,7 +36,11 @@ Row = dict[str, Any]
 
 CORE_KEYS = frozenset({"kind", "text"})
 MAX_TEXT = 200_000
-MAX_TITLE = 200
+#: A note's or hub's title; a paper's is bibliographic and may be longer.
+MAX_TITLE = 100
+MAX_PAPER_TITLE = 200
+#: Turned into a space in a title, like every other kind of whitespace.
+_TITLE_BREAKS = frozenset("\t\n\v\f\r\x1c\x1d\x1e\x1f\x85")
 MAX_TAGS = 20
 MAX_TAG = 50
 MAX_ANCHOR = 500
@@ -96,6 +101,32 @@ def _merge_extra(payload: dict[str, Any], extra: Mapping[str, Any] | None) -> No
 def _check_length(name: str, value: str | None, limit: int) -> None:
     if value is not None and len(value) > limit:
         raise ReticulaError(BAD_INPUT, f"{name} is longer than {limit} characters")
+
+
+def clean_title(title: str | None, kind: str) -> str | None:
+    """A title as one line: tabs, line breaks and runs of whitespace become one
+    space and the ends are trimmed. Other control characters are refused, and
+    so is a title longer than its kind allows. Empty becomes None."""
+    if title is None:
+        return None
+    for ch in title:
+        if ch not in _TITLE_BREAKS and unicodedata.category(ch) == "Cc":
+            raise ReticulaError(
+                BAD_INPUT,
+                f"title contains the control character U+{ord(ch):04X}",
+                hint="a title is one line of text: tabs and line breaks become"
+                " spaces, other control characters are not allowed",
+            )
+    flat = " ".join(title.split())
+    limit = MAX_PAPER_TITLE if kind == "paper" else MAX_TITLE
+    if len(flat) > limit:
+        raise ReticulaError(
+            BAD_INPUT,
+            f"title is {len(flat)} characters, longer than {limit}",
+            hint=f"a {kind} title is at most {limit} characters; put the rest"
+            " in the text",
+        )
+    return flat or None
 
 
 def _check_kind(kind: str) -> None:
@@ -235,8 +266,7 @@ def create_atom(
     _check_kind(kind)
     text = text or ""
     _check_length("text", text, MAX_TEXT)
-    title = title.strip() if title else None
-    _check_length("title", title, MAX_TITLE)
+    title = clean_title(title, kind)
     _check_length("anchor", anchor, MAX_ANCHOR)
     _check_length("model", model, MAX_MODEL)
     _check_length("ext_id", ext_id, MAX_EXT_ID)
@@ -324,9 +354,9 @@ def update_atom(
         _check_length("text", text, MAX_TEXT)
         new["text"] = text
     if title is not None:
-        _check_length("title", title.strip(), MAX_TITLE)
-        if title.strip():
-            new["title"] = title.strip()
+        cleaned = clean_title(title, node["kind"])
+        if cleaned:
+            new["title"] = cleaned
         elif node["kind"] in ("hub", "paper"):
             raise ReticulaError(BAD_INPUT, f"a {node['kind']} needs a title")
         else:
