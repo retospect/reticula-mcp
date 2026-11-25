@@ -13,7 +13,6 @@ from typing import Any
 from reticula_mcp.accounts import Account
 from reticula_mcp.db.pool import Conn
 from reticula_mcp.permissions import (
-    current_nodes_sql,
     readable_hub_ids,
     readable_hub_sql,
     readable_nodes_sql,
@@ -69,12 +68,19 @@ def visible_subset(
     conn: Conn, viewer: Account, ids: Sequence[int], *, current: bool = False
 ) -> set[int]:
     """The ids among ``ids`` that ``viewer`` may read (``current``: and that no
-    readable atom supersedes)."""
+    readable atom supersedes).
+
+    ``current`` asks ``current_among`` (migration 0205): ``current_nodes`` asked
+    about these ids only, so a short list costs a few rows, not a pass over
+    everything the viewer may read."""
     if not ids:
         return set()
-    fn = current_nodes_sql if current else readable_nodes_sql
-    rows = conn.execute(
-        f"SELECT node_id FROM ({fn('%(viewer)s')}) v WHERE node_id = ANY(%(ids)s)",
-        {"viewer": viewer.id, "ids": list(ids)},
-    ).fetchall()
-    return {r["node_id"] for r in rows}
+    params = {"viewer": viewer.id, "ids": list(ids)}
+    if current:
+        statement = "SELECT node_id FROM current_among(%(viewer)s, %(ids)s::bigint[])"
+    else:
+        statement = (
+            f"SELECT node_id FROM ({readable_nodes_sql('%(viewer)s')}) v"
+            " WHERE node_id = ANY(%(ids)s)"
+        )
+    return {r["node_id"] for r in conn.execute(statement, params).fetchall()}
