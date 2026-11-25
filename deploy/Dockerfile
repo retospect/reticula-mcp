@@ -22,6 +22,12 @@ RUN useradd --create-home --uid 10001 reticula \
 ENV FASTEMBED_CACHE_PATH=/home/reticula/.cache/fastembed \
     PYTHONUNBUFFERED=1
 
+# The model download otherwise writes progress bars and a notice about
+# unauthenticated requests into the container log. A download that fails is
+# still logged: by fastembed as errors and by the server as a warning.
+ENV TQDM_DISABLE=1 \
+    HF_HUB_VERBOSITY=error
+
 # Wait for the database before the server starts. Compose orders the first
 # start with depends_on, but after a host reboot docker restarts both
 # containers at once, and `serve` exits when the database refuses the
