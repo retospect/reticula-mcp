@@ -4,6 +4,10 @@
 
 - Request log: a refused sign-in says why in a fixed word, for example `reason="signin: bad_credentials"`, `signin: throttled`, `signin: signup_rate` or `signin: link_gone`. A request refused for its `Host` or `Origin` header has `reason="Invalid Host header"` or `reason="Invalid Origin header"` on its line. The other lines of the log, such as a library's warning, now begin with the time in UTC.
 - `reticula-mcp connections list` has a `client` column. It holds what the request log prints as `client=` for that connection.
+- Search shows notes that have only some of the words. When fewer than three notes are found, notes with some of the words follow under the line `also, with some of the words:`, and each says which it has (`has: kiln, glaze`). A note is added this way only when one of its words is in at most 50 of the notes searched, so a name alone does not bring every note with that name. When no note has all the words, the first line says so: `no note has all of these words; 2 have some of them`. A note found only because it has half of the words or more was a result in 0.1.1; it now stands under that line.
+- When more notes have some of the words than are shown, a last line says how many and how to list them: `2 more have some of the words; a search for one of the words alone lists them`. It counts your own notes, the notes of people you gave access to a hub, and the notes in hubs you have filed into.
+- Any other note under that line is by somebody else and stands in a hub you have not filed into, or in one that anyone may file into. It is shown without its text, a note without a title as `(no title)`, and at most three of them are shown, after the others. 0.1.1 listed those with half of the words or more as results with their text, however many there were. Notes found in full, by all the words or by meaning, are listed as before.
+- The first line of a search says `1 result` for one result.
 
 ## 0.1.1 (2026-11-25)
 

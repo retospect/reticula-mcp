@@ -21,7 +21,7 @@ from __future__ import annotations
 import logging
 import re
 import string
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from pgvector import Vector
@@ -29,6 +29,7 @@ from psycopg import sql
 
 from reticula_mcp.accounts import Account
 from reticula_mcp.config import Settings
+from reticula_mcp.content.bootstrap import SHIPPED_TAG
 from reticula_mcp.db.pool import Conn
 from reticula_mcp.errors import ReticulaError
 from reticula_mcp.graph.paper import normalize_ext_id
@@ -67,6 +68,29 @@ TITLE_BY_INDEX = 100
 # match when no note has all of them (see _lexical). 0 keeps any note with one
 # of the words; 1 means every word, that is no second try at all.
 LOOSE_MIN_SHARE = 0.5
+# A search that shows fewer rows than this is filled up with notes that have
+# only some of the query's words (see _partial). They are returned apart from
+# the hits and shown under a line that says what they are.
+PARTIAL_FILL = 3
+# How many of the query's words are looked for in such a note: the first ones
+# of a query that is a whole pasted sentence.
+PARTIAL_WORDS = 16
+# Of the rows filled in, at most this many are from outside the viewer's own
+# notes and hubs (see _partial), so that a hub somebody shared unasked cannot
+# take them.
+PARTIAL_OTHERS = 1
+# Of the notes the keyword leg's second try found (half of the words or more),
+# at most this many from outside the viewer's own notes and hubs are shown.
+# Three keep a library that somebody shares findable; a hub filled with notes
+# to take the rows gets three of them and not ten.
+PARTIAL_KEPT_OTHERS = 3
+# A word of the query that more notes than this have (of those the viewer can
+# read, in the scope of the search) is a common word there: a name, "call",
+# "new". A note is filled in only when it has a word that is not common. In a
+# big account every such word is in hundreds of notes, and three of them say
+# nothing about the subject. A distance limit does not do this: among hundreds
+# of notes some are always near.
+PARTIAL_COMMON = 50
 # Words that name what is kept here rather than what a note says. "kiln notes"
 # asks for the notes about kilns, and those need not contain "notes": such a
 # word is never required of a note (see content_words). A note that has it
@@ -158,9 +182,20 @@ class Hit:
 
 
 @dataclass
+class Partial:
+    """A note that has only some of the query's words."""
+
+    node_id: int
+    words: list[str]  # the words of the query it has, as they were typed
+    near: bool  # the viewer wrote it, or it is near the viewer (see _partial)
+
+
+@dataclass
 class Found:
     hits: list[Hit]
     semantic: str  # SEMANTIC_ON | SEMANTIC_LOADING | SEMANTIC_OFF
+    partial: list[Partial] = field(default_factory=list)
+    more: int = 0  # notes near the viewer like those in ``partial``, not in it
 
 
 def _scope(
@@ -323,6 +358,16 @@ def _word_terms(words: list[str], args: dict[str, Any]) -> list[str]:
 def _lexical(
     conn: Conn, query: str, where: str, params: dict[str, Any], pool: int
 ) -> list[tuple[int, float]]:
+    """The keyword leg: the notes that have every word, or, when there is
+    none, the second try (see ``_keyword``)."""
+    return _keyword(conn, query, where, params, pool)[0]
+
+
+def _keyword(
+    conn: Conn, query: str, where: str, params: dict[str, Any], pool: int
+) -> tuple[list[tuple[int, float]], bool]:
+    """The keyword matches, and whether they are from the second try: notes
+    that do not have every word."""
     # ``q`` is what a note must have, ``every`` is all that was typed
     base = {**params, "q": content_words(query), "every": query, "pool": pool}
     # A query with no positive term (only negations such as "-zebra", or only
@@ -335,7 +380,7 @@ def _lexical(
     ).fetchone()
     nothing = ("", "T")
     if trees is None or trees["every"] in nothing:
-        return []
+        return [], False
     if trees["q"] in nothing:  # "the notes": the request word is all there is
         base["q"] = query
     # Both statements are planned for the words at hand each time
@@ -359,7 +404,7 @@ def _lexical(
         prepare=False,
     ).fetchall()
     if strict:
-        return [(r["id"], float(r["score"])) for r in strict]
+        return [(r["id"], float(r["score"])) for r in strict], False
     # No note has every content word: retry with those words OR-ed, and keep a
     # note only when it has at least LOOSE_MIN_SHARE of the distinct ones (one
     # common word such as "work" or "day" is not a match). Most words first.
@@ -385,7 +430,7 @@ def _lexical(
         {**base, "share": LOOSE_MIN_SHARE},
         prepare=False,
     ).fetchall()
-    return [(r["id"], float(r["score"])) for r in loose]
+    return [(r["id"], float(r["score"])) for r in loose], True
 
 
 def _trigram(
@@ -579,8 +624,10 @@ def _semantic(
     params: dict[str, Any],
     pool: int,
     keyword_ids: list[int] | None = None,
+    qvec: list[float] | None = None,
 ) -> list[tuple[int, float]]:
-    qvec = embed_query(embedder, query)
+    if qvec is None:
+        qvec = embed_query(embedder, query)
     dim = len(qvec)
     max_distance = float(getattr(embedder, "max_distance", 1.0))
     # Instructions come back through meaning for almost any question about
@@ -611,6 +658,185 @@ def _semantic(
         semantic_sql(embedder, dim, where, indexed=indexed), args
     ).fetchall()
     return [(r["id"], 1.0 - float(r["d"])) for r in rows]
+
+
+def _partial(
+    conn: Conn,
+    where: str,
+    params: dict[str, Any],
+    words: list[str],
+    minus: str,
+    *,
+    taken: list[int],
+    keep: list[int],
+    fill: int,
+    room: int,
+    model: tuple[str, list[float]] | None,
+) -> tuple[list[Partial], int]:
+    """Notes that have some of ``words`` and are not among the hits
+    (``taken``), and how many more such notes near the viewer there are than
+    are returned. Notes from outside are not counted: the count sends the
+    reader on to another search, and nobody else is to raise it.
+
+    ``keep`` are the notes the keyword leg's second try found and no other leg
+    did: they stay, as before, when they have a counted word, those from
+    outside (not near, see below) up to PARTIAL_KEPT_OTHERS. Beyond them the
+    result is filled until it has ``fill`` rows.
+
+    The rows filled in go first to the notes near the viewer. A note is near
+    when the viewer wrote it, when its author is somebody the viewer has given
+    access to a hub, or when it stands in a hub the viewer has filed something
+    into (not a hub anyone may file into): each is the viewer's own doing, so
+    nobody can make their notes near to someone else. Of all other notes at most
+    PARTIAL_OTHERS are filled in, and only into rows the near ones leave
+    empty: somebody who shares a hub unasked adds one row at most.
+
+    Order, for the choice and for the result: the near ones first, then the
+    notes with most of the words, then the nearest in meaning (``model``: the
+    model's name and the query's vector, None when the vector leg did not
+    run), then the newest. What is shipped with the product is never one of
+    them, and an instruction only when the search asks for that kind or the
+    second try found it. A note is filled in only when it has a word that is
+    not common among these notes (PARTIAL_COMMON). Never more than ``room``
+    rows.
+    """
+    words = words[:PARTIAL_WORDS]
+    if not words or room <= 0 or (fill <= 0 and not keep):
+        return [], 0
+    args: dict[str, Any] = {
+        **params,
+        "taken": taken,
+        "keep": keep,
+        "shipped": SHIPPED_TAG,
+        "fill": max(fill, 0),
+        "others": PARTIAL_OTHERS,
+        "kept_others": PARTIAL_KEPT_OTHERS,
+        "common": PARTIAL_COMMON,
+    }
+    terms = _word_terms(words, args)
+    has = ", ".join(f"n.fts @@ {term}" for term in terms)
+    any_word = " || ".join(terms)
+    places = range(1, len(terms) + 1)
+    few = ", ".join(f"count(*) FILTER (WHERE c.has[{i}]) <= %(common)s" for i in places)
+    telling = " OR ".join(f"(c.has[{i}] AND few.few[{i}])" for i in places)
+    excluded = ""
+    if minus:
+        # "-the" and a bare "-" exclude nothing: the query they make is empty,
+        # and an empty query matches no note
+        args["minus"] = minus
+        excluded = """
+            AND (numnode(websearch_to_tsquery('english', %(minus)s)) = 0
+                 OR n.fts @@ websearch_to_tsquery('english', %(minus)s))
+        """
+    distance, vectors = "NULL::float8", ""
+    if model is not None:
+        name, qvec = model
+        args.update(model=name, dim=len(qvec), vec=Vector(qvec))
+        distance = "e.vec <=> %(vec)s::vector"
+        vectors = (
+            "LEFT JOIN embedding e ON e.node_id = n.id"
+            " AND e.model = %(model)s AND e.dim = %(dim)s"
+        )
+    rows = conn.execute(
+        f"""
+        WITH c AS MATERIALIZED (
+            SELECT n.id, n.kind, n.author, n.author = %(person)s AS own,
+                   n.id = ANY(%(keep)s) AS kept,
+                   ARRAY[{has}] AS has, {distance} AS d
+            FROM node n {vectors}
+            WHERE n.fts @@ ({any_word}) AND {where}
+              AND n.id <> ALL(%(taken)s)
+              AND NOT (%(shipped)s = ANY(n.tags))
+              AND (n.id = ANY(%(keep)s) OR n.kind <> 'instruction'
+                   OR %(kind)s::text = 'instruction')
+              {excluded}
+        ), known AS MATERIALIZED (
+            -- the people the viewer has given access to a hub
+            SELECT DISTINCT g.grantee AS person
+            FROM hub_grant g
+            WHERE g.granted_by = %(person)s AND g.grantee <> %(person)s
+              AND g.mode IN ('read', 'add')
+        ), filed AS (
+            -- where the candidates stand, as the viewer may see it
+            SELECT c.id, m.hub_node_id AS hub
+            FROM c JOIN membership m ON m.node_id = c.id
+            WHERE NOT m.withdrawn
+              AND (m.audience = 'hub' OR m.author = %(person)s)
+        ), mine AS MATERIALIZED (
+            -- of those hubs, and of the candidates that are hubs: the ones
+            -- the viewer has filed something into, unless anyone may file
+            -- there
+            SELECT a.id, a.author = %(person)s AS own
+            FROM (SELECT hub AS id FROM filed
+                  UNION SELECT c.id FROM c WHERE c.kind = 'hub') h
+            JOIN node a ON a.id = h.id
+            WHERE a.payload->>'accept' IS DISTINCT FROM 'anyone'
+              AND EXISTS (
+                SELECT 1 FROM membership w
+                WHERE w.hub_node_id = a.id AND NOT w.withdrawn
+                  AND w.author = %(person)s)
+        ), used AS (
+            -- and can still read: that a note stands in a hub the viewer has
+            -- lost is not theirs to see. Who may read is worked out only when
+            -- one of the hubs is somebody else's.
+            SELECT m.id FROM mine m
+            WHERE m.own OR m.id IN ({readable_nodes_sql("%(viewer)s")})
+        ), few AS (
+            -- per word: no more than PARTIAL_COMMON of these notes have it
+            SELECT ARRAY[{few}] AS few FROM c
+        ), r AS (
+            SELECT c.id, c.own, c.kept, c.has, c.d,
+                   cardinality(array_positions(c.has, true)) AS n,
+                   ({telling}) AS telling,
+                   (c.own OR c.author IN (SELECT person FROM known)
+                    OR c.id IN (SELECT id FROM used)
+                    OR EXISTS (SELECT 1 FROM filed f
+                               WHERE f.id = c.id
+                                 AND f.hub IN (SELECT id FROM used))) AS near
+            FROM c, few
+        ), ranked AS (
+            SELECT r.*, count(*) FILTER (WHERE r.near) OVER () AS total,
+                   row_number() OVER (
+                       PARTITION BY r.kept, r.near
+                       ORDER BY r.n DESC, r.d ASC NULLS LAST, r.id DESC
+                   ) AS place
+            FROM r
+            WHERE r.kept OR r.telling
+        )
+        SELECT id, own, kept, has, n, near, d, total FROM ranked
+        WHERE CASE WHEN kept THEN near OR place <= %(kept_others)s
+                   WHEN near THEN place <= %(fill)s
+                   ELSE place <= %(others)s END
+        ORDER BY near DESC, n DESC, d ASC NULLS LAST, id DESC
+        """,
+        args,
+        prepare=False,  # planned for these words, see _keyword
+    ).fetchall()
+    # What the second try found stays: it was shown before. Of what it found
+    # outside, the first PARTIAL_KEPT_OTHERS. The rows still to fill go to the
+    # notes near the viewer (what the second try found outside takes none of
+    # them), and what is then left to at most PARTIAL_OTHERS notes from
+    # outside.
+    kept = [r for r in rows if r["kept"]]
+    spare = max(fill, 0) - sum(1 for r in kept if r["near"])
+    near = [r for r in rows if not r["kept"] and r["near"]][: max(spare, 0)]
+    spare -= len(near) + sum(1 for r in kept if not r["near"])
+    outside = [r for r in rows if not r["kept"] and not r["near"]]
+    outside = outside[: max(min(spare, PARTIAL_OTHERS), 0)]
+    chosen = {r["id"] for r in (*kept, *near, *outside)}
+    shown = [
+        Partial(
+            r["id"],
+            [word for word, there in zip(words, r["has"], strict=True) if there],
+            bool(r["near"]),
+        )
+        for r in rows
+        if r["id"] in chosen
+    ][:room]
+    # ``total``: every note near the viewer that could have been one of them
+    if not shown:
+        return [], 0
+    return shown, rows[0]["total"] - sum(1 for p in shown if p.near)
 
 
 def list_scope(
@@ -657,8 +883,11 @@ def hybrid_search(
     include_superseded: bool = False,
     settings: Settings | None = None,
 ) -> Found:
-    """Ranked hits (best first) among the nodes ``viewer`` may read, and
-    whether the vector leg took part."""
+    """Ranked hits (best first) among the nodes ``viewer`` may read, whether
+    the vector leg took part, and, when the hits are few, the notes that have
+    only some of the query's words (``Found.partial``, see ``_partial``) and
+    how many more of those there are (``Found.more``). Hits and partial
+    matches together are at most ``limit``."""
     where, params = _scope(
         viewer,
         hub_node_id=hub_node_id,
@@ -666,16 +895,19 @@ def hybrid_search(
         include_superseded=include_superseded,
     )
     pool = max(POOL_MIN, limit * 5)
+    words, minus = counted_words(conn, query)
     certain = [
         ("identifier", _identifier(conn, query, where, params, pool)),
         ("exact", _exact(conn, query, where, params, pool)),
     ]
+    keyword, second_try = _keyword(conn, query, where, params, pool)
     legs: list[tuple[str, list[tuple[int, float]]]] = [
         *certain,
-        ("lexical", _lexical(conn, query, where, params, pool)),
-        ("title", _trigram(conn, query, where, params, pool)),
+        ("lexical", keyword),
+        ("title", _trigram(conn, query, where, params, pool, words)),
     ]
     semantic = SEMANTIC_OFF
+    model: tuple[str, list[float]] | None = None
     try:
         embedder = get_embedder(settings or Settings.from_env())
         if not is_ready(embedder):
@@ -688,6 +920,7 @@ def hybrid_search(
         else:
             keyword_ids = [i for _, rows in legs for i, _ in rows]
             cheap = bool(getattr(embedder, "cheap", False))
+            qvec = embed_query(embedder, query)
             with conn.transaction():  # savepoint: trouble here must not sink a search
                 index.catch_up(
                     conn,
@@ -696,10 +929,11 @@ def hybrid_search(
                     seconds=None if cheap else index.CATCH_UP_SECONDS,
                 )
                 hits = _semantic(
-                    conn, embedder, query, where, params, pool, keyword_ids
+                    conn, embedder, query, where, params, pool, keyword_ids, qvec
                 )
             legs.append(("semantic", hits))
             semantic = SEMANTIC_ON
+            model = (embedder.model, qvec)
     except Exception:
         # No model, a dimension surprise, a full disk: keywords still work.
         log.warning("semantic leg skipped", exc_info=True)
@@ -709,5 +943,39 @@ def hybrid_search(
     first = list(dict.fromkeys(i for _, rows in certain for i, _ in rows))
     taken = set(first)
     rest = sorted((i for i in scores if i not in taken), key=lambda i: (-scores[i], -i))
-    ranked = (first + rest)[:limit]
-    return Found([Hit(i, scores[i], provenance[i]) for i in ranked], semantic)
+    # What only the keyword leg's second try found does not have all the
+    # words: it is a partial match, not a hit.
+    aside = (
+        {i for i in rest if set(provenance[i]) == {"lexical"}} if second_try else set()
+    )
+    ranked = [i for i in first + rest if i not in aside][:limit]
+
+    def partial_matches(
+        model: tuple[str, list[float]] | None,
+    ) -> tuple[list[Partial], int]:
+        return _partial(
+            conn,
+            where,
+            params,
+            words,
+            minus,
+            taken=ranked,
+            keep=[i for i in rest if i in aside],
+            fill=min(PARTIAL_FILL, limit) - len(ranked),
+            room=limit - len(ranked),
+            model=model,
+        )
+
+    if model is None:
+        partial, more = partial_matches(None)
+    else:
+        try:
+            with conn.transaction():  # savepoint, as for the vector leg
+                partial, more = partial_matches(model)
+        except Exception:
+            # the vectors gave trouble: order by the words alone
+            log.warning("partial matches without distances", exc_info=True)
+            partial, more = partial_matches(None)
+    return Found(
+        [Hit(i, scores[i], provenance[i]) for i in ranked], semantic, partial, more
+    )
