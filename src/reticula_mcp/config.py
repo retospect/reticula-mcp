@@ -43,6 +43,7 @@ class Settings:
     signup: str = "open"  # open | closed
     signup_rate: str = "5/hour"  # per IP
     register_rate: str = "20/hour"  # OAuth client registrations per IP
+    write_rate: str = "600/hour"  # put, edit, link, share and delete, per account
     # Peers whose X-Forwarded-For is believed (IPs or CIDRs); empty = trust nobody.
     trusted_proxies: tuple[str, ...] = ()
     # Hosts an assistant's connector returns to that the sign-in page does not warn about.
@@ -69,6 +70,7 @@ class Settings:
             signup=get("SIGNUP", "open") or "open",
             signup_rate=get("SIGNUP_RATE", "5/hour") or "5/hour",
             register_rate=get("REGISTER_RATE", "20/hour") or "20/hour",
+            write_rate=get("WRITE_RATE", "600/hour") or "600/hour",
             trusted_proxies=tuple(
                 part.strip()
                 for part in (get("TRUSTED_PROXIES") or "").split(",")
@@ -97,6 +99,7 @@ class Settings:
             raise ReticulaError(BAD_INPUT, "RETICULA_SIGNUP must be open|closed")
         parse_rate(self.signup_rate)
         parse_rate(self.register_rate)
+        parse_rate(self.write_rate)
         self._check_base_url()
         for proxy in self.trusted_proxies:
             try:

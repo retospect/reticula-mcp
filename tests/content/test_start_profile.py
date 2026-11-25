@@ -44,11 +44,14 @@ def test_start_lists_own_and_shared_hubs_with_modes(conn, make_account):
     graph.create_atom(conn, bob, kind="note", text="b1", hub_node_id=beta["id"])
 
     out = start(conn, bob)
-    assert "Your hubs (2):" in out
-    beta_line = next(line for line in out.splitlines() if line.startswith("- Beta"))
+    # The count covers the hubs bob owns; Alpha is listed apart.
+    assert "Your hubs (1):" in out
+    beta_line = next(line for line in out.splitlines() if line.startswith('- "Beta"'))
     assert f"id {short_id(beta['address'])}" in beta_line
     assert "owner" in beta_line and "1 person, 1 note" in beta_line
-    alpha_line = next(line for line in out.splitlines() if line.startswith("- Alpha"))
+    alpha_line = next(
+        line for line in out.splitlines() if line.startswith('- @alice "Alpha"')
+    )
     assert f"id {short_id(alpha['address'])}" in alpha_line
     assert " add " in alpha_line
     # two people hold Alpha (owner and bob); the private note is not counted
@@ -57,8 +60,8 @@ def test_start_lists_own_and_shared_hubs_with_modes(conn, make_account):
 
     # the other side sees its own hub as owner
     out_alice = start(conn, alice)
-    assert "- Alpha" in out_alice and "owner" in out_alice
-    assert "- Beta" not in out_alice
+    assert '- "Alpha"' in out_alice and "owner" in out_alice
+    assert "Beta" not in out_alice
 
 
 def test_start_names_other_instructions_and_hides_the_debug_hub(conn, make_account):

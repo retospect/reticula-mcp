@@ -187,6 +187,11 @@ def test_withdrawal_rights(conn, make_account):
     ]  # same statement, revived
     handlers.link(conn, b, ref=note, to=hub, remove=True)
     assert statements(conn, note, hub)[0] == (c.person_id, True)
+    # ... and then only an admin can file that note there again
+    assert code_of(handlers.link, conn, c, ref=note, to=hub) == "Forbidden"
+    handlers.link(conn, b, ref=note, to=hub)
+    handlers.link(conn, b, ref=note, to=hub, remove=True)  # the admin's own filing
+    handlers.link(conn, b, ref=note, to=hub)
     # the atom's author may withdraw any statement about their own atom
     handlers.link(conn, c, ref=note, to=hub)
     assert statements(conn, note, hub)[0] == (c.person_id, False)

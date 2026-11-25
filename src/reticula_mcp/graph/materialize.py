@@ -14,8 +14,9 @@ anyone's access:
 * a membership statement is stored when its author could add to the hub at that
   moment (and, for a hub, is the hub's author); it confers access only when
   filed by the atom's own author (see ``readable_nodes``);
-* a withdrawal is honoured from the statement's author, the hub's admin and the
-  atom's author;
+* a withdrawal is honoured from the statement's author, the admin of the hub
+  (or of a hub above it) and the atom's author; an atom an admin removed can be
+  filed there again only by an admin;
 * a grant is applied only when :func:`access.authorize_grant` allows it.
 """
 
@@ -209,11 +210,21 @@ def _apply_member(conn: Conn, rec: records.Record, payload: Row) -> None:
         return
     withdrawn = payload.get("withdrawn") is True
     existing = conn.execute(
-        "SELECT id FROM membership WHERE address = %s", (rec.address,)
+        "SELECT node_id, hub_node_id FROM membership WHERE address = %s",
+        (rec.address,),
     ).fetchone()
-    # The hub's admin and the atom's author may withdraw every statement about
-    # the atom in that hub; anyone else only their own.
-    privileged = rec.author in (hub["author"], atom["author"])
+    if existing is not None and (
+        existing["node_id"] != atom["id"] or existing["hub_node_id"] != hub["id"]
+    ):
+        # A statement is about one atom in one hub, for good: a later version of
+        # its address that names another atom or hub is refused, not half-applied.
+        return
+    # The hub's admin (the author of the hub or of a hub above it) and the atom's
+    # author may withdraw every statement about the atom in that hub; anyone else
+    # only their own.
+    is_admin = access.is_hub_admin(conn, rec.author, hub["id"])
+    privileged = is_admin or rec.author == atom["author"]
+    moderated = False
     if withdrawn:
         if existing is None and not privileged:
             return  # a stranger's withdrawal of someone else's filing: ignored
@@ -226,6 +237,8 @@ def _apply_member(conn: Conn, rec: records.Record, payload: Row) -> None:
                 " AND hub_node_id = %s AND NOT withdrawn",
                 (atom["id"], hub["id"]),
             )
+            # an admin removing someone else's atom: only an admin refiles it
+            moderated = is_admin and rec.author != atom["author"]
     else:
         # Anyone who can add to the hub may file an atom there (organising only:
         # readable_nodes honours the atom author's own statements alone), but a
@@ -234,9 +247,18 @@ def _apply_member(conn: Conn, rec: records.Record, payload: Row) -> None:
             return
         if not access.can_add_person(conn, rec.author, hub["id"]):
             return
+        if is_admin:
+            conn.execute(
+                "UPDATE membership SET moderated = false WHERE node_id = %s"
+                " AND hub_node_id = %s AND moderated",
+                (atom["id"], hub["id"]),
+            )
+        elif access.removed_by_admin(conn, atom["id"], hub["id"]):
+            return
     conn.execute(
         "INSERT INTO membership (address, node_id, hub_node_id, author, audience,"
-        " withdrawn, record_id, created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)"
+        " withdrawn, moderated, record_id, created_at)"
+        " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)"
         " ON CONFLICT (address) DO UPDATE SET audience = EXCLUDED.audience,"
         " withdrawn = EXCLUDED.withdrawn, record_id = EXCLUDED.record_id",
         (
@@ -246,6 +268,7 @@ def _apply_member(conn: Conn, rec: records.Record, payload: Row) -> None:
             rec.author,
             rec.audience,
             withdrawn,
+            moderated,
             rec.id,
             rec.created_at,
         ),

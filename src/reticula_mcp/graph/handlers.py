@@ -111,6 +111,15 @@ def _hubs_of_superseded(conn: Conn, viewer: Account, node: Row) -> list[Row]:
     return [r for r in rows if access.can_add_person(conn, viewer.person_id, r["id"])]
 
 
+def _paper_next(node: Row, ext_id: str | None) -> str:
+    """The hint for writing notes about a paper, with its real identifier."""
+    ident = node.get("ext_key") or ext_id or "<the same id>"
+    return (
+        f"write notes about it with put(text=..., ext_id={ident},"
+        " anchor=<first words of the passage>)"
+    )
+
+
 def put(
     conn: Conn,
     viewer: Account,
@@ -158,8 +167,18 @@ def put(
     )
     if kind == "paper" and node["author"] != viewer.person_id:
         return (
-            f"paper already known: {node['address']}\n"
-            "next: write notes about it with put(text=..., ext_id=...)"
+            f"paper already known: {node['address']}\nnext: {_paper_next(node, ext_id)}"
+        )
+    if kind == "debug" and hub is None and hub_row is not None:
+        # filed by the server, not chosen by the assistant: say so plainly
+        if node["audience"] == "private":
+            return (
+                f"saved debug note {node['address']}"
+                " (private: only you can read it, the operator does not)"
+            )
+        return (
+            f"saved debug note {node['address']}"
+            " (filed for the operator; only the operator reads it)"
         )
     where = f" in hub {hub_row['address']}" if hub_row else ""
     if debug_unfiled:
@@ -185,6 +204,8 @@ def put(
                 f"next: only you can read this until it is filed where the original"
                 f" is: {calls}"
             )
+    if kind == "paper":
+        nxt = f"next: {_paper_next(node, ext_id)}\n{nxt}"
     return f"saved {node['kind']} {node['address']}{where}\n{nxt}"
 
 
@@ -376,6 +397,11 @@ def share(
             "\nnote: only the owner adds in a personal hub, so they got read."
             f' edit(ref={hub_row["address"][-8:]}, preset="group") lets members add.'
         )
+    owned_before = (
+        len(access.hubs_to_detach(conn, hub_row["id"], grantee.person_id))
+        if mode == "none"
+        else 0
+    )
     api.set_grant(conn, viewer, hub_row["id"], grantee.person_id, mode)
     who = f"@{grantee.handle}"
     where = hub_row["address"]
@@ -386,6 +412,15 @@ def share(
             if left
             else ""
         )
+        detached = owned_before - len(
+            access.hubs_to_detach(conn, hub_row["id"], grantee.person_id)
+        )
+        if detached > 0:
+            extra += (
+                f"\n{detached} hub{'s' if detached != 1 else ''} owned by {who}"
+                f" {'were' if detached != 1 else 'was'} detached from this hub's"
+                " tree; notes others filed there stay readable to their owner"
+            )
         return f"{who} no longer has access to {where}{extra}"
     what = "read and add" if mode == "add" else "read"
     out = f"{who} can now {what} in {where} and in the hubs under it{note}"
