@@ -203,7 +203,7 @@ A note is addressed as `ret:<person id>/<uuid>`. Wherever a tool takes a `ref`, 
 - `share(hub, person, mode)` gives another account on the same instance access. `person` is `@handle` or a person ID. `mode` is `add` (read and add), `read` or `none` (revoke).
 - Access to a hub covers the hubs under it.
 - There is no publish step. A note its author files under a shared hub is readable by every member at once. A member who files someone else's note under the hub only organises it: members who cannot already read that note still cannot. `private=true` keeps a note to its author, even inside a shared hub.
-- You cannot edit someone else's note. You write your own with `supersedes`, and the old note stays readable by its address.
+- You cannot edit someone else's note. You write your own with `supersedes`, and the old note stays readable by its address. When both notes are filed by their authors in a hub they share, the correction replaces the original in search for everyone who can read both. The author of the original can keep it shown beside the correction with `link(ref=<their note>, to=<the correction>, rel="disputes")`.
 
 Hub presets: `group` (members read and add, any member may invite), `moderated` (members read and add, only the hub's owner invites), `personal` (only the owner adds, others read).
 
