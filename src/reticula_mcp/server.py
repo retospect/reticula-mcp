@@ -478,10 +478,7 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
         ] = False,
         from_hub: Annotated[
             str | None,
-            Field(
-                description="Move instead of adding: withdraw `ref` from this hub"
-                " and file it under `to`, in one step. " + _REF
-            ),
+            Field(description="Hub to move it out of."),
         ] = None,
         *,
         ctx: Context,
@@ -489,9 +486,8 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
         """Connect notes.
 
         `rel=part-of` files a note under a hub (a hub cannot end up inside itself)
-        and `remove=true` withdraws it; `from_hub` moves it from one hub to
-        another, and nothing changes if either half is refused. Other relations
-        (e.g. `supersedes`) are added to your note's own links as a new version.
+        and `remove=true` withdraws it. Other relations (e.g. `supersedes`) are
+        added to your note's own links as a new version.
         """
         return await run(
             ctx,

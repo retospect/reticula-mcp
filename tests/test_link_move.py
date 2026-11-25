@@ -38,6 +38,48 @@ def test_a_note_moves_in_one_call(conn, make_account):
     )
 
 
+def test_a_new_filing_says_where_else_the_note_is_and_how_to_move(conn, make_account):
+    z = make_account()
+    old, new = mk_hub(conn, z, "Garden"), mk_hub(conn, z, "Kitchen")
+    note = mk_note(conn, z, "x", title="Item", hub=old)
+    out = handlers.link(conn, z, ref=note, to=new)
+    assert out.splitlines()[-1] == (
+        f'still filed in hub {old[-8:]} "Garden"; to move it instead,'
+        f" link(ref='{note[-8:]}', to='{new[-8:]}', from_hub='{old[-8:]}')"
+    )
+
+
+def test_the_line_counts_several_other_hubs(conn, make_account):
+    z = make_account()
+    a, b, c = (mk_hub(conn, z, t) for t in ("A", "B", "C"))
+    note = mk_note(conn, z, "x", hub=a)
+    handlers.link(conn, z, ref=note, to=b)
+    out = handlers.link(conn, z, ref=note, to=c)
+    assert f'still filed in 2 other hubs, among them hub {a[-8:]} "A";' in out
+
+
+def test_no_line_for_a_first_filing_or_a_repeat_or_a_move(conn, make_account):
+    z = make_account()
+    a, b, c = (mk_hub(conn, z, t) for t in ("A", "B", "C"))
+    note = mk_note(conn, z, "x")
+    assert "still filed" not in handlers.link(conn, z, ref=note, to=a)
+    assert "still filed" not in handlers.link(conn, z, ref=note, to=a)
+    assert "still filed" not in handlers.link(conn, z, ref=note, to=b, from_hub=a)
+    assert "still filed" not in handlers.link(
+        conn, z, ref=note, to=c, rel="part-of", from_hub=b
+    )
+
+
+def test_only_the_writers_own_filings_are_named(conn, make_account):
+    owner, member = make_account(), make_account()
+    a, b = mk_hub(conn, owner, "A"), mk_hub(conn, owner, "B")
+    share(conn, owner, a, member, "add")
+    share(conn, owner, b, member, "add")
+    note = mk_note(conn, owner, "x", hub=a)  # filed in A by its author
+    out = handlers.link(conn, member, ref=note, to=b)
+    assert "still filed" not in out
+
+
 def test_a_hub_moves_and_its_contents_go_with_it(conn, make_account):
     z = make_account()
     a, b = mk_hub(conn, z, "A"), mk_hub(conn, z, "B")

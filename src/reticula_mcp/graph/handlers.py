@@ -18,7 +18,7 @@ from reticula_mcp.errors import (
     ReticulaError,
 )
 from reticula_mcp.graph import access, api
-from reticula_mcp.permissions import readable_nodes_sql
+from reticula_mcp.permissions import can_read, readable_nodes_sql
 from reticula_mcp.resolve import resolve_person, resolve_ref
 from reticula_mcp.search import render
 
@@ -357,7 +357,45 @@ def _file(conn: Conn, viewer: Account, node: Row, hub: Row) -> str:
     api.add_membership(conn, viewer, node["id"], hub["id"])
     verb = "already filed" if before else "filed"
     out = f"{verb} {_name(node)} under hub {_name(hub)}"
-    return out if own else out + _NOT_OWN
+    if not own:
+        out += _NOT_OWN
+    return out if before else out + _still_filed(conn, viewer, node, hub)
+
+
+def _still_filed(conn: Conn, viewer: Account, node: Row, hub: Row) -> str:
+    """After a new filing: a line naming another hub the viewer filed the note
+    in, with the call that would have moved it instead. Empty when there is
+    none."""
+    rows = conn.execute(
+        "SELECT h.* FROM membership m JOIN node h ON h.id = m.hub_node_id"
+        " WHERE m.node_id = %s AND m.author = %s AND NOT m.withdrawn"
+        " AND m.hub_node_id <> %s AND h.kind = 'hub' AND h.tombstoned_at IS NULL"
+        " ORDER BY m.id",
+        (node["id"], viewer.person_id, hub["id"]),
+    ).fetchall()
+    if not rows:
+        return ""
+    first = dict(rows[0])
+    if not can_read(conn, viewer, first["id"]):
+        first[_UNREAD] = True
+    ref, to, old = (render.short_ref(r["address"]) for r in (node, hub, first))
+    where = (
+        f"hub {_short_name(first)}"
+        if len(rows) == 1
+        else f"{len(rows)} other hubs, among them hub {_short_name(first)}"
+    )
+    return (
+        f"\nstill filed in {where}; to move it instead,"
+        f" link(ref='{ref}', to='{to}', from_hub='{old}')"
+    )
+
+
+def _short_name(row: Row) -> str:
+    """Short id and title, without the address: for a hint line."""
+    ref = render.short_ref(row["address"])
+    if row.get(_UNREAD):
+        return ref
+    return f"{ref} {render.quote(render.label(row))}"
 
 
 def _move(conn: Conn, viewer: Account, node: Row, hub: Row, from_ref: str) -> str:
