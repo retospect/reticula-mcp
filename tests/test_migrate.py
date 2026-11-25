@@ -148,7 +148,17 @@ def test_the_command_line_refuses_a_newer_schema_unless_told(
         )
         c.commit()
     capsys.readouterr()
-    for command in (["migrate"], ["serve"], ["serve", "--migrate"]):
+    for command in (
+        ["migrate"],
+        ["serve"],
+        ["serve", "--migrate"],
+        ["token", "--email", "nobody@example.com", "--label", "x"],
+        ["account", "create", "--email", "nobody@example.com"],
+        ["connections", "list", "--email", "nobody@example.com"],
+        ["rebuild"],
+        ["reindex"],
+        ["debug-notes"],
+    ):
         assert cli.main(command) == 1
         err = capsys.readouterr().err
         assert "[error:BadInput]" in err and "9999_from_a_later_release" in err

@@ -42,6 +42,15 @@ def _check_schema_age(settings: Settings, conn: Any) -> None:
     )
 
 
+def _refuse_newer_schema(settings: Settings) -> None:
+    """The check of ``_check_schema_age`` for a command that does not migrate
+    and does not serve: such a command reads and writes the same tables."""
+    from reticula_mcp.db import connect
+
+    with connect(settings.require_database_url()) as conn:
+        _check_schema_age(settings, conn)
+
+
 def _migrate(settings: Settings) -> int:
     from reticula_mcp import accounts
     from reticula_mcp.content import hooks
@@ -218,13 +227,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.port:
                 env["RETICULA_PORT"] = str(args.port)
         settings = Settings.from_env(env)
-        func = getattr(args, "func", None)
-        if func is not None:
-            return int(func(settings, args))
         if args.command == "serve":
             return _serve(settings, args.migrate)
         if args.command == "migrate":
             return _migrate(settings)
+        # Every other command works on the tables as this version knows them.
+        _refuse_newer_schema(settings)
+        func = getattr(args, "func", None)
+        if func is not None:
+            return int(func(settings, args))
         if args.command == "token":
             return _token(settings, args.email, args.label, args.ttl_days)
         if args.command == "account":
