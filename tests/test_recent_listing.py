@@ -21,6 +21,7 @@ from reticula_mcp.content import hooks as content_hooks
 from reticula_mcp.db.pool import Conn
 from reticula_mcp.errors import ReticulaError
 from reticula_mcp.graph import handlers as graph
+from reticula_mcp.search import recent as since_module
 from reticula_mcp.search import render
 from reticula_mcp.search.handlers import search
 from reticula_mcp.search.recent import parse_since
@@ -352,6 +353,30 @@ def test_a_note_written_straight_into_a_hub_is_written_not_filed(
         line = line_of(out, address)
         assert f"written {render.stamp(t2)}" in line, line
         assert "filed" not in line, line
+
+
+def test_the_margin_between_written_and_filed_is_five_seconds(
+    conn: Conn, make_account: Callable[..., Account], clock: Clock
+) -> None:
+    """A filing four seconds after the note was written counts as writing it;
+    one six seconds after is a filing. (``SAME_WRITE``, a rule of thumb.)"""
+    assert timedelta(seconds=5) == since_module.SAME_WRITE
+    ana, bea = people(conn, make_account)
+    hub = shared_hub(conn, clock, bea, ana)
+    with clock.ago(days=2) as t2:
+        soon = mk_note(conn, bea, "SOONFILED note")
+        late = mk_note(conn, bea, "LATEFILED note")
+    with clock.ago(days=2, seconds=-4):
+        graph.link(conn, bea, ref=soon, to=hub)
+    with clock.ago(days=2, seconds=-6) as after:
+        graph.link(conn, bea, ref=late, to=hub)
+    out = recent(conn, ana)
+    soon_line = line_of(out, soon)
+    assert f"written {render.stamp(t2)}" in soon_line, soon_line
+    assert "filed" not in soon_line, soon_line
+    late_line = line_of(out, late)
+    assert f"filed in this hub {render.stamp(after)}" in late_line, late_line
+    assert "written" not in late_line, late_line
 
 
 def test_a_note_filed_later_is_filed_with_the_hub_it_was_filed_in(
@@ -755,6 +780,37 @@ def test_words_with_since_search_only_notes_with_an_event_since(
     assert "edited" in line_of(out, revised)
     # without the restriction the old note is found too
     assert short(old) in search(conn, ana, query="kiln", limit=20)
+
+
+def test_words_with_since_say_when_not_every_match_was_checked(
+    conn: Conn,
+    make_account: Callable[..., Account],
+    clock: Clock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the ranked search gave back as many matches as were asked for, a
+    line says that only those were checked and how to narrow; otherwise not."""
+    use_hash_embedder(monkeypatch)
+    ana, bea = people(conn, make_account)
+    hub = shared_hub(conn, clock, bea, ana, days=40)
+    with clock.ago(days=30):
+        for n in range(4):
+            mk_note(conn, bea, f"kiln log number {n}", hub=hub)
+    mk_note(conn, bea, "kiln log of today", hub=hub)
+    whole = search(conn, ana, query="kiln log", since="7d")
+    assert "note: only the" not in whole, whole  # 5 matches, 200 asked for
+    monkeypatch.setattr(since_module, "RANKED", 3)
+    start = "note: only the 3 best matches for these words were checked"
+    out = search(conn, ana, query="kiln log", since="7d", limit=2)
+    said = [ln for ln in out.splitlines() if ln.startswith(start)]
+    assert len(said) == 1, out
+    assert "more exact words, or hub=<hub>, narrow it." in said[0]
+    assert out.splitlines()[-1].startswith("next: ")
+    in_hub = search(conn, ana, query="kiln log", since="7d", limit=2, hub=hub)
+    said = [ln for ln in in_hub.splitlines() if ln.startswith(start)]
+    assert len(said) == 1, in_hub
+    assert "hub=" not in said[0]
+    assert said[0].endswith("more exact words narrow it.")
 
 
 # -------------------------------------------------------------- quoted text
