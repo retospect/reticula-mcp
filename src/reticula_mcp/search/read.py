@@ -30,12 +30,9 @@ from reticula_mcp import format as fmt
 from reticula_mcp.accounts import Account
 from reticula_mcp.db.pool import Conn
 from reticula_mcp.errors import BAD_INPUT, NOT_FOUND, ReticulaError
+from reticula_mcp.graph.access import readers_above
 from reticula_mcp.graph.paper import ext_key_from_payload
-from reticula_mcp.permissions import (
-    current_nodes_sql,
-    read_through_above_sql,
-    readable_nodes_sql,
-)
+from reticula_mcp.permissions import current_nodes_sql, readable_nodes_sql
 from reticula_mcp.resolve import resolve_ref
 from reticula_mcp.search import render
 from reticula_mcp.search.rows import fetch_rows, visible_subset
@@ -674,11 +671,14 @@ def _access_line(conn: Conn, viewer: Account, hub: Row) -> str | None:
             continue  # the owner is already named
         who = f"@{g['handle']}" if g["handle"] else g["grantee"]
         parts.append(f"{who} {g['mode']}")
-    above = conn.execute(
-        f"SELECT {read_through_above_sql()} AS above", {"hub": hub["id"]}
-    ).fetchone()
-    if above and above["above"]:
-        # the grants on the hub itself are not everyone who reads it
+    # the grants on the hub itself are not everyone who reads it
+    above, others = readers_above(conn, viewer.person_id, hub["id"])
+    for p in above:
+        who = f"@{p['handle']}" if p["handle"] else p["person"]
+        parts.append(f"{who} {p['mode']} (through a hub above)")
+    if others and above:
+        parts.append("other people through a hub above")
+    elif others:
         parts.append("everyone with access to a hub above this one")
     return "access: " + ", ".join(parts)
 

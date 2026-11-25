@@ -360,7 +360,14 @@ def _list_access(conn: Conn, viewer: Account, hub: Row) -> str:
                 f"{_handle(conn, r['grantee'])} {r['mode']}"
                 f" (granted by {_handle(conn, r['granted_by'])})"
             )
-        if access.read_through_above(conn, hub["id"]):
+        # the grants on the hub itself are not everyone who reads it
+        above, others = access.readers_above(conn, viewer.person_id, hub["id"])
+        for p in above:
+            who = f"@{p['handle']}" if p["handle"] else p["person"]
+            lines.append(f"{who} {p['mode']} (through a hub above this one)")
+        if others and above:
+            lines.append("Other people read it through a hub above this one.")
+        elif others:
             lines.append(
                 "Everyone with access to a hub above this one can read it too."
             )

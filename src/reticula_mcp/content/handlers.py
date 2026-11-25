@@ -66,6 +66,19 @@ def _inherited_mode(conn: Conn, viewer: Account, hub_node_id: int) -> str:
     return row["mode"] if row["depth"] == 0 else f"{row['mode']} (from a parent hub)"
 
 
+def _through(above: list[dict[str, Any]], others: bool) -> str:
+    """The people who read a hub through a hub above it, for a hub line: up to
+    three handles, then how many more, or "and others" when there are people
+    this viewer is not shown."""
+    names = [f"@{p['handle']}" if p["handle"] else str(p["person"])[:12] for p in above]
+    text = ", ".join(names[:3])
+    if others:
+        return f"{text} and others"
+    if len(names) > 3:
+        return f"{text} and {len(names) - 3} more"
+    return text
+
+
 def _hub_rows(conn: Conn, viewer: Account) -> list[dict[str, Any]]:
     """Hubs the viewer can read, own first. Visibility comes only from
     ``readable_nodes``."""
@@ -98,6 +111,13 @@ def _hub_line(conn: Conn, viewer: Account, row: dict[str, Any]) -> str:
     # quoted, one line, cut short.
     name = quote(row["title"], HUB_TITLE_LIMIT) if row["title"] else "(untitled hub)"
     notes = f"{row['notes']} {'note' if row['notes'] == 1 else 'notes'}"
+    # Who reads it through a hub above. The SQL column is a cheap first test
+    # for every hub of the list; `readers_above` is exact and knows whom this
+    # viewer may be shown.
+    above: list[dict[str, Any]] = []
+    others_above = False
+    if row["above"] and (row["own"] or shown == "add"):
+        above, others_above = access.readers_above(conn, viewer.person_id, row["id"])
     # Who shares a hub is shown only to those who may see the list: the owner
     # gets the handles (a bare count was misread as "shared with others"), a
     # member who can add gets a count, a reader gets nothing.
@@ -113,18 +133,21 @@ def _hub_line(conn: Conn, viewer: Account, row: dict[str, Any]) -> str:
         ]
         more = f" and {len(names) - 3} more" if len(names) > 3 else ""
         shared = f"{', '.join(names[:3])}{more}" if names else "nobody"
-        if row["above"]:
-            # Other people read it through a hub above: "nobody" would be
-            # false and the grants here are not the whole list.
-            above = "everyone who has a hub above it"
-            shared = f"{shared} and {above}" if names else above
+        # Other people read it through a hub above: "nobody" would be false
+        # and the grants here are not the whole list.
+        if above:
+            through = f"{_through(above, others_above)} through a hub above it"
+            shared = f"{shared}, and with {through}" if names else through
+        elif others_above:
+            everyone = "everyone who has a hub above it"
+            shared = f"{shared} and {everyone}" if names else everyone
         count = f"  shared with {shared},"
-    elif shown == "add" and not row["above"]:
+    elif shown == "add" and not above and not others_above:
         people = row["grants"] + 1  # everyone with a grant, plus the owner
         count = f"  {people} people have access,"
     else:
-        # no head count for a hub under another hub: the grants on the hub
-        # itself are not everyone who reads it
+        # no head count for a hub that people read through a hub above: the
+        # grants on the hub itself are not everyone who reads it
         count = ""
     owner = ""
     if not row["own"]:

@@ -8,7 +8,6 @@ from typing import Any
 
 from reticula_mcp.db.pool import Conn
 from reticula_mcp.errors import BAD_INPUT, CONFLICT, FORBIDDEN, ReticulaError
-from reticula_mcp.permissions import read_through_above_sql
 
 Row = dict[str, Any]
 MODES = ("add", "read", "none")
@@ -48,14 +47,59 @@ def shown_access(conn: Conn, person_id: str, hub_node_id: int) -> str | None:
     return mode
 
 
-def read_through_above(conn: Conn, hub_node_id: int) -> bool:
-    """True when other people read the hub through a hub above it
-    (:func:`reticula_mcp.permissions.read_through_above_sql`)."""
-    row = conn.execute(
-        f"SELECT {read_through_above_sql()} AS above", {"hub": hub_node_id}
-    ).fetchone()
-    assert row is not None
-    return bool(row["above"])
+def readers_above(
+    conn: Conn, viewer_person_id: str, hub_node_id: int
+) -> tuple[list[Row], bool]:
+    """Who reads a hub through a hub above it, as far as the viewer may know.
+
+    They are the owner of each hub above and everyone with a grant on one,
+    except the hub's own owner and the people with a grant on the hub itself
+    (the hub's access list names those already).
+
+    Returns ``{"person", "handle", "mode"}`` rows for the people the viewer may
+    be shown, and whether there are others. The rule is the one of a hub's own
+    access list, applied to each hub above: its people are shown to its owner
+    and to those who can add to it. Nobody is named here whom the viewer could
+    not read off ``share(hub)`` of that hub above. A caller shows the rows only
+    to a viewer who gets the hub's own full list.
+
+    ``mode`` is what the person may do on this hub (``shown_access``).
+    """
+    rows = conn.execute(
+        "WITH above AS ("
+        "  SELECT n.id, n.author, n.audience,"
+        "    coalesce(hub_access(%(viewer)s, n.id) = 'add', false)"
+        "      AND can_add_person(%(viewer)s, n.id) AS visible"
+        "  FROM hub_ancestors(%(hub)s) a JOIN node n ON n.id = a.hub_id"
+        "), member AS ("
+        "  SELECT id AS above_id, author AS person, visible,"
+        "    0::bigint AS grant_id FROM above"
+        "  UNION ALL"
+        "  SELECT above.id, g.grantee, above.visible, g.id FROM above"
+        "  JOIN hub_grant g ON g.hub_node_id = above.id"
+        "    AND g.mode IN ('read', 'add')"
+        # a grant counts only on a hub whose audience is 'hub' (hub_access)
+        "  WHERE above.audience = 'hub'"
+        ") SELECT m.person, bool_or(m.visible) AS visible,"
+        "  (SELECT a.handle FROM account a WHERE a.person_id = m.person"
+        "    ORDER BY a.id LIMIT 1) AS handle,"
+        "  CASE WHEN hub_access(m.person, %(hub)s) = 'add'"
+        "    AND NOT can_add_person(m.person, %(hub)s) THEN 'read'"
+        "    ELSE coalesce(hub_access(m.person, %(hub)s), 'read') END AS mode"
+        " FROM member m JOIN node self ON self.id = %(hub)s"
+        " WHERE m.person <> self.author AND NOT EXISTS ("
+        "   SELECT 1 FROM hub_grant d WHERE d.hub_node_id = self.id"
+        "   AND d.grantee = m.person AND d.mode IN ('read', 'add'))"
+        " GROUP BY m.person"
+        " ORDER BY min(ARRAY[m.above_id, m.grant_id])",
+        {"viewer": viewer_person_id, "hub": hub_node_id},
+    ).fetchall()
+    shown = [
+        {"person": r["person"], "handle": r["handle"], "mode": r["mode"]}
+        for r in rows
+        if r["visible"]
+    ]
+    return shown, any(not r["visible"] for r in rows)
 
 
 def lock_hierarchy(conn: Conn) -> None:

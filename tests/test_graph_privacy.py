@@ -203,10 +203,11 @@ def test_add_on_a_parent_does_not_show_who_reads_a_personal_hub_below(
     # on the parent itself nothing changes for her
     assert "3 people have access" in line_for(content.start(conn, carol), "Parent")
     assert f"@{bob.handle} add" in handlers.share(conn, carol, hub=parent)
-    # and Bob, the owner, still sees his reader
+    # and Bob, the owner, still sees his reader, and the people on the parent,
+    # whose list he may see there (he can add to it)
     assert (
-        f"shared with @{dan.handle} and everyone who has a hub above it,"
-        in line_for(content.start(conn, bob), "Bobs diary")
+        f"shared with @{dan.handle}, and with @{owner.handle}, @{carol.handle}"
+        " through a hub above it," in line_for(content.start(conn, bob), "Bobs diary")
     )
     assert f"@{dan.handle} read" in handlers.share(conn, bob, hub=diary)
 
@@ -230,9 +231,10 @@ def test_a_hub_under_a_shared_hub_is_never_called_shared_with_nobody(
     assert can_read(conn, ben, note)  # the hub above gives him the note
 
     mine = content.start(conn, ada)
+    through = f"shared with @{ben.handle}, @{cleo.handle} through a hub above it,"
     for title in ("Hardware", "Diary"):
         line = line_for(mine, title)
-        assert "shared with everyone who has a hub above it," in line
+        assert through in line
         assert "nobody" not in line
     assert "shared with nobody," in line_for(mine, "Alone")
     assert f"shared with @{ben.handle}, @{cleo.handle}," in line_for(mine, "Project")
@@ -241,13 +243,14 @@ def test_a_hub_under_a_shared_hub_is_never_called_shared_with_nobody(
     assert "add (from a parent hub)" in theirs
     assert "have access" not in theirs and "people" not in theirs
 
+    # the owner, and a member who can add to the hub above, get the names
     for viewer in (ada, ben):
         listing = handlers.share(conn, viewer, hub=hardware)
-        assert "Everyone with access to a hub above this one can read it too." in (
-            listing
-        )
         shown = search.get(conn, viewer, ref=hardware)
-        assert "everyone with access to a hub above this one" in shown
+        for person in (ben, cleo):
+            assert f"@{person.handle} add (through a hub above this one)" in listing
+            assert f"@{person.handle} add (through a hub above)" in shown
+        assert "veryone with access to a hub above" not in listing + shown
     assert "hub above" not in handlers.share(conn, ada, hub=alone)
     assert "hub above" not in search.get(conn, ada, ref=alone)
     assert "hub above" not in handlers.share(conn, ada, hub=project)
@@ -260,10 +263,12 @@ def test_a_hub_under_a_shared_hub_is_never_called_shared_with_nobody(
     assert "hub above" not in handlers.share(conn, ada, hub=box)
     assert "hub above" not in search.get(conn, ada, ref=box)
     share(conn, ada, attic, ben, "read")
-    assert "shared with everyone who has a hub above it," in line_for(
+    assert f"shared with @{ben.handle} through a hub above it," in line_for(
         content.start(conn, ada), "Box"
     )
-    assert "hub above" in handlers.share(conn, ada, hub=box)
+    assert f"@{ben.handle} read (through a hub above this one)" in handlers.share(
+        conn, ada, hub=box
+    )
     # someone named on the sub-hub itself is not "through a hub above"
     crate = mk_hub(conn, ada, "Crate", parent=attic)
     share(conn, ada, crate, ben, "add")
@@ -274,6 +279,6 @@ def test_a_hub_under_a_shared_hub_is_never_called_shared_with_nobody(
     dan = make_account()
     share(conn, ada, hardware, dan, "read")
     assert (
-        f"shared with @{dan.handle} and everyone who has a hub above it,"
-        in line_for(content.start(conn, ada), "Hardware")
+        f"shared with @{dan.handle}, and with @{ben.handle}, @{cleo.handle}"
+        " through a hub above it," in line_for(content.start(conn, ada), "Hardware")
     )
