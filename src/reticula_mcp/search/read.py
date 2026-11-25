@@ -30,6 +30,7 @@ from reticula_mcp import format as fmt
 from reticula_mcp.accounts import Account
 from reticula_mcp.db.pool import Conn
 from reticula_mcp.errors import BAD_INPUT, NOT_FOUND, ReticulaError
+from reticula_mcp.graph.paper import ext_key_from_payload
 from reticula_mcp.permissions import current_nodes_sql, readable_nodes_sql
 from reticula_mcp.resolve import resolve_ref
 from reticula_mcp.search import render
@@ -48,6 +49,7 @@ TEXT_BREAK_WINDOW = 400  # look this far back for a line break or a space to cut
 HUB_TEXT_SHOWN = 2_000  # characters of a hub's own text
 HUB_TEXT_LINES = 25
 HISTORY_SHOWN = 20  # newest versions listed with history=true
+PAPER_NOTES_SHOWN = 20  # notes about a paper per page, like members of a hub
 LINE_BUDGET = 120  # a hub answer stops expanding sub-hubs at about this many lines
 RESERVED_LINES = 2  # kept free for the closing lines
 MAX_OFFSET = 10**12
@@ -453,6 +455,93 @@ def _text_part(row: Row, offset: int) -> list[str]:
     return lines
 
 
+def _about_lines(conn: Conn, viewer: Account, row: Row) -> list[str]:
+    """For a note written about a paper: the paper's entry (when the viewer can
+    read one) with the identifier, and the passage the note is about. Both were
+    typed by the note's author, so both are quoted."""
+    found = conn.execute(
+        "SELECT n.payload->'ext' AS ext, n.payload->>'anchor' AS anchor"
+        " FROM node n WHERE n.id = %s",
+        (row["id"],),
+    ).fetchone()
+    if found is None:
+        return []
+    lines: list[str] = []
+    # the key as put stores it today, whatever spelling this note was written with
+    key = ext_key_from_payload({"ext": found["ext"]})
+    if key and row["kind"] != "paper":
+        paper = conn.execute(
+            "SELECT n.id FROM node n WHERE n.kind = 'paper' AND n.ext_key = %(key)s"
+            f" AND n.id IN ({readable_nodes_sql('%(viewer)s')})"
+            " ORDER BY n.id LIMIT 1",
+            {"key": key, "viewer": viewer.id},
+        ).fetchone()
+        entry = (
+            fetch_rows(conn, viewer, [paper["id"]], text_chars=1).get(paper["id"])
+            if paper
+            else None
+        )
+        ident = render.quote(key, 80)
+        if entry:
+            lines.append(
+                f"about: {render.short_ref(entry['address'])} paper"
+                f" {_title(entry)} · {ident}"
+            )
+        else:
+            lines.append(f"about: {ident} (no paper entry for it that you can read)")
+    if found["anchor"]:
+        lines.append(f"anchor: {render.quote(str(found['anchor']), 300)}")
+    return lines
+
+
+def _paper_notes(
+    conn: Conn, viewer: Account, paper: Row, *, history: bool
+) -> list[str]:
+    """The newest notes written about this paper that the viewer can read. A
+    note is about the paper when it carries the paper's identifier. A search
+    for the identifier lists the paper and then all of them (``find.py``)."""
+    key = paper.get("ext_key")
+    if not key:
+        return []
+    about = (
+        "n.kind <> 'paper' AND n.payload ? 'ext'"
+        " AND n.payload->'ext'->>'key' = %(key)s AND n.tombstoned_at IS NULL"
+        f" AND n.id IN ({_visible_fn(history)})"
+    )
+    params = {"key": key, "viewer": viewer.id, "limit": PAPER_NOTES_SHOWN}
+    counted = conn.execute(
+        f"SELECT count(*) AS n FROM node n WHERE {about}", params
+    ).fetchone()
+    total = int(counted["n"]) if counted else 0
+    page = conn.execute(
+        f"SELECT n.id, n.payload->>'anchor' AS anchor FROM node n WHERE {about}"
+        " ORDER BY n.created_at DESC, n.id DESC LIMIT %(limit)s",
+        params,
+    ).fetchall()
+    if not page:
+        return ["notes about this paper: none yet that you can read"]
+    ids = [r["id"] for r in page]
+    rows = fetch_rows(conn, viewer, ids, text_chars=200)
+    # without history the ids came out of current_nodes: none is superseded
+    current = visible_subset(conn, viewer, ids, current=True) if history else set(ids)
+    lines = [f"notes about this paper (newest first, {len(page)} of {total}):"]
+    for r in page:
+        note = rows.get(r["id"])
+        if note is None:
+            continue
+        lines.append(
+            render.row_line(note, viewer.person_id, superseded=r["id"] not in current)
+        )
+        if r["anchor"]:
+            lines.append(f"  anchor: {render.quote(str(r['anchor']), 200)}")
+    if total > len(page):
+        lines.append(
+            f"... {total - len(page)} more: search(query={render.quote(str(key), 300)},"
+            f" kind='note', limit={min(total, 50)}) lists the notes about a paper"
+        )
+    return lines
+
+
 def _render_note(
     conn: Conn, viewer: Account, row: Row, *, history: bool, offset: int
 ) -> str:
@@ -468,6 +557,7 @@ def _render_note(
     lines.append(_byline(conn, viewer, row))
     if row.get("ext_key"):
         lines.append(f"ext: {render.quote(str(row['ext_key']), 80)}")
+    lines.extend(_about_lines(conn, viewer, row))
     if row["audience"] == "private":
         lines.append("private: only you can read this")
     filed = _paths(conn, viewer, row["id"])
@@ -480,6 +570,12 @@ def _render_note(
     if history:
         lines.extend(_history_lines(conn, row["address"]))
     lines.extend(_text_part(row, 0))
+    if row["kind"] == "paper" and row.get("ext_key"):
+        lines.extend(_paper_notes(conn, viewer, row, history=history))
+        lines.append(
+            f"next: put(text=<your note>, ext_id={render.quote(str(row['ext_key']), 300)},"
+            " anchor=<first words of the passage>) writes a note about this paper"
+        )
     for theirs in chain.disputable[:3]:
         # someone else's correction hides this note from search and hub lists
         # unless its author says they do not accept it
