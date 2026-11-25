@@ -1,12 +1,9 @@
 """Test support for the search lane.
 
-The graph lane replaces the foundation stub of ``readable_nodes`` in parallel.
-These tests must hold for the FINAL semantics documented in
-``0005_visibility.sql``, so :func:`install_final_readable` installs, inside the
-test's own (rolled-back) transaction, a ``CREATE OR REPLACE FUNCTION
-readable_nodes`` that implements exactly that documented rule. It is test
-scaffolding, never a migration. State is written through the frozen foundation
-modules (``make_atom``) and direct SQL on the frozen tables.
+Cheap state for read-side tests: atoms through the frozen foundation
+(``make_atom``) and direct SQL on the frozen graph tables, read back through the
+real ``readable_nodes`` (migration 0200). Tests of what a write does to
+visibility use the graph handlers instead (``tests/test_search_access.py``).
 """
 
 from __future__ import annotations
@@ -21,36 +18,6 @@ from reticula_mcp.accounts import Account
 from reticula_mcp.db.pool import Conn
 from reticula_mcp.search import embedder as embedder_module
 from tests.helpers import make_atom
-
-FINAL_READABLE_NODES = """
-CREATE OR REPLACE FUNCTION readable_nodes(viewer bigint)
-RETURNS TABLE (node_id bigint) LANGUAGE sql STABLE AS $$
-    WITH RECURSIVE me AS (SELECT person_id FROM account WHERE id = viewer),
-    covered(id) AS (
-        SELECT g.hub_node_id FROM hub_grant g, me
-        WHERE g.grantee = me.person_id AND g.mode IN ('read', 'add')
-        UNION
-        SELECT m.node_id FROM membership m
-        JOIN covered c ON m.hub_node_id = c.id
-        JOIN node h ON h.id = m.node_id AND h.kind = 'hub'
-        WHERE NOT m.withdrawn AND m.audience = 'hub'
-    )
-    SELECT n.id FROM node n, me
-    WHERE n.tombstoned_at IS NULL AND (
-        n.author = me.person_id
-        OR (n.audience = 'hub' AND (
-            n.id IN (SELECT id FROM covered)
-            OR EXISTS (
-                SELECT 1 FROM membership m
-                WHERE m.node_id = n.id AND NOT m.withdrawn AND m.audience = 'hub'
-                  AND m.hub_node_id IN (SELECT id FROM covered))))
-    )
-$$
-"""
-
-
-def install_final_readable(conn: Conn) -> None:
-    conn.execute(FINAL_READABLE_NODES)
 
 
 def use_hash_embedder(monkeypatch: pytest.MonkeyPatch) -> None:

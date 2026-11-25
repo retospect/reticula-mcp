@@ -1,8 +1,7 @@
 """Search lane scenario tests: one per acceptance line.
 
 Shared-hub state is built with ``tests/search_support`` (direct SQL on the
-frozen tables plus ``make_atom``) on top of a test-local ``readable_nodes`` that
-implements the FINAL documented semantics; see that module.
+frozen tables plus ``make_atom``) and read through the real ``readable_nodes``.
 """
 
 from __future__ import annotations
@@ -20,7 +19,6 @@ from tests.search_support import (
     file_under,
     grant,
     hub_of,
-    install_final_readable,
     link,
     set_created,
     supersede,
@@ -30,8 +28,7 @@ from tests.search_support import (
 
 
 @pytest.fixture(autouse=True)
-def final_world(conn, monkeypatch):
-    install_final_readable(conn)
+def final_world(monkeypatch):
     use_hash_embedder(monkeypatch)
 
 
