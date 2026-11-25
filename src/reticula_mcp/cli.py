@@ -11,6 +11,8 @@ from dataclasses import replace
 from datetime import timedelta
 from typing import Any
 
+import psycopg
+
 from reticula_mcp import __version__
 from reticula_mcp.config import Settings
 from reticula_mcp.errors import ReticulaError
@@ -172,6 +174,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _account_create(settings, args.email, args.password, args.handle)
     except ReticulaError as exc:
         print(exc.render(), file=sys.stderr)
+        return 1
+    except psycopg.OperationalError as exc:
+        reason = str(exc).strip().splitlines()[0] if str(exc).strip() else "no answer"
+        print(
+            f"[error:Unavailable] cannot reach the database: {reason}\n"
+            "hint: check RETICULA_DATABASE_URL and that PostgreSQL is running",
+            file=sys.stderr,
+        )
         return 1
     return 2
 

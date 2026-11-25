@@ -6,6 +6,7 @@ import ipaddress
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 from reticula_mcp.errors import BAD_INPUT, ReticulaError
 
@@ -96,6 +97,7 @@ class Settings:
             raise ReticulaError(BAD_INPUT, "RETICULA_SIGNUP must be open|closed")
         parse_rate(self.signup_rate)
         parse_rate(self.register_rate)
+        self._check_base_url()
         for proxy in self.trusted_proxies:
             try:
                 ipaddress.ip_network(proxy, strict=False)
@@ -105,10 +107,37 @@ class Settings:
                     f"RETICULA_TRUSTED_PROXIES: {proxy!r} is not an IP or CIDR",
                 ) from exc
 
+    def _check_base_url(self) -> None:
+        """OAuth needs https, except on this machine itself."""
+        parts = urlsplit(self.base_url)
+        host = parts.hostname or ""
+        local = host in ("localhost", "127.0.0.1", "::1")
+        if parts.scheme not in ("http", "https") or not host or parts.path.strip("/"):
+            raise ReticulaError(
+                BAD_INPUT,
+                f"RETICULA_PUBLIC_URL {self.base_url!r} is not a base URL",
+                hint="give scheme and host only, e.g. https://notes.example.net",
+            )
+        if parts.scheme != "https" and not local:
+            name = "RETICULA_PUBLIC_URL" if self.public_url else "RETICULA_HOST"
+            raise ReticulaError(
+                BAD_INPUT,
+                f"{name}: {self.base_url} is neither https nor this machine;"
+                " sign-in needs https everywhere else",
+                hint="set RETICULA_PUBLIC_URL to the https address clients use",
+            )
+
     @property
     def base_url(self) -> str:
         """External base URL (no trailing slash): the OAuth issuer/resource root."""
-        return self.public_url or f"http://{self.host}:{self.port}"
+        if self.public_url:
+            return self.public_url
+        # Listening on every interface says nothing about the name clients use;
+        # without a public URL that is this machine.
+        host = "127.0.0.1" if self.host in ("0.0.0.0", "::", "") else self.host
+        if ":" in host:
+            host = f"[{host}]"
+        return f"http://{host}:{self.port}"
 
     @property
     def resource_url(self) -> str:

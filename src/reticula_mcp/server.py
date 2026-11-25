@@ -96,6 +96,9 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
         transport_security=_transport_security(settings),
     )
 
+    # FastMCP has no version parameter; without this clients are told the SDK's.
+    mcp._mcp_server.version = __version__
+
     # Every tool is registered with structured_output=False: the tools answer in
     # text. Otherwise FastMCP derives an output schema from `-> str` and clients
     # hand the model a JSON-escaped {"result": "..."} instead of the lines.
