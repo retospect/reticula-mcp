@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased
+
 ## 0.2.0 (2026-11-25)
 
 - Request log: a refused sign-in says why in a fixed word, for example `reason="signin: bad_credentials"`, `signin: throttled`, `signin: signup_rate` or `signin: link_gone`. A request refused for its `Host` or `Origin` header has `reason="Invalid Host header"` or `reason="Invalid Origin header"` on its line. The other lines of the log, such as a library's warning, now begin with the time in UTC.
