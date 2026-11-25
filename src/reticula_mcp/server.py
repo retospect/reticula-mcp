@@ -244,6 +244,18 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
                 " (default false)."
             ),
         ] = False,
+        since: Annotated[
+            str | None,
+            Field(
+                # Trialled text. Of nine forms tried it is the only one with
+                # which an assistant still calls `start` first in both
+                # settings. It stays one sentence, and `since` stays the last
+                # parameter: the same text in second place lost that.
+                description="Only what was written or changed since then: `7d`,"
+                ' `36h`, `2w` or a date (`2026-11-20`; for "last week" the'
+                " date of its Monday)."
+            ),
+        ] = None,
         *,
         ctx: Context,
     ) -> str:
@@ -261,6 +273,7 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
             kind=kind,
             limit=limit,
             include_superseded=include_superseded,
+            since=since,
         )
 
     @mcp.tool(structured_output=False)

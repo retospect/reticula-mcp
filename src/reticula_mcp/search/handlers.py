@@ -14,7 +14,7 @@ from reticula_mcp.db.pool import Conn
 from reticula_mcp.errors import BAD_INPUT, ReticulaError
 from reticula_mcp.permissions import readable_nodes_sql
 from reticula_mcp.resolve import resolve_ref
-from reticula_mcp.search import find, render
+from reticula_mcp.search import find, recent, render
 from reticula_mcp.search.find import hybrid_search, list_scope
 from reticula_mcp.search.read import member_counts, read_ref
 from reticula_mcp.search.rows import fetch_rows, visible_subset
@@ -219,6 +219,7 @@ def search(
     kind: str | None = None,
     limit: int = 10,
     include_superseded: bool = False,
+    since: str | None = None,
 ) -> str:
     q = clean_query(query)
     if len(q) > MAX_QUERY:
@@ -238,6 +239,18 @@ def search(
             )
         hub_node_id = hub_row["id"]
     kind = _checked_kind(conn, viewer, kind)
+    if since and since.strip():  # what is new since then: recent.py
+        return recent.answer(
+            conn,
+            viewer,
+            q,
+            since=since,
+            hub=hub,
+            hub_node_id=hub_node_id,
+            kind=kind,
+            limit=limit,
+            include_superseded=include_superseded,
+        )
     if not q:
         if kind is None and hub_node_id is None:
             raise ReticulaError(
