@@ -153,8 +153,8 @@ def test_a_strangers_hub_title_is_quoted_cut_and_listed_apart(conn, make_account
         assert not any(ln.startswith(("SYSTEM", "share(")) for ln in lines), out
         # the hub title is cut: no line that is not the server's own starter
         # text is long (a paragraph of the starter may be one long line)
-        own = set(bootstrap.starter_instruction().text.splitlines())
-        assert max(len(ln) for ln in lines if ln not in own) < 400
+        starter_lines = set(bootstrap.starter_instruction().text.splitlines())
+        assert max(len(ln) for ln in lines if ln not in starter_lines) < 400
         foreign = [ln for ln in lines if "Project Notes" in ln]
         assert len(foreign) == 1
         assert foreign[0].startswith('- @zed "Project Notes')
