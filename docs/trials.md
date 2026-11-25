@@ -1,6 +1,6 @@
 # Trials with assistants that had never seen Reticula
 
-Reticula is used by language models, not by people. These trials watched models that knew nothing about it try to use it, recorded what they did, and ran again after each fix. This page is the record: the method, the rounds, what went wrong, what was changed and what is still open. About 7,800 runs in all.
+Reticula is used by language models, not by people. These trials watched models that knew nothing about it try to use it, recorded what they did, and ran again after each fix. This page is the record: the method, the rounds, what went wrong, what was changed and what is still open. About 10,400 runs in all.
 
 ## Method
 
@@ -52,6 +52,10 @@ Round one's system prompt did not name the person. In one run the model took a f
 | 21 | Ada has twelve hubs of her own, so `start` does not list the two hubs of Bea that she can read. This week Bea wrote two notes in the first, filed a note of four weeks ago into it, and shared the second. "What is new?" "Has anyone shared something new with me?" "What did Bea write this week?" | Ada is told what is new, with both hubs named by their titles. The filed note is not passed off as written this week. |
 | 22 | Ada asks for help with an email and mentions, without "remember", a decision ("On Monday we decided to switch the greenhouse sensors to their LoRa boards, so our Wi-Fi order 4471 is cancelled"), a preference ("three sentences at most, and sign it just Ada"), then a result and small talk ("the LoRa boards reached 1.2 km through the greenhouse. It has been raining all day here"). A new conversation: "Draft the order for the new greenhouse sensors to Greenline. Which board did we choose, and what range did the test give?" | The decision, the preference and the result are saved, without asking each time; the rain is not. The new conversation has the board and the range. |
 | 23 | Ada has a hub "Kestrel drone" and a hub "Garden". "Put these into my Kestrel drone hub: the propellers are now 10 inch carbon ones, and the flight controller runs ArduPilot 4.5. The first test flight with them lasted 24 minutes." "In my Garden hub, note that the tomatoes go in on 15 May and the beans two weeks later." Two notes in the drone hub are linked as related-to: "My note on the payload limit is linked to the one on the battery pack. They have nothing to do with each other: take that link away, but keep both notes." | Short titles that say the idea without the hub's name; the link is gone and both notes stay. |
+| 24 | Ada has a hub "Ceramics" of 40 notes and a hub "Conference" of 223 in 22 subjects. "In my Ceramics hub, what did I write about the celadon glaze?" "In my Conference hub, when does the keynote speaker land, and who meets her?" "Give me an overview of what is in my Conference hub." "What is new in my Conference hub?" | The named note is found without reading the whole hub; the overview covers the subjects; what is new names the three notes written last. |
+| 25 | Ada has a hub "Greenhouse" with three monthly sensor reports and a note that the pump is under warranty. "Remember this for the greenhouse: the pump stopped on Tuesday. The cause was a blocked intake filter. And the warranty does not cover damage from a blocked filter. Connect the notes so that whoever reads one finds the others and sees how they relate." "I summed up the three sensor reports ... Save that summary and connect it to the reports." "Tag my greenhouse notes so that I can find them by subject later." | Links whose names say how the notes relate, in the right direction; a few tags per note. |
+| 26 | A new account. "Remember that my bike's rear tyre takes 4.5 bar." Then "Yes, use Reticula as my memory from now on." A new conversation: "What pressure does my bike's rear tyre take?" | The note is saved first; the person is asked once and given the standing line and where it goes; the later conversation answers 4.5 bar. |
+| 27 | Ada has hubs "Garden" and "Kitchen"; a recipe is in the garden hub. "My tomato sauce recipe is in the Garden hub. Move it to the Kitchen hub." | The recipe is in the kitchen hub only; the other note stays. |
 
 ## Round one: before any change
 
@@ -864,6 +868,91 @@ Three texts were tried: in the description of `put`'s `title`, "the one idea of 
 - **Taking a relation away already worked.** Every run, on main too, called `link(remove=true, rel="related-to")` and kept both notes.
 
 None of the three was taken.
+
+## Round fifteen: names for links, and tags
+
+576 runs on main `9cf6017`, three arms, Haiku and Sonnet, both settings.
+
+`link` takes any relation name. Two lines in the starter, after the rule on `private`, and a new instruction note, "How to tag and link notes", name a set taken from another memory tool, precis:
+
+```
+- Link two notes with `link(ref=<A>, to=<B>, rel=...)`: `related-to` (the default, see also), `supports`, `explains` (A is the cause of B), `qualifies` (A is an exception to B), `generalises` (A is broader), `derived-from` (A was made from B), `cites` (A refers to a paper). `disputes` is for your note against a correction of it.
+- Tags: two or three per note, lowercase with hyphens; `topic:` for a subject shared across hubs, `project:` for an initiative.
+```
+
+Scenario 25 is new: the person asks to save a failure, its cause and an exception to a warranty, "connected so that whoever reads one finds the others"; then a summary of three reports, connected to them; then to tag the notes.
+
+| Scenario 25, 48 runs a model on each arm | Main | The note alone | Lines and note |
+|---|---|---|---|
+| relation names outside the set | 269 | 135 | 0 |
+| the cause linked `explains` to the failure, of 48 | 0 | 40 | 37 |
+| the warranty note linked `qualifies`, of 48 | 10 | 43 | 48 |
+| the summary linked `derived-from` to a report, of 144 | 9 | 30 | 144 |
+| tags per note | 3.0 | 1.8 | 2.0 |
+
+- **Without a set, every run coined its own.** Main had `summarizes` 108 times, `relates-to` 71, `caused-by` 22, and `excluded-by`, `has-exclusion`, `triggers-exclusion`, `warranty-outcome`. `relates to`, with a space, was refused.
+- **With the lines, no name outside the set, and no link the wrong way round.**
+- **The note alone came up in the search results of every run, and was opened in some.** It helped with the cause and the exception, and not with the summary: `summarizes` stayed, 105 times.
+- **Tags were lowercase with hyphens on every arm.** `topic:` and `project:` came only with the texts.
+- **Refs shortened by the assistant itself.** On every arm, 14 to 18 calls per 12 runs were refused because the assistant cut an address to a suffix that is no id (`no readable note ends in ...`). The reply of a write prints only the full address on this main; short ids in that reply are in the next round.
+
+Both texts are read after `start` and cannot move the first call. The cells that moved, Haiku's scenario 4 in chat 12 to 9 and Sonnet's "Forget ..." with the client's own prompt 5 to 1, are of the size of round thirteen's noise. Taken.
+
+## Round sixteen: the texts of 0.3.0, together
+
+960 runs. Every text waiting for 0.3.0 was run at once, as it would ship, beside main `35469ff`, and then the combination was split where it lost. The texts: notes two links away in `get` (`depth=2`); a hub with more than 26 notes shown in lettered groups, with a new parameter `part` on `get` to open one; several refs in one `get`, with the sentence "Up to 10 at once, separated by spaces or commas." on its `ref`; write replies that name the note by short id and title first (`saved note 542b1dbc "Lighthouses migrate in winter" (ret:...) in hub 23b6d67b "Coast" (ret:...)`); and round fifteen's relations and tags. Scenario 24 is new: a hub of 40 notes and one of 223, a named note in each, an overview of the big one, and "What is new in my Conference hub?".
+
+| Haiku, `start` first, chat | Main | All together | Without `part` | Without the sentence on refs |
+|---|---|---|---|---|
+| scenario 4, first conversation | 11 of 12, 23 of 24 | 1 of 12, 0 of 24 | 24 of 24 | 0 of 24 |
+| scenario 4, second conversation | 10 of 12, 23 of 24 | 12 of 12, 24 of 24 | 17 of 24 | 4 of 24 |
+| scenario 18, first conversation | 11 of 12, 12 of 12 | 9 of 12, 10 of 12 | 6 of 12 | 12 of 12 |
+
+- **Each of the two new texts of `get` cost a gate cell.** With `part` in the tool list, the first conversation of scenario 4 ("The note about the group meeting is wrong ... Fix it.") began with `start` in 0 of 24 runs; without it, in 24 of 24. The sentence on several refs cost scenario 18's first conversation. Both are held; the groups need `part`, so they are held too.
+- **The groups did what they were for.** Sonnet's overview of the 223-note hub took 140 and 148 calls on main, reading the page of 20 again and again, and 24 and 24 with the groups. Haiku named all three of the newest notes for "What is new in my Conference hub?" in 9 of 24 runs on main and 23 of 24 with them. A named note was found in two calls on both, by search. The letters reached the person in 12 of 48 overviews ("venue, lift, dock (A)"); they mean nothing outside one listing.
+- **The first form of the groups changed from call to call.** Before this batch, three listings of the same hub in a row differed, and for 0 of 26 letters did `part` open the group the listing named: the groups were computed while the notes' vectors were still being written. The fixed form groups by words until every note has a vector, and the listing says so. With it, 26 of 26.
+- **Short ids in the write reply ended the refs that assistants cut themselves.** In scenario 25, calls refused because the assistant had shortened an address to a suffix that is no id: 15, 15, 6 and 11 per 12 runs on main, 1, 0, 0 and 0 with the new reply. The cost: an id reached the person in 7 of 144 runs against 4, three of them in Haiku's correction of Ben's note ("supersedes his note (new note b90fc5fc)").
+- **Taken:** `depth=2`, the write replies, the relations and tags. None of them changes what an assistant reads before its first call.
+
+## Round seventeen: a standing line, and onboarding
+
+1,080 runs. Rounds fourteen and sixteen showed that no text of the server makes an assistant call `start` for a request that does not look like memory, such as an email. The client's own standing instructions can: a CLAUDE.md, a preference in the app, a project's instructions. The line proposed for them:
+
+```
+Use the Reticula connector as long-term memory: call its start tool at the beginning of every conversation, search it before answering from memory, and save there what should outlast the conversation.
+```
+
+### With the line in the client's instructions
+
+The same arm, main's texts, without and with the line. In the chat setting the line followed the system prompt; with the client's own prompt it was appended to it.
+
+| 12 runs a cell, without the line / with it | Chat | Client's own prompt |
+|---|---|---|
+| email conversation began with `start`, Haiku | 0 / 12 | 0 / 12 |
+| the same, Sonnet | 8 / 12 | 0 / 12 |
+| the facts said in passing saved, Haiku | 0 / 12 | 0 / 12 |
+| the same, Sonnet | 8 / 12 | 0 / 12 |
+| the later conversation had the board and the range, Haiku | 0 / 12 | 0 / 12 |
+| the same, Sonnet | 8 / 12 | 0 / 12 |
+| Haiku's weakest gate cell ("Forget ...") began with `start` | 12 / 12 | 1 / 12 |
+
+With the line every gate cell of both models was 12 of 12. Small talk was saved in 1 of 48 runs; Haiku saved the preference ("three sentences at most, and sign it just Ada") in only 3 of 24. In scenarios 3 and 18 the line wrote no note more.
+
+### Onboarding
+
+The line has to get into the client. On the first `start` of a connection the server adds one line, "First time on this connection: read the instruction get(ref=...) and follow it once", and the instruction says: answer what the person came with first, then ask once whether Reticula should be their memory from now on, and if yes, put the line where the app reads it and say so. Scenario 26 is new: a new account's first conversation ("Remember that my bike's rear tyre takes 4.5 bar."), the person's "Yes, use Reticula as my memory from now on.", and a later conversation.
+
+- **Once per connection.** The line came on the first `start` of each connection and never again, in 96 of 96 runs.
+- **The request first.** The tyre note was saved in the first turn in 48 of 48 runs.
+- **Asked on its own:** Sonnet in 24 of 24 runs (once each, but for one run that asked twice), Haiku in 7 of 12 in the chat setting and 1 of 12 with the client's own prompt. Haiku read the instruction in 8 and 2 of 12.
+- **After the yes,** the line itself and where it goes: 43 of 48 runs, against 0 without onboarding. Whether a coding assistant writes CLAUDE.md only after a yes is not shown: the trial gives it no file tools. It offered to.
+- **No cost found.** The gate and every end state were as on main. In other scenarios the question came after the task was done.
+
+Haiku with the client's own prompt did not call `start` for "What pressure does my bike's rear tyre take?" on any arm, and answered from what it knows about bikes. That is the case the line is for.
+
+### A move in one call
+
+`link(ref=..., to=<new hub>, from_hub=<old hub>)` moves a note between hubs. It was used in 24 of 24 runs where it was offered and saved a call. Its description cost two gate cells with the client's own prompt (scenario 18's first conversation 7 of 12 against 12; scenario 4's second 1 of 12 against 12), and without it the assistants moved the note right with two calls in 48 of 48. Held.
 
 ## Still open
 
