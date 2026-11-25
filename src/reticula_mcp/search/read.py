@@ -33,7 +33,9 @@ from reticula_mcp.errors import BAD_INPUT, NOT_FOUND, ReticulaError
 from reticula_mcp.graph.access import adders_from_above, readers_above
 from reticula_mcp.graph.paper import ext_key_from_payload
 from reticula_mcp.permissions import (
+    current_among_sql,
     current_nodes_sql,
+    readable_among_sql,
     readable_hub_ids,
     readable_hub_sql,
     readable_nodes_sql,
@@ -48,6 +50,10 @@ MEMBERS_SHOWN = 20  # notes per page of a hub, first page and every next page
 SUB_MEMBERS_SHOWN = 5  # notes shown for a sub-hub expanded inside a larger answer
 SUBHUBS_SHOWN = 30
 LINKS_SHOWN = 30
+# the members of the hubs ``hubs``, for _visible_among
+MEMBERS_OF_HUBS = (
+    "SELECT m2.node_id FROM membership m2 WHERE m2.hub_node_id = ANY(%(hubs)s)"
+)
 SECOND_STEP_READ = 1_000  # link rows read for depth 2 on a note, before who may read
 MAX_DEPTH = 2  # the hub, and its sub-hubs opened; deeper is another call
 HUB_BUDGET = 60  # hubs one call opens, the one asked for included
@@ -274,7 +280,21 @@ def _chain_lines(conn: Conn, viewer: Account, node: Row) -> _Chain:
     that does not hide it is "corrected by @x" / "corrects", and the original
     stays in search and hub lists.
     """
-    readable = readable_nodes_sql("%(viewer)s")
+    # each list asks readable_nodes about its own candidates only
+    olds_sql = readable_among_sql(
+        "SELECT s2.old_node_id FROM supersedes s2 WHERE s2.new_node_id = %(node)s"
+    )
+    newer_sql = readable_among_sql(
+        "SELECT s2.new_node_id FROM supersedes s2 WHERE s2.old_node_id = %(node)s"
+    )
+    targets_sql = readable_among_sql(
+        "SELECT d2.id FROM link l2 JOIN node d2 ON d2.address = l2.dst_address"
+        " WHERE l2.src_node_id = %(node)s"
+    )
+    sources_sql = readable_among_sql(
+        "SELECT l2.src_node_id FROM link l2"
+        " WHERE l2.dst_node_id = %(node)s OR l2.dst_address = %(address)s"
+    )
     own = node["author"] == viewer.person_id
     params = {
         "node": node["id"],
@@ -285,29 +305,29 @@ def _chain_lines(conn: Conn, viewer: Account, node: Row) -> _Chain:
     }
     old = conn.execute(
         f"SELECT s.old_node_id AS id, p.hides {_PAIRS}"
-        f" WHERE s.new_node_id = %(node)s AND s.old_node_id IN ({readable})"
+        f" WHERE s.new_node_id = %(node)s AND s.old_node_id IN ({olds_sql})"
         " ORDER BY p.hides DESC, s.old_node_id LIMIT %(cap)s",
         params,
     ).fetchall()
     new = conn.execute(
         f"SELECT s.new_node_id AS id, p.hides {_PAIRS}"
-        f" WHERE s.old_node_id = %(node)s AND s.new_node_id IN ({readable})"
+        f" WHERE s.old_node_id = %(node)s AND s.new_node_id IN ({newer_sql})"
         " ORDER BY p.hides DESC, s.new_node_id LIMIT %(cap)s",
         params,
     ).fetchall()
     out = conn.execute(
         "SELECT l.rel, l.dst_address, d.id AS dst_id,"
-        f" (d.id IS NOT NULL AND d.id IN ({readable})) AS can_read"
+        f" (d.id IS NOT NULL AND d.id IN ({targets_sql})) AS can_read"
         " FROM link l LEFT JOIN node d ON d.address = l.dst_address"
         " WHERE l.src_node_id = %(node)s"
-        f" AND (d.id IS NULL OR %(own)s OR d.id IN ({readable}))"
+        f" AND (d.id IS NULL OR %(own)s OR d.id IN ({targets_sql}))"
         " ORDER BY l.rel, l.dst_address LIMIT %(cap)s",
         params,
     ).fetchall()
     inc = conn.execute(
         "SELECT DISTINCT l.rel, l.src_node_id AS id FROM link l"
         " WHERE (l.dst_node_id = %(node)s OR l.dst_address = %(address)s)"
-        f" AND l.src_node_id <> %(node)s AND l.src_node_id IN ({readable})"
+        f" AND l.src_node_id <> %(node)s AND l.src_node_id IN ({sources_sql})"
         " ORDER BY l.rel, l.src_node_id LIMIT %(cap)s",
         params,
     ).fetchall()
@@ -539,7 +559,11 @@ def _about_lines(conn: Conn, viewer: Account, row: Row) -> list[str]:
     if key and row["kind"] != "paper":
         paper = conn.execute(
             "SELECT n.id FROM node n WHERE n.kind = 'paper' AND n.ext_key = %(key)s"
-            f" AND n.id IN ({readable_nodes_sql('%(viewer)s')})"
+            " AND n.id IN ("
+            + readable_among_sql(
+                "SELECT p.id FROM node p WHERE p.kind = 'paper' AND p.ext_key = %(key)s"
+            )
+            + ")"
             " ORDER BY n.id LIMIT 1",
             {"key": key, "viewer": viewer.id},
         ).fetchone()
@@ -570,10 +594,14 @@ def _paper_notes(
     key = paper.get("ext_key")
     if not key:
         return []
+    candidates = (
+        "SELECT a.id FROM node a WHERE a.kind <> 'paper' AND a.payload ? 'ext'"
+        " AND a.payload->'ext'->>'key' = %(key)s"
+    )
     about = (
         "n.kind <> 'paper' AND n.payload ? 'ext'"
         " AND n.payload->'ext'->>'key' = %(key)s AND n.tombstoned_at IS NULL"
-        f" AND n.id IN ({_visible_fn(history)})"
+        f" AND n.id IN ({_visible_among(history, candidates)})"
     )
     params = {"key": key, "viewer": viewer.id, "limit": PAPER_NOTES_SHOWN}
     counted = conn.execute(
@@ -700,6 +728,11 @@ def _visible_fn(history: bool) -> str:
     )
 
 
+def _visible_among(history: bool, ids_sql: str) -> str:
+    """:func:`_visible_fn` asked about the ids ``ids_sql`` gives only."""
+    return readable_among_sql(ids_sql) if history else current_among_sql(ids_sql)
+
+
 def member_counts(
     conn: Conn, viewer: Account, hub_ids: list[int], history: bool
 ) -> dict[int, tuple[int, int]]:
@@ -715,7 +748,7 @@ def member_counts(
         WHERE m.hub_node_id = ANY(%(hubs)s) AND NOT m.withdrawn
           AND (m.audience = 'hub' OR m.author = %(person)s)
           AND n.tombstoned_at IS NULL
-          AND n.id IN ({_visible_fn(history)})
+          AND n.id IN ({_visible_among(history, MEMBERS_OF_HUBS)})
         GROUP BY m.hub_node_id
         """,
         {"hubs": hub_ids, "person": viewer.person_id, "viewer": viewer.id},

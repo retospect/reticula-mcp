@@ -12,7 +12,7 @@ import re
 from reticula_mcp.accounts import Account
 from reticula_mcp.db.pool import Conn
 from reticula_mcp.errors import BAD_INPUT, ReticulaError
-from reticula_mcp.permissions import readable_nodes_sql
+from reticula_mcp.permissions import readable_among_sql
 from reticula_mcp.resolve import resolve_ref
 from reticula_mcp.search import find, recent, render
 from reticula_mcp.search.find import hybrid_search, list_scope
@@ -51,8 +51,9 @@ def _checked_kind(conn: Conn, viewer: Account, kind: str | None) -> str | None:
     if kind is None or kind in render.KINDS:
         return kind
     used = conn.execute(
-        "SELECT 1 AS x FROM node n WHERE n.kind = %(kind)s"
-        f" AND n.id IN ({readable_nodes_sql('%(viewer)s')}) LIMIT 1",
+        "SELECT 1 AS x FROM node n WHERE n.kind = %(kind)s AND n.id IN ("
+        + readable_among_sql("SELECT k.id FROM node k WHERE k.kind = %(kind)s")
+        + ") LIMIT 1",
         {"kind": kind, "viewer": viewer.id},
     ).fetchone()
     if used is None:
