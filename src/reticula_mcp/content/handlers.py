@@ -162,11 +162,9 @@ def start(conn: Conn, viewer: Account) -> str:
         starter.text.rstrip(),
         "",
     ]
-    if hubs:
-        out.append(f"Your hubs ({len(hubs)}):")
-        out += _hub_lines(conn, viewer, hubs, START_HUB_LIMIT)
-    else:
-        out.append("Your hubs: none yet.")
+    own = sum(1 for h in hubs if h["own"])
+    out.append(f"Your hubs ({own}):" if own else "Your hubs: none yet.")
+    out += _hub_lines(conn, viewer, hubs, START_HUB_LIMIT)
     others = _other_instructions(conn, viewer)
     if others:
         out.append("More instructions (get one by id):")

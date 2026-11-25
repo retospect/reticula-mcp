@@ -44,7 +44,8 @@ def test_start_lists_own_and_shared_hubs_with_modes(conn, make_account):
     graph.create_atom(conn, bob, kind="note", text="b1", hub_node_id=beta["id"])
 
     out = start(conn, bob)
-    assert "Your hubs (2):" in out
+    # The count covers the hubs bob owns; Alpha is listed apart.
+    assert "Your hubs (1):" in out
     beta_line = next(line for line in out.splitlines() if line.startswith('- "Beta"'))
     assert f"id {short_id(beta['address'])}" in beta_line
     assert "owner" in beta_line and "1 person, 1 note" in beta_line
