@@ -445,9 +445,9 @@ def _label_text(group: Group) -> str:
 def _group_lines(group: Group, ref: str) -> list[str]:
     out = [f"{c.path}  {_label_text(c)}  ({len(c.ids)})" for c in group.children]
     first = group.children[0].path
-    out.append(f'next: get(ref={ref!r}, part="{first}") lists a group')
+    out.append(f'next: get(ref="{ref}", part="{first}") lists a group')
     if not group.path:
-        out.append(f'the newest notes first: search(query="", hub={ref!r})')
+        out.append(f'the newest notes first: search(query="", hub="{ref}")')
     return out
 
 

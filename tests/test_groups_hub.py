@@ -101,8 +101,8 @@ def test_more_than_26_notes_show_groups_and_every_note_has_one_path(
     lines = group_lines(out)
     assert sorted(lines) == ["A", "B", "C", "D", "E"]
     assert sorted(n for _, n in lines.values()) == [8] * 5
-    assert f'next: get(ref={short_ref(hub)!r}, part="A") lists a group' in out
-    newest = f'the newest notes first: search(query="", hub={short_ref(hub)!r})'
+    assert f'next: get(ref="{short_ref(hub)}", part="A") lists a group' in out
+    newest = f'the newest notes first: search(query="", hub="{short_ref(hub)}")'
     assert newest in out
     assert newest not in get(conn, ana, ref=hub, part="A")
     assert "members (newest first" not in out
