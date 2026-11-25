@@ -61,6 +61,10 @@ You need Python 3.12 or newer with [uv](https://docs.astral.sh/uv/), and a Postg
 
 4. Check it: `curl http://127.0.0.1:8787/healthz` answers `{"status":"ok",...}`.
 
+### Database and server together
+
+The repository has a compose file that runs the database and a released server from PyPI side by side: [deploy/compose.yaml](https://github.com/retospect/reticula-mcp/blob/main/deploy/compose.yaml). Copy `deploy/.env.example` to `deploy/.env`, set `RETICULA_DB_PASSWORD` and `RETICULA_VERSION`, and run `docker compose up -d --build` in `deploy/`. The server then listens on `127.0.0.1:8787`.
+
 ### Settings
 
 All settings are environment variables. There are no config files.
@@ -68,11 +72,12 @@ All settings are environment variables. There are no config files.
 | Variable | Default | Meaning |
 |---|---|---|
 | `RETICULA_DATABASE_URL` | none, required | PostgreSQL connection URL. |
-| `RETICULA_PUBLIC_URL` | none | The base URL clients use, without a trailing slash. Set it whenever clients reach the server under any name other than localhost. It is used for the sign-in flow and added to the allowed Host and Origin headers. The URL you give an assistant is this value plus `/mcp`. |
+| `RETICULA_PUBLIC_URL` | none | The base URL clients use, without a trailing slash. Set it whenever clients reach the server under any name other than localhost. It is used for the sign-in flow and added to the allowed Host and Origin headers. The URL you give an assistant is this value plus `/mcp`. It must start with `https://` unless the host is `localhost` or `127.0.0.1`. |
 | `RETICULA_HOST` | `127.0.0.1` | Address to listen on. `serve --host` overrides it. |
 | `RETICULA_PORT` | `8787` | Port to listen on. `serve --port` overrides it. |
 | `RETICULA_SIGNUP` | `open` | `open` or `closed`. `closed` stops new sign-ups on the sign-in page. Accounts can still be created with the command line. |
 | `RETICULA_SIGNUP_RATE` | `5/hour` | Sign-up attempts allowed per client IP address. Units: second, minute, hour, day. |
+| `RETICULA_REGISTER_RATE` | `20/hour` | Connector registrations allowed per client IP address. Each assistant registers once when it is connected. |
 | `RETICULA_TRUSTED_PROXIES` | empty | Comma-separated IP addresses or CIDR ranges whose `X-Forwarded-For` header is believed. Empty trusts nobody. Set it to your reverse proxy's address, or every sign-up counts as coming from the proxy. |
 | `RETICULA_EMBEDDER` | `auto` | `auto`, `hash` or `fastembed`. `fastembed` runs a local model and needs the extra `reticula-mcp[fastembed]`. `hash` needs nothing and has no real sense of meaning; keyword matching still works. `auto` uses `fastembed` when it is installed and `hash` otherwise. |
 | `RETICULA_EMBED_MODEL` | model default | Model name for the `fastembed` embedder. |
@@ -139,7 +144,7 @@ Hub presets: `group` (members read and add, any member may invite), `moderated` 
 
 Every account gets three key slots when it is created: a root key, a working key and an encryption key slot that is not used yet. The person ID is derived from the root public key and never changes, not when the handle changes and not when keys are replaced. Every note, hub membership, grant and deletion is a record with a global address and an Ed25519 signature over its exact bytes. Records are appended to a log and never rewritten, except that the content of a deleted note is erased while its hash and address stay.
 
-The reason is federation. Because each record already carries its author, address and signature, another instance can later verify a note it receives without trusting the instance that sent it, and no stored note needs to be rewritten for that. The format is specified in [docs/format.md](docs/format.md), with test vectors in `tests/vectors/v0.json`.
+The reason is federation. Because each record already carries its author, address and signature, another instance can later verify a note it receives without trusting the instance that sent it, and no stored note needs to be rewritten for that. The format is specified in [docs/format.md](https://github.com/retospect/reticula-mcp/blob/main/docs/format.md), with test vectors in `tests/vectors/v0.json`.
 
 ## Security notes
 
@@ -150,7 +155,7 @@ The reason is federation. Because each record already carries its author, addres
 - Serve the MCP endpoint over HTTPS when it leaves your machine or tailnet. A bearer token sent over plain HTTP can be read on the way.
 - Text found in the graph is treated as data written by people and other assistants, never as instructions to follow. The only exception is an instruction note written by the instance's own system account, which is where the shipped instructions come from.
 - Assistants can write debug notes about tool problems. They go to a hub that every account may add to and only the operator reads.
-- Backups are your job. One line: `pg_dump --format=custom "$RETICULA_DATABASE_URL" > reticula.dump`. The dump contains the private keys, so protect it like the database. [docs/operating.md](docs/operating.md) covers upgrades, backups and restores, tokens and sign-ups.
+- Backups are your job. One line: `pg_dump --format=custom "$RETICULA_DATABASE_URL" > reticula.dump`. The dump contains the private keys, so protect it like the database. [docs/operating.md](https://github.com/retospect/reticula-mcp/blob/main/docs/operating.md) covers upgrades, backups and restores, tokens and sign-ups.
 
 ## Development
 
@@ -162,6 +167,6 @@ uv run ruff check . && uv run ruff format --check . && uv run mypy
 
 `scripts/test` starts a throwaway `pgvector/pgvector:pg17` container with docker and runs the whole suite against it. Tests use a real PostgreSQL. To use your own server instead, set `RETICULA_TEST_DATABASE_URL` to a superuser URL on a server that has pgvector.
 
-[AGENTS.md](AGENTS.md) describes the code layout, the frozen interfaces and the conventions. [docs/format.md](docs/format.md) is the normative note format.
+[AGENTS.md](https://github.com/retospect/reticula-mcp/blob/main/AGENTS.md) describes the code layout, the frozen interfaces and the conventions. [docs/format.md](https://github.com/retospect/reticula-mcp/blob/main/docs/format.md) is the normative note format.
 
 Licence: AGPL-3.0-or-later. See `LICENSE`.

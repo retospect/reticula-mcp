@@ -17,6 +17,8 @@ CONTRACT = json.loads((ROOT / "tests" / "contract" / "tools.json").read_text())
 OTHER_LANES = {"connections", "reindex", "rebuild"}
 # Used by scripts/test, not by the server.
 TEST_ONLY = {"RETICULA_TEST_DATABASE_URL"}
+# Read by deploy/compose.yaml, not by the server.
+COMPOSE_ONLY = {"RETICULA_DB_PASSWORD", "RETICULA_VERSION"}
 
 
 def _text(path: Path) -> str:
@@ -30,7 +32,7 @@ def test_documented_environment_variables_exist_in_config():
     }
     for path in DOCS:
         used = set(re.findall(r"RETICULA_[A-Z_]+", _text(path)))
-        assert used <= known | TEST_ONLY, (path.name, used - known)
+        assert used <= known | TEST_ONLY | COMPOSE_ONLY, (path.name, used - known)
     readme = _text(DOCS[0])
     for name in known:
         assert f"`{name}`" in readme, f"{name} is missing from the README table"

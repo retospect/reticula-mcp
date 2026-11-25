@@ -78,9 +78,8 @@ def test_https_and_loopback_redirect_uris_are_accepted(uri):
     assert validate_redirect_uri(uri) == uri
 
 
-def test_registration_is_limited_in_size_count_and_rate(fresh_db_url, monkeypatch):
-    monkeypatch.setenv("RETICULA_REGISTER_RATE", "4/hour")
-    with start_live(fresh_db_url) as live:
+def test_registration_is_limited_in_size_count_and_rate(fresh_db_url):
+    with start_live(fresh_db_url, register_rate="4/hour") as live:
         a = Assistant(live)
         big = a.api.post("/register", content=b'{"x":"' + b"a" * 20000 + b'"}')
         assert big.status_code == 413

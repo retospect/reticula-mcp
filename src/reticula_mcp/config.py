@@ -41,6 +41,7 @@ class Settings:
     embedder: str = "auto"  # auto | hash | fastembed
     signup: str = "open"  # open | closed
     signup_rate: str = "5/hour"  # per IP
+    register_rate: str = "20/hour"  # OAuth client registrations per IP
     # Peers whose X-Forwarded-For is believed (IPs or CIDRs); empty = trust nobody.
     trusted_proxies: tuple[str, ...] = ()
     embed_model: str | None = None  # model name for the fastembed embedder
@@ -64,6 +65,7 @@ class Settings:
             embedder=get("EMBEDDER", "auto") or "auto",
             signup=get("SIGNUP", "open") or "open",
             signup_rate=get("SIGNUP_RATE", "5/hour") or "5/hour",
+            register_rate=get("REGISTER_RATE", "20/hour") or "20/hour",
             trusted_proxies=tuple(
                 part.strip()
                 for part in (get("TRUSTED_PROXIES") or "").split(",")
@@ -84,6 +86,7 @@ class Settings:
         if self.signup not in ("open", "closed"):
             raise ReticulaError(BAD_INPUT, "RETICULA_SIGNUP must be open|closed")
         parse_rate(self.signup_rate)
+        parse_rate(self.register_rate)
         for proxy in self.trusted_proxies:
             try:
                 ipaddress.ip_network(proxy, strict=False)

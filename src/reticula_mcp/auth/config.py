@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import os
 from datetime import timedelta
 
-from reticula_mcp.config import parse_rate
+from reticula_mcp.config import Settings, parse_rate
 
 #: The one scope. Access is all-or-nothing per connected assistant.
 SCOPE = "mcp"
@@ -33,13 +32,7 @@ FAILURES_PER_EMAIL = 6
 FAILURES_PER_IP = 30
 FAILURE_WINDOW = timedelta(minutes=15)
 
-DEFAULT_REGISTER_RATE = "20/hour"
 
-
-def register_rate() -> tuple[int, int]:
-    """Client registrations allowed per address and window (count, seconds).
-
-    ``RETICULA_REGISTER_RATE`` (e.g. ``20/hour``) overrides the default.
-    """
-    text = os.environ.get("RETICULA_REGISTER_RATE", "").strip()
-    return parse_rate(text or DEFAULT_REGISTER_RATE)
+def register_rate(settings: Settings) -> tuple[int, int]:
+    """Client registrations allowed per address and window (count, seconds)."""
+    return parse_rate(settings.register_rate)

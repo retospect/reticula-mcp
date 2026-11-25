@@ -116,7 +116,7 @@ def build_client(body: dict[str, Any]) -> OAuthClientInformationFull:
 
 
 def routes(settings: Settings, db: Database, provider: ReticulaProvider) -> list[Route]:
-    limit, window = config.register_rate()
+    limit, window = config.register_rate(settings)
 
     def allow_sync(bucket: str) -> bool:
         with db.connection() as conn:
