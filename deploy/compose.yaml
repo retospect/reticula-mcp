@@ -7,7 +7,8 @@
 # terminates TLS in front of it, set RETICULA_PUBLIC_URL to that address and
 # RETICULA_TRUSTED_PROXIES as docs/operating.md describes.
 #
-# To run the working tree instead of a release, use compose.dev.yaml.
+# To run a checkout with these settings, add compose.source.yaml. For a
+# separate development stack beside this one, use compose.dev.yaml.
 name: reticula
 
 services:
@@ -46,6 +47,7 @@ services:
       RETICULA_SIGNUP: ${RETICULA_SIGNUP:-open}
       RETICULA_SIGNUP_RATE: ${RETICULA_SIGNUP_RATE:-5/hour}
       RETICULA_REGISTER_RATE: ${RETICULA_REGISTER_RATE:-20/hour}
+      RETICULA_WRITE_RATE: ${RETICULA_WRITE_RATE:-600/hour}
       RETICULA_EMBEDDER: ${RETICULA_EMBEDDER:-auto}
       RETICULA_TRUSTED_PROXIES: ${RETICULA_TRUSTED_PROXIES:-}
       RETICULA_KNOWN_CLIENTS: ${RETICULA_KNOWN_CLIENTS:-claude.ai,claude.com}
