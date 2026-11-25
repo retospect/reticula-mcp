@@ -205,15 +205,23 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
                 " Omit to just show the profile."
             ),
         ] = None,
+        listed: Annotated[
+            bool | None,
+            Field(
+                description="False takes you out of the directory of people (others"
+                " can still share with you by your exact handle); true puts you back."
+            ),
+        ] = None,
         *,
         ctx: Context,
     ) -> str:
         """Show your profile (handle, person ID, verification, hubs), or rename your handle.
 
         Pass `handle` to change it; your person ID and all your notes keep their
-        addresses. Handles are unique on this instance.
+        addresses. Handles are unique on this instance. Pass `listed` to choose
+        whether search(kind="person") lists you.
         """
-        return await run(ctx, content_handlers.profile, handle=handle)
+        return await run(ctx, content_handlers.profile, handle=handle, listed=listed)
 
     @mcp.tool(structured_output=False)
     async def search(
@@ -233,7 +241,8 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
         kind: Annotated[
             str | None,
             Field(
-                description="Only this kind: note, hub, paper, instruction or debug."
+                description="Only this kind: note, hub, paper, instruction or debug;"
+                " person lists the people on this instance by handle."
             ),
         ] = None,
         limit: Annotated[int, Field(description="Maximum results (default 10).")] = 10,

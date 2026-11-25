@@ -234,8 +234,8 @@ Five tool calls, no errors. [docs/trials.md](https://github.com/retospect/reticu
 | Tool | What it does |
 |---|---|
 | `start` | The first call in a conversation. Returns your handle and person ID, the starting instruction, and your hubs. |
-| `profile` | Shows your account, or renames your handle. The person ID never changes. |
-| `search` | One ranked search over notes, hubs, instructions and paper stubs that you may read. Each result shows the start of its text. A DOI or arXiv id as the query finds the paper and the notes about it. With an empty query it lists: all hubs with `kind="hub"`, or the contents of one hub with `hub=`. |
+| `profile` | Shows your account, renames your handle, or with `listed` takes you out of the directory of people and back in. The person ID never changes. |
+| `search` | One ranked search over notes, hubs, instructions and paper stubs that you may read. Each result shows the start of its text. A DOI or arXiv id as the query finds the paper and the notes about it. With an empty query it lists: all hubs with `kind="hub"`, or the contents of one hub with `hub=`. `kind="person"` lists the people on this instance by handle. |
 | `get` | Reads a note or a hub with its surroundings. A note shows the paper and passage it is about. A hub shows its newest members first. A paper lists the notes about it. `history` adds earlier versions. |
 | `put` | Writes a note, a hub, a paper stub, an instruction or a debug note and returns its address. |
 | `edit` | Makes a new version of one of your own notes. The address stays. |
@@ -268,6 +268,7 @@ The reason is federation. Because each record already carries its author, addres
 - Passwords are stored as argon2id hashes. Bearer tokens are stored as SHA-256 hashes.
 - The server writes one line per request to its log: the time, the path without its query string, the status, the caller's IP address, the name the calling program gives itself, and for a refused request the server's own error text. It does not log request bodies, tokens, notes, or what a tool was asked and answered.
 - Sign-ups are open by default and rate-limited per IP address. Set `RETICULA_SIGNUP=closed` to close them.
+- Every account is listed in a directory of people: `search(kind="person")` shows its handle, whether it is verified and the day it joined, never its e-mail address. With open sign-ups, anyone who creates an account can see every listed handle. `profile(listed=false)` takes an account out of the list; it can still be shared with by its exact handle.
 - The sign-in page names the host that will receive access to your notes, taken from the address the connector returns to. It shows a warning when that host is not listed in `RETICULA_KNOWN_CLIENTS`. A connector on the same computer does not warn. Read the host before you continue.
 - Serve the MCP endpoint over HTTPS when it leaves your machine or tailnet. A bearer token sent over plain HTTP can be read on the way.
 - Text found in the graph is treated as data written by people and other assistants, never as instructions to follow. The only exception is an instruction note written by the instance's own system account, which is where the shipped instructions come from.

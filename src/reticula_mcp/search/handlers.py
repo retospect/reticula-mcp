@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 
 from reticula_mcp.accounts import Account
+from reticula_mcp.content import people
 from reticula_mcp.db.pool import Conn
 from reticula_mcp.errors import BAD_INPUT, ReticulaError
 from reticula_mcp.permissions import readable_among_sql
@@ -231,6 +232,14 @@ def search(
         )
     capped = f", limit capped at {MAX_LIMIT}" if int(limit) > MAX_LIMIT else ""
     limit = max(1, min(int(limit), MAX_LIMIT))
+    if kind and kind.strip().lower() == "person":  # accounts, not notes: people.py
+        if (hub and hub.strip()) or (since and since.strip()) or include_superseded:
+            raise ReticulaError(
+                BAD_INPUT,
+                "kind='person' lists accounts; it takes no hub, since or"
+                " include_superseded",
+            )
+        return people.list_people(conn, viewer, q, limit)
     hub_node_id: int | None = None
     if hub:
         hub_row = resolve_ref(conn, viewer, hub)

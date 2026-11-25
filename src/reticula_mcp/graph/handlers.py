@@ -512,7 +512,22 @@ def share(
         mode=mode,
         targets_self=targets_self,
     )
-    grantee = resolve_person(conn, person)
+    try:
+        grantee = resolve_person(conn, person)
+    except ReticulaError as e:
+        if e.code != NOT_FOUND:
+            raise
+        found = ref.lstrip("@")
+        if not ref.startswith("@") or not all(
+            c.isalnum() or c in "_-" for c in found
+        ):  # a person ID, or text that cannot be a handle: no search to suggest
+            raise
+        raise ReticulaError(
+            NOT_FOUND,
+            e.message,
+            hint=f'search(query="{found}", kind="person") lists people whose'
+            " handle contains it",
+        ) from e
     note = ""
     if mode == "add" and (hub_row["payload"] or {}).get("preset") == "personal":
         mode = "read"
