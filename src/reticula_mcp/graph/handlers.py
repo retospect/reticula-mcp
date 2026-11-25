@@ -270,19 +270,27 @@ def _handle(conn: Conn, person_id: str) -> str:
     return f"@{account.handle}" if account else person_id
 
 
-def _list_access(conn: Conn, hub: Row) -> str:
-    rows = conn.execute(
-        "SELECT grantee, mode, granted_by FROM hub_grant WHERE hub_node_id = %s"
-        " AND mode <> 'none' ORDER BY id",
-        (hub["id"],),
-    ).fetchall()
+def _list_access(conn: Conn, viewer: Account, hub: Row) -> str:
+    """Who has access. The full list goes to the hub's admin and to people who
+    can add to it; anyone else sees the owner and their own entry only (a display
+    rule: the permissions are unchanged)."""
+    mode = access.hub_access(conn, viewer.person_id, hub["id"])
     lines = [f"access to {_label(hub)}", f"{_handle(conn, hub['author'])} admin"]
-    for r in rows:
-        lines.append(
-            f"{_handle(conn, r['grantee'])} {r['mode']}"
-            f" (granted by {_handle(conn, r['granted_by'])})"
-        )
-    lines.append("next: share(hub, person='@handle', mode='add'|'read'|'none')")
+    if viewer.person_id == hub["author"] or mode == "add":
+        rows = conn.execute(
+            "SELECT grantee, mode, granted_by FROM hub_grant WHERE hub_node_id = %s"
+            " AND mode <> 'none' ORDER BY id",
+            (hub["id"],),
+        ).fetchall()
+        for r in rows:
+            lines.append(
+                f"{_handle(conn, r['grantee'])} {r['mode']}"
+                f" (granted by {_handle(conn, r['granted_by'])})"
+            )
+        lines.append("next: share(hub, person='@handle', mode='add'|'read'|'none')")
+    else:
+        lines.append(f"@{viewer.handle} {mode or 'read'}")
+        lines.append("other readers are shown only to people who can add to this hub")
     return "\n".join(lines)
 
 
@@ -296,10 +304,21 @@ def share(
 ) -> str:
     hub_row = _resolve_hub(conn, viewer, hub, adding=False)
     if person is None:
-        return _list_access(conn, hub_row)
+        return _list_access(conn, viewer, hub_row)
     mode = (mode or "add").strip().lower()
     if mode not in access.MODES:
         raise ReticulaError(BAD_INPUT, "mode must be add, read or none")
+    ref = person.strip()
+    targets_self = ref in (f"@{viewer.handle}", viewer.person_id)
+    # Refuse before looking the person up: a viewer who may not grant must get
+    # the same answer whether or not that handle exists or has access.
+    access.precheck_grant(
+        conn,
+        granter=viewer.person_id,
+        hub=hub_row,
+        mode=mode,
+        targets_self=targets_self,
+    )
     grantee = resolve_person(conn, person)
     note = ""
     if mode == "add" and (hub_row["payload"] or {}).get("preset") == "personal":

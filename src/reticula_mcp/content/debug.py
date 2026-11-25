@@ -56,6 +56,7 @@ def list_debug_notes(conn: Conn, limit: int = 20) -> list[DebugNote]:
         " n.head_record_id, a.handle AS author_handle"
         " FROM node n"
         " JOIN membership m ON m.node_id = n.id AND NOT m.withdrawn"
+        " AND m.author = n.author"
         " LEFT JOIN account a ON a.person_id = n.author"
         " WHERE m.hub_node_id = %s AND n.kind = 'debug'"
         " AND n.tombstoned_at IS NULL AND n.audience <> 'private'"
