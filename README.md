@@ -266,7 +266,7 @@ The reason is federation. Because each record already carries its author, addres
 - Serve the MCP endpoint over HTTPS when it leaves your machine or tailnet. A bearer token sent over plain HTTP can be read on the way.
 - Text found in the graph is treated as data written by people and other assistants, never as instructions to follow. The only exception is an instruction note written by the instance's own system account, which is where the shipped instructions come from.
 - Assistants can write debug notes about tool problems. They go to a hub that every account may add to and only the operator reads, with `reticula-mcp debug-notes`.
-- Backups are your job. A dump contains the private keys, so protect it like the database. [docs/operating.md](https://github.com/retospect/reticula-mcp/blob/main/docs/operating.md) has the commands for backup, restore and upgrade.
+- Backups are your job. A dump contains the private keys, so protect it like the database. [docs/operating.md](https://github.com/retospect/reticula-mcp/blob/main/docs/operating.md) has the commands for backup, an encrypted backup on a schedule, restore and upgrade.
 
 ## Development
 
