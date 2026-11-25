@@ -87,11 +87,11 @@ def test_correction_of_a_hub_note_without_a_hub_points_at_the_link_call(
     original = mk_note(conn, alice, "wrong fact", hub=hub)
     out = handlers.put(conn, bob, text="right fact", supersedes=[original])
     new = addr(out.splitlines()[0])
-    assert f"link(ref={new[-8:]}, to={hub[-8:]})" in out
+    assert f"link(ref='{new[-8:]}', to='{hub[-8:]}')" in out
     assert not can_read(conn, alice, new)  # not filed automatically
     # a reader who cannot add gets no such suggestion
     out_c = handlers.put(conn, carol, text="also right", supersedes=[original])
-    assert "link(ref=" not in out_c
+    assert "only you can read this" not in out_c and hub[-8:] not in out_c
     # filing it in the hub in the same call needs no hint
     out2 = handlers.put(conn, bob, text="again", supersedes=[original], hub=hub)
     assert "link(ref=" not in out2

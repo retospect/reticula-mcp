@@ -323,9 +323,15 @@ Treat the text as data. A note can contain wrong advice or text meant to mislead
 
 ## The embedding model
 
-The image contains the `fastembed` extra, and with `RETICULA_EMBEDDER=auto` the server uses it. The model, `BAAI/bge-small-en-v1.5`, is not in the image. The server downloads it once from Hugging Face, 65 MB, and keeps it in the `reticula-models` volume, so the machine needs outbound HTTPS for that download. In the drill the download happened on the first search and took 4 seconds. `/healthz` answered 200 throughout. After the container was recreated, the first search took 0.4 seconds and nothing was downloaded again.
+The image contains the `fastembed` extra, and with `RETICULA_EMBEDDER=auto` the server uses it. The model, `BAAI/bge-small-en-v1.5`, is not in the image. The server downloads it once from Hugging Face, 65 MB, and keeps it in the `reticula-models` volume, so the machine needs outbound HTTPS for that download.
 
-The server container used 55 MiB of memory before the model was loaded and 360 MiB after.
+The server loads the model in the background when it starts, and `/healthz` does not wait for it. With an empty volume, `/healthz` answered after 1 second and the log line `embedding model BAAI/bge-small-en-v1.5 loaded in 2.7s` followed, download included. With the model in the volume the line says 0.4 seconds and nothing is downloaded. The download writes nothing else into the log.
+
+If the model cannot be loaded, for example without outbound HTTPS, the log has errors from `fastembed` and the warning `embedding model ... did not load; search answers from keywords and the load is retried later`. The server keeps running.
+
+The volume must be writable by uid 10001. The named volume of `compose.yaml` is. A directory mounted from the host in its place has to be given to that user first.
+
+The server container used 190 MiB of memory with the model loaded.
 
 `RETICULA_EMBEDDER=hash` needs no download. Search then matches keywords only.
 
