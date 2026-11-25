@@ -69,6 +69,49 @@ def _drop_db(admin: str, name: str) -> None:
         )
 
 
+def _no_autovacuum(c: Conn) -> None:
+    """Switch autovacuum off for every table of the template, and so for every
+    database cloned from it.
+
+    Autovacuum also refreshes the planner's statistics, about once a minute and
+    from its own connection. That connection does not see the rows of a test,
+    which are never committed, so it records "no rows" for a table that the
+    test has filled. The planner then expects one row everywhere and picks
+    plans that are slow for what is there. Measured: building the 585 hubs of
+    ``test_a_wide_deep_tree_is_read_in_bounded_time`` took 19.5 s before such a
+    refresh and 77.5 s after it, and in the Check run it went past the 120 s
+    limit whenever the refresh happened to fall into that test. A server in use
+    commits its rows, so its statistics describe them."""
+    tables = c.execute(
+        "SELECT c.oid::regclass::text AS name FROM pg_class c"
+        " JOIN pg_namespace n ON n.oid = c.relnamespace"
+        " WHERE c.relkind = 'r' AND n.nspname = 'public'"
+    ).fetchall()
+    for table in tables:
+        c.execute(
+            sql.SQL("ALTER TABLE {} SET (autovacuum_enabled = false)").format(
+                sql.Identifier(table["name"])
+            )
+        )
+
+
+def end_connection(c: Conn) -> None:
+    """Roll back and close the connection of a test, also when the test was
+    stopped by its time limit in the middle of a statement.
+
+    Then the statement is still running on the server, ``rollback`` is refused
+    ("another command is already in progress"), and without the cancel the rows
+    of that test stay locked until the statement ends by itself: every later
+    test that creates ``user1@example.com`` waits for them until its own time
+    limit, which made one slow test look like a run that stands still."""
+    try:
+        c.rollback()
+    except psycopg.OperationalError:
+        c.cancel()
+    finally:
+        c.close()
+
+
 @pytest.fixture(scope="session")
 def template_db() -> Iterator[str]:
     admin = _admin_url()
@@ -76,6 +119,7 @@ def template_db() -> Iterator[str]:
     url = _create_db(admin, name)
     with connect(url) as c:
         migrate(c)
+        _no_autovacuum(c)
     yield name
     _drop_db(admin, name)
 
@@ -91,13 +135,14 @@ def session_db_url(template_db: str) -> Iterator[str]:
 
 @pytest.fixture
 def conn(session_db_url: str) -> Iterator[Conn]:
-    """A configured connection inside a transaction that is rolled back."""
-    c = connect(session_db_url)
+    """A configured connection inside a transaction that is rolled back. One
+    statement may run for a minute: under the time limit of a test, so that a
+    statement that does not end fails with its SQL in the message."""
+    c = connect(session_db_url, options="-c statement_timeout=60s")
     try:
         yield c
     finally:
-        c.rollback()
-        c.close()
+        end_connection(c)
 
 
 @pytest.fixture

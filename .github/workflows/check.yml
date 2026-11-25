@@ -12,7 +12,9 @@ jobs:
   check:
     runs-on: ubuntu-latest
     # The whole job takes about three minutes. Two runs stood in the test
-    # step for over twenty minutes on 2026-11-25; this ends such a run.
+    # step for over twenty minutes on 2026-11-25 (cause and cure:
+    # tests/conftest.py, _no_autovacuum and end_connection); this ends a
+    # run that stands still for another reason.
     timeout-minutes: 20
     services:
       postgres:
@@ -36,10 +38,7 @@ jobs:
       - run: uv run mypy
       # -rs prints why a test was skipped, so a skipped end-to-end test shows.
       # -v: the log names the test that was running when a run stands still.
-      # timeout_method=thread: a test over its 120 s ends the run at once and
-      # prints the stack of every thread, also when the main thread waits
-      # inside the database driver where the default method cannot reach.
-      - run: uv run pytest -v -rs -o timeout_method=thread
+      - run: uv run pytest -v -rs
       - name: Golden vectors are up to date with the format library
         run: |
           uv run python scripts/gen_vectors.py
