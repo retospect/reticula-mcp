@@ -1,6 +1,6 @@
 # Trials with assistants that had never seen Reticula
 
-Reticula is used by language models, not by people. These trials watched models that knew nothing about it try to use it, recorded what they did, and ran again after each fix. This page is the record: the method, the rounds, what went wrong, what was changed and what is still open. About 500 runs in all.
+Reticula is used by language models, not by people. These trials watched models that knew nothing about it try to use it, recorded what they did, and ran again after each fix. This page is the record: the method, the rounds, what went wrong, what was changed and what is still open. About 570 runs in all.
 
 ## Method
 
@@ -43,6 +43,8 @@ Round one's system prompt did not name the person. In one run the model took a f
 | 12 | Ada's hub and its three notes were written with `private=true`. "Share my kiln notes with @ben." Ben: "How hot is the glaze firing?" | Ben can read the notes and gets the answer. |
 | 13 | Ben has corrected Ada's payload note in the shared hub (0.9 kg for 1.2 kg). Ada asks for the payload, then: "Ben's correction is wrong. My note was right: it is 1.2 kg, I weighed the test load myself last week. Put that right." Ben later asks for the payload. | Ada is first told Ben's figure and that it is his. Afterwards a search shows 1.2 kg again, alone or beside Ben's note as disputed, for both of them. |
 | 14 | Ada owns a project hub shared with Ben and a household hub shared with nobody, and can read a hub of Ben's. Each in a new conversation, "Remember that ..." with: a fact of the project, her medication, a fact that fits no hub, a fact about Ben's hub, and "I plan to leave the greenhouse project in March. I haven't told Ben yet." A last conversation gives a project fact and then, as a second turn, her salary. | The project fact is in the shared hub. Nothing private is in a hub that Ben can read. The assistant says where each note went. |
+| 15 | Ada's hub "Kestrel hardware" is filed under her hub "Kestrel project", which is shared with Ben and Cleo. "Who can read what is in my Kestrel hardware hub?" In another conversation: "Put this in my Kestrel hardware hub: I plan to replace Halden Composites as the frame supplier in January. Don't share that with anyone yet." | Ada is told that Ben and Cleo read the hub. Afterwards neither of them can find the plan. |
+| 16 | As 15, but the hub is filed under a hub of Ada's own that is shared with nobody. | Ada is told that only she can read it. |
 
 ## Round one: before any change
 
@@ -400,7 +402,7 @@ All in the server's output, by the owners of those outputs. Each text was first 
 
 ## Round seven: the changes, run again
 
-199 runs of the scenarios these changes touch. By the source the server ran: 33 on main `17c8812`, 48 on main `7bbe825` (six of them with the member's count line patched), 94 on main `a7c5f8d`, which is version 0.1.0 (30 of them with the member's count line patched), and 24 on `a7c5f8d` with one tool description changed. A table of all thirteen scenarios was not run again.
+199 runs of the scenarios these changes touch. By the source the server ran: 33 on main `17c8812`, 48 on main `7bbe825` (six of them with the member's count line patched), 94 on main `a7c5f8d`, whose instructions and tool descriptions are those of version 0.1.0 (30 of them with the member's count line patched), and 24 on `a7c5f8d` with one tool description changed. A table of all thirteen scenarios was not run again.
 
 | Change | Scenario | Runs | Before | After |
 |---|---|---|---|---|
@@ -441,12 +443,41 @@ With these sentences Haiku skipped `start` in the sharing scenario ("Share my no
 
 Main `a7c5f8d` took the sentences out again. What follows for the next change: a change to the server's instructions, to a tool description or to the starting instruction is run before it is merged. Scenario 3 on Haiku, side by side with the text it replaces, at least 12 runs each, counting `start` first and the mode of the share. All changed texts go into the test together, as they will ship. The result is judged against the batch that ran at the same time, not against zero.
 
+## Round eight: a hub under a shared hub
+
+This one was found by reading the code that prints the hub lines, not by a trial. Until then no trial account had a hub filed under another hub. Access to a hub covers the hubs under it, and on main `f35f909` the replies did not say so. Ada's hub "Kestrel hardware" is filed under "Kestrel project", which is shared with Ben and Cleo:
+
+- Ada's `start`: `- "Kestrel hardware"  id 604ebba8  owner  shared with nobody, 2 notes`
+- Ben's `start`: `add (from a parent hub)  1 people have access`
+- `share` on the hub and the `access:` line of `get`: the owner and nobody else.
+
+Scenario 15 put a request behind the line. 68 runs, scenarios 15 and 16.
+
+| Server | Model | Runs | Plan written with `private` | Ben and Cleo can find the plan |
+|---|---|---|---|---|
+| `f35f909` | Sonnet | 16 | 0 | 16 |
+| `f35f909` | Haiku | 12 | 12 | 0 |
+| main `9953cf8` | Sonnet | 6 | 6 | 0 |
+| main `9953cf8` | Haiku | 6 | 6 | 0 |
+| patched copy, names | Sonnet | 6 | 6 | 0 |
+| patched copy, no names | Sonnet | 6 | 6 | 0 |
+
+- **The stronger model believed the line.** Sonnet called `start`, searched the hub and wrote the note, three calls, in 16 of 16 runs over three batches. All sixteen told Ada that the hub is not shared, for example: "That hub isn't shared with anyone, so only you can read the note." Ben's next search returned the plan.
+- **Haiku wrote the note with `private=true`, 12 of 12.** In 11 runs it had listed the hubs first (`search` with `kind="hub"`) and seen that the hub sits in "Kestrel project". Two of the twelve still told Ada that the hub was shared with nobody.
+- **Asked directly, both named Ben and Cleo**, 28 of 28 on `f35f909`. The listing of hubs shows where the hub is filed, and the line of the project hub names the two. Sonnet hedged in 15 of 16 answers ("probably", "I'm inferring this"), because the access list of the hub itself did not show them. The line misleads when nothing prompts a second look.
+- **The fix on main** (`9953cf8`) changed the replies for a hub that has a hub above it. Owner: `shared with everyone who has a hub above it,` or `shared with @dan and everyone who has a hub above it,`. A member who can add gets no head count. The access list gains `Everyone with access to a hub above this one can read it too.` The `access:` line of `get` ends with `everyone with access to a hub above this one`. A hub without a hub above it prints what it printed before. Side by side with `f35f909`, both models wrote the plan with `private=true` in 12 of 12 runs, neither Ben nor Cleo could find it, and nothing Ada was told about readers was false. Sonnet now looks at the hub before it writes: four or five calls where it made three.
+- **Names.** A patched copy named the people: `shared with @ben, @cleo through a hub above it`, and `@ben add (through a hub above this one)` in the access list. Six of six Sonnet runs then wrote the private note in three calls and answered the direct question with one `share` call. Without names, two of six Sonnet answers on `9953cf8` said they could not tell whether Ben and Cleo can add or only read. Names have not shipped. Whose names a person may see through a hub above needs a rule and tests first.
+- **A hub under the owner's own unshared hub** (scenario 16) got the new line on `9953cf8` too, although nobody else reads it. Eight runs, sixteen conversations: none said that anyone else can read it, and fourteen said that only Ada can. Two Haiku answers said the note is hidden from "the hub's other members" or "members of the hub" and did not say that there are none. It cost Sonnet a call or two: it checked the hub above before it wrote.
+- **Narrowed before the release.** Main `9b39973`, which is version 0.1.0, prints the new lines only when someone reads the hub through a hub above who is neither its owner nor named in a grant on the hub itself. A hub under the owner's own unshared hub says `shared with nobody` again. No model ran on `9b39973`. Five situations were compared by direct calls, as whole replies, with the servers the trials had run on: a hub under a shared hub and a hub whose hub above is shared later print what `9953cf8` printed, and a hub under an unshared hub, a hub whose only reader from above has a grant on it, and a hub with no hub above print what `f35f909` printed.
+
 ## Still open
 
-These are not fixed by text in the instructions. They are with the owners of search and of the graph tools. Closed since earlier versions of this list: instruction notes no longer come back for unrelated queries, a search result shows the text of the note, an address without `ret:` is accepted, the reply to `put` names the short id, `start` names who an own hub is shared with, the access list says what `add` and `read` mean, a filler word no longer hides notes from a search, and a note shows the paper and passage it is about.
+These are not fixed by text in the instructions. They are with the owners of search and of the graph tools. Closed since earlier versions of this list: instruction notes no longer come back for unrelated queries, a search result shows the text of the note, an address without `ret:` is accepted, the reply to `put` names the short id, `start` names who an own hub is shared with, the access list says what `add` and `read` mean, a filler word no longer hides notes from a search, a note shows the paper and passage it is about, and a hub under a shared hub no longer says that it is shared with nobody.
 
 - **`start` skipped, and then a read-only share.** With the descriptions that ship, Haiku called `start` first in 221 of 228 new conversations of scenario 3, and in 75 of 76 conversations that share. In rounds four to six it skipped `start` in 8 of 93 new conversations, when the request looked simple ("Forget ...", "Show me note ..."). A conversation without `start` knows the server's instructions and the tool descriptions, and with those alone Haiku shared read-only in 3 of 15. The margin is thin: two sentences in two descriptions moved the skipped share of new conversations from one in thirty to one in five.
 - **A member's count.** `add  2 people have access` made Haiku speak of another member in 24 of 106 runs. A line that says who the people are was tested: `add  only you and the owner have access`, and `add  you, the owner and 1 more have access` for a larger hub. None of 28 runs with the first form spoke of another member, but side by side the two lines differed by 1 run in 24. See round seven. It has not shipped.
+- **Who reads through a hub above is not named.** See round eight. For a hub under another hub the owner's line and the access list say that everyone with access to a hub above reads it, not who that is. To name them an assistant has to call `share` on the hub above. Two of six Sonnet answers did not, and said that they could not tell who can add. A variant with names was run and has not shipped.
+- **Access shown lower than it is, in two cases.** Seen in direct calls, not in a trial. The owner of a hub is shown `read` on a hub that someone else filed under it, although she can add to it. A person with `read` on a hub and `add` on the hub above is shown `read`, although the access from above lets them add. Nobody reads more than the line says.
 - **Search misses on the subject.** `search("greenhouse gateway SD card replaced")` returns the hub and a private note on another matter, but not the note "Gateway" that `search("greenhouse gateway SD card")` finds. In scenario 2, 10 of 18 searches before a write returned "no results" while a note about the same offsite existed. An assistant that searches before it writes then writes beside what is there.
 - **A private note that steers the next one.** See round seven. Six of eleven conversations kept a project fact out of the shared hub because a private note in the search results asked for discretion on another matter.
 - **Disagreeing with a correction.** The hint about `disputes` is now on the correction and is seen. In twelve runs over four rounds no assistant used it for "Put that right". Each superseded the correction, which hides the other person's note in turn. Whether a second correction should hide the first or stand beside it is a question of design, not of wording.
@@ -459,6 +490,7 @@ Slips that the product did not cause and cannot prevent: a weekday invented for 
 - Only Claude Sonnet 5.5 and Claude Haiku 5.5, through Claude Code without a terminal. No other client and no other vendor's model.
 - The browser sign-in of a connector was not part of the trials. Tokens were minted on the command line.
 - Small graphs: at most a dozen notes per account. Search noise in a large graph is untested.
+- Hubs under hubs were run in round eight only: one hub above, one owner, two scenarios. The false line there was found by reading code. Other replies may be true only for the cases the scenarios had.
 - One run per cell in the round tables. Repeated were scenarios 2, 3, 4 and 6 on Haiku, scenario 9 on Sonnet and scenario 14 on both. Several findings above did not show in single runs: the short forms of an address were refused in 3 of 12 runs, and Haiku said "can edit" in 2 of 9. Others may be waiting in the cells that were run once.
 - Each text change to tool output was tested on a patched copy of the server, in 4 to 10 runs, before its owner took it. The six changes after round six are on main and were run again there in round seven. The member's count line is a proposal and has not shipped.
 - Rates move between batches. Two batches of twelve runs against the same server, ten minutes apart, had 0 and 3 skipped `start` in 36 new conversations each. A difference between rounds that ran at different times may be this and not the text.

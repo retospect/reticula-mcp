@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Access to a hub covers the hubs filed under it. That is so in 0.1.0 too; its entry below does not say it.
+
 ## 0.1.0 (2026-11-25)
 
 The first release. It is phase one of Reticula: one server that gives AI assistants a long-term memory they can share.
