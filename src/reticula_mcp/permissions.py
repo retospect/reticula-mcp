@@ -104,6 +104,13 @@ def readable_among_sql(ids_sql: str, viewer_param: str = "%(viewer)s") -> str:
     )
 
 
+def current_among_sql(ids_sql: str, viewer_param: str = "%(viewer)s") -> str:
+    """Like :func:`readable_among_sql`, minus atoms superseded by an atom the
+    same viewer can read: ``current_among`` (migration 0205) asked about the
+    ids ``ids_sql`` gives."""
+    return f"SELECT node_id FROM current_among({viewer_param}, ARRAY({ids_sql}))"
+
+
 def current_nodes_sql(viewer_param: str = "%(viewer)s") -> str:
     """Like :func:`readable_nodes_sql`, minus atoms superseded by an atom the
     same viewer can read (the default view; history needs ``readable``)."""
