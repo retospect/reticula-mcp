@@ -184,7 +184,17 @@ def _identifier(
         """,
         {**params, "key": key, "pool": pool},
     ).fetchall()
-    return [(r["id"], 1.0) for r in rows]
+    # then the notes written about it (they carry the identifier), newest first
+    about = conn.execute(
+        f"""
+        SELECT n.id FROM node n
+        WHERE n.kind <> 'paper' AND n.payload ? 'ext'
+          AND n.payload->'ext'->>'key' = %(key)s AND {where}
+        ORDER BY n.created_at DESC, n.id DESC LIMIT %(pool)s
+        """,
+        {**params, "key": key, "pool": pool},
+    ).fetchall()
+    return [(r["id"], 1.0) for r in (*rows, *about)]
 
 
 def _exact(
