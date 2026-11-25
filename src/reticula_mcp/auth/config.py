@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+from reticula_mcp import accounts
 from reticula_mcp.config import Settings, parse_rate
 
 #: The one scope. Access is all-or-nothing per connected assistant.
@@ -20,10 +21,11 @@ MAX_REDIRECT_URIS = 10
 MAX_URI_LENGTH = 2048
 MAX_STATE_LENGTH = 2048
 MAX_PENDING_PER_CLIENT = 500
+MAX_PENDING_PER_ADDRESS = 100
 CLIENT_NAME_LENGTH = 100
 
-MIN_PASSWORD_LENGTH = 10
-MAX_PASSWORD_LENGTH = 1024
+MIN_PASSWORD_LENGTH = accounts.MIN_PASSWORD_LENGTH
+MAX_PASSWORD_LENGTH = accounts.MAX_PASSWORD_LENGTH
 MAX_HANDLE_LENGTH = 32
 MAX_EMAIL_LENGTH = 254
 
@@ -36,3 +38,16 @@ FAILURE_WINDOW = timedelta(minutes=15)
 def register_rate(settings: Settings) -> tuple[int, int]:
     """Client registrations allowed per address and window (count, seconds)."""
     return parse_rate(settings.register_rate)
+
+
+DEFAULT_KNOWN_CLIENTS = ("claude.ai", "claude.com")
+
+
+def known_clients(settings: Settings) -> tuple[str, ...]:
+    """Hosts the sign-in page treats as familiar assistant front ends.
+
+    ``Settings.known_clients`` (``RETICULA_KNOWN_CLIENTS``) when the field
+    exists, else the built-in default.
+    """
+    found = getattr(settings, "known_clients", DEFAULT_KNOWN_CLIENTS)
+    return tuple(h.lower() for h in found)

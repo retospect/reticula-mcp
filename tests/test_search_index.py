@@ -14,7 +14,6 @@ from tests.helpers import make_atom
 from tests.search_support import (
     file_under,
     hub_of,
-    install_final_readable,
     tombstone,
     use_hash_embedder,
 )
@@ -31,8 +30,7 @@ SHARED_TABLES = (
 
 
 @pytest.fixture(autouse=True)
-def world(conn, monkeypatch):
-    install_final_readable(conn)
+def world(monkeypatch):
     use_hash_embedder(monkeypatch)
 
 

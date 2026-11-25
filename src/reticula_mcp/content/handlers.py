@@ -17,6 +17,7 @@ from reticula_mcp import accounts
 from reticula_mcp.accounts import Account
 from reticula_mcp.content import bootstrap
 from reticula_mcp.db.pool import Conn
+from reticula_mcp.graph import access
 from reticula_mcp.permissions import readable_nodes_sql
 
 #: Hubs listed by ``start`` and ``profile`` before "and N more".
@@ -84,13 +85,15 @@ def _hub_lines(conn: Conn, viewer: Account, rows: list[dict[str, Any]], limit: i
     lines = []
     for row in rows[:limit]:
         mode = "owner" if row["own"] else _inherited_mode(conn, viewer, row["id"])
-        people = row["grants"] + 1  # everyone with a grant, plus the owner
         name = row["title"] or "(untitled hub)"
-        lines.append(
-            f"- {name}  id {short_id(row['address'])}  {mode}"
-            f"  {people} {'person' if people == 1 else 'people'},"
-            f" {row['notes']} {'note' if row['notes'] == 1 else 'notes'}"
-        )
+        notes = f"{row['notes']} {'note' if row['notes'] == 1 else 'notes'}"
+        # How many people share a hub is shown only to those who may see the list.
+        if row["own"] or access.hub_access(conn, viewer.person_id, row["id"]) == "add":
+            people = row["grants"] + 1  # everyone with a grant, plus the owner
+            count = f"  {people} {'person' if people == 1 else 'people'},"
+        else:
+            count = ""
+        lines.append(f"- {name}  id {short_id(row['address'])}  {mode}{count} {notes}")
     if len(rows) > limit:
         lines.append(f'- and {len(rows) - limit} more: search(query=..., kind="hub")')
     return lines

@@ -79,6 +79,7 @@ All settings are environment variables. There are no config files.
 | `RETICULA_SIGNUP_RATE` | `5/hour` | Sign-up attempts allowed per client IP address. Units: second, minute, hour, day. |
 | `RETICULA_REGISTER_RATE` | `20/hour` | Connector registrations allowed per client IP address. Each assistant registers once when it is connected. |
 | `RETICULA_TRUSTED_PROXIES` | empty | Comma-separated IP addresses or CIDR ranges whose `X-Forwarded-For` header is believed. Empty trusts nobody. Set it to your reverse proxy's address, or every sign-up counts as coming from the proxy. |
+| `RETICULA_KNOWN_CLIENTS` | `claude.ai,claude.com` | Comma-separated hosts that an assistant's connector returns to after sign-in. The sign-in page warns when a connection would hand access to any other host. Connections that return to this computer never warn. |
 | `RETICULA_EMBEDDER` | `auto` | `auto`, `hash` or `fastembed`. `fastembed` runs a local model and needs the extra `reticula-mcp[fastembed]`. `hash` needs nothing and has no real sense of meaning; keyword matching still works. `auto` uses `fastembed` when it is installed and `hash` otherwise. |
 | `RETICULA_EMBED_MODEL` | model default | Model name for the `fastembed` embedder. |
 | `RETICULA_STATELESS_HTTP` | `true` | Keep no MCP session state on the server, so a restart does not strand a connected assistant. |

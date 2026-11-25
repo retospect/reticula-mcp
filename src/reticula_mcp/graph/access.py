@@ -133,3 +133,34 @@ def authorize_grant(
         FORBIDDEN,
         "only the hub's admin can change or restore someone else's access",
     )
+
+
+def precheck_grant(
+    conn: Conn, *, granter: str, hub: Row, mode: str, targets_self: bool
+) -> None:
+    """The part of :func:`authorize_grant` that does not depend on WHO the
+    grantee is, so a caller can refuse before looking the grantee up (a viewer
+    who may not grant must not learn from the answer which handles exist)."""
+    if mode not in MODES:
+        raise ReticulaError(BAD_INPUT, f"mode must be one of {', '.join(MODES)}")
+    if granter == hub["author"] or targets_self:
+        return
+    if mode == "none":
+        raise ReticulaError(
+            FORBIDDEN,
+            "only the hub's admin can revoke someone else",
+            hint="anyone can remove themself with mode=none",
+        )
+    access = hub_access(conn, granter, hub["id"])
+    if access != "add":
+        raise ReticulaError(
+            FORBIDDEN,
+            "you may share a hub only if you can add to it",
+            hint="ask the hub's admin or a member who can add",
+        )
+    if (hub["payload"] or {}).get("invite") == "admins":
+        raise ReticulaError(
+            FORBIDDEN,
+            "this hub only lets its admin invite people",
+            hint="ask the hub's admin",
+        )

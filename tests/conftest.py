@@ -32,6 +32,10 @@ from reticula_mcp.db import connect
 from reticula_mcp.db.migrate import migrate
 from reticula_mcp.db.pool import Conn
 
+# The suite runs on the deterministic embedder whatever is installed; tests of
+# the real model opt in by setting RETICULA_EMBEDDER themselves.
+os.environ.setdefault("RETICULA_EMBEDDER", "hash")
+
 # Cheap argon2 parameters for the suite (production uses the library defaults).
 accounts.PASSWORD_HASHER = PasswordHasher(time_cost=1, memory_cost=8, parallelism=1)
 PASSWORD = "correct horse battery staple"

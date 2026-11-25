@@ -88,3 +88,34 @@ def signup_allowed(
         (ip, (email or "")[:254] or None),
     )
     return True
+
+
+def acquire_many(
+    conn: Conn, checks: list[tuple[str, str, int, timedelta]]
+) -> list[int] | None:
+    """Count one event on each ``(kind, subject, limit, window)`` or none at all.
+
+    Locks every key first (in sorted order, so two callers cannot deadlock),
+    so parallel callers see each other's events. Returns the ids of the rows
+    inserted (so a caller can take them back), or None when any key is full.
+    """
+    for kind, subject, _, _ in sorted(checks, key=lambda c: (c[0], c[1])):
+        conn.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 7310))",
+            (f"{kind}:{subject}",),
+        )
+    if any(count(conn, k, s, w) >= limit for k, s, limit, w in checks):
+        return None
+    ids = []
+    for kind, subject, _, _ in checks:
+        row = conn.execute(
+            "INSERT INTO auth_event (kind, subject) VALUES (%s, %s) RETURNING id",
+            (kind, subject),
+        ).fetchone()
+        assert row is not None
+        ids.append(int(row["id"]))
+    return ids
+
+
+def forget(conn: Conn, ids: list[int]) -> None:
+    conn.execute("DELETE FROM auth_event WHERE id = ANY(%s)", (ids,))

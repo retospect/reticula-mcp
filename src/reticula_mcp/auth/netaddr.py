@@ -15,6 +15,17 @@ def _networks(settings: Settings) -> list[Network]:
     return [ipaddress.ip_network(p, strict=False) for p in settings.trusted_proxies]
 
 
+def _normalise(addr: str) -> str:
+    """An address as text; an IPv4-mapped IPv6 address becomes the IPv4 it wraps."""
+    try:
+        ip = ipaddress.ip_address(addr)
+    except ValueError:
+        return addr
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        return str(ip.ipv4_mapped)
+    return str(ip)
+
+
 def _is_trusted(addr: str, nets: list[Network]) -> bool:
     try:
         ip = ipaddress.ip_address(addr)
@@ -27,18 +38,21 @@ def client_address(request: Request, settings: Settings) -> str:
     """The caller's address.
 
     ``X-Forwarded-For`` is believed only when the TCP peer is listed in
-    ``RETICULA_TRUSTED_PROXIES``; the list is then walked from the right, past
-    trusted proxies, and the first other entry is the client (entries further
-    left are client-supplied and ignored). Anything unparseable falls back to
-    the peer. ``"-"`` when nothing is known.
+    ``RETICULA_TRUSTED_PROXIES``. All header lines are joined (a proxy may add
+    its own line after the client's), then the list is walked from the right,
+    past trusted proxies, and the first other entry is the client (entries
+    further left are client-supplied and ignored). IPv4-mapped IPv6 addresses
+    are treated as the IPv4 they wrap, for the trust check and the result.
+    Anything unparseable falls back to the peer. ``"-"`` when nothing is known.
     """
-    peer = request.client.host if request.client else ""
+    peer = _normalise(request.client.host) if request.client else ""
     nets = _networks(settings)
     if not peer or not nets or not _is_trusted(peer, nets):
         return peer or "-"
-    header = request.headers.get("x-forwarded-for", "")
+    header = ",".join(request.headers.getlist("x-forwarded-for"))
     hops = [h.strip() for h in header.split(",") if h.strip()]
-    for hop in reversed(hops):
+    for raw in reversed(hops):
+        hop = _normalise(raw)
         try:
             ipaddress.ip_address(hop)
         except ValueError:

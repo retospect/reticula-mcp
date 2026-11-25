@@ -9,7 +9,10 @@ Rules this module keeps:
   outgoing link to something unreadable shows its address only, the same as for
   an address that does not exist;
 * a withdrawn (tombstoned) atom reads as an address and nothing else, and only to
-  people who could have seen it: its author, and members of a hub they can read.
+  people who could have seen it: its author, and readers of a hub its author
+  filed it in;
+* a hub's access list is shown in full only to its admin and to people who can
+  add to it; a reader sees the owner and their own entry.
 """
 
 from __future__ import annotations
@@ -59,8 +62,11 @@ def read_ref(
 
 def _withdrawn(conn: Conn, viewer: Account, ref: str) -> Row | None:
     """A tombstoned node matching ``ref``, if the viewer is allowed to learn that
-    it was withdrawn (its author, or someone who can read a hub it was filed
-    in). Anything else stays indistinguishable from a missing address."""
+    it was withdrawn: its author, or someone who could have read it, which is
+    the ``readable_nodes`` rule minus the tombstone (audience ``hub``, filed by
+    its OWN author in a hub the viewer reads). A filing by anyone else only
+    organises and tells nobody anything. Everything else stays
+    indistinguishable from a missing address."""
     ref = ref.strip()
     if ref.startswith("ret:"):
         cond, arg = "n.address = %(ref)s", ref
@@ -74,9 +80,10 @@ def _withdrawn(conn: Conn, viewer: Account, ref: str) -> Row | None:
         SELECT n.id, n.address FROM node n
         WHERE n.tombstoned_at IS NOT NULL AND {cond}
           AND (n.author = %(person)s
-               OR (n.audience <> 'private' AND EXISTS (
+               OR (n.audience = 'hub' AND EXISTS (
                     SELECT 1 FROM membership m
                     WHERE m.node_id = n.id AND NOT m.withdrawn
+                      AND m.audience = 'hub' AND m.author = n.author
                       AND m.hub_node_id IN ({readable_nodes_sql("%(viewer)s")}))))
         LIMIT 2
         """,
@@ -314,18 +321,37 @@ def _counts(
     return {r["hub"]: (r["notes"], r["hubs"]) for r in rows}
 
 
+# the same sentence as the `share` listing (graph lane)
+READERS_NOTE = "other readers are shown only to people who can add to this hub"
+
+
 def _access_line(conn: Conn, viewer: Account, hub: Row) -> str | None:
+    """Who has access to the hub, as far as this viewer may know.
+
+    The hub's admin and everyone who can add to it see the whole list. A
+    viewer who can only read sees the owner and their own entry: no other
+    name and no count of the others, with the same closing remark whether or
+    not there are others (every account reads the shipped instructions hub, so
+    the full list there would name every handle on the instance).
+    """
+    mode_row = conn.execute(
+        "SELECT hub_access(%s, %s) AS mode", (viewer.person_id, hub["id"])
+    ).fetchone()
+    mode = mode_row["mode"] if mode_row else None
+    is_owner = hub["author"] == viewer.person_id
+    if not is_owner and mode not in ("read", "add"):
+        return None
+    owner = f"@{hub['author_handle']}" if hub.get("author_handle") else hub["author"]
+    parts = [f"{owner} owner"]
+    if not is_owner and mode != "add":
+        me = f"@{viewer.handle}" if viewer.handle else viewer.person_id
+        return f"access: {owner} owner, {me} read (you); {READERS_NOTE}"
     grants = conn.execute(
         "SELECT g.grantee, g.mode, a.handle FROM hub_grant g"
         " LEFT JOIN account a ON a.person_id = g.grantee"
         " WHERE g.hub_node_id = %s AND g.mode IN ('read', 'add') ORDER BY g.id",
         (hub["id"],),
     ).fetchall()
-    is_owner = hub["author"] == viewer.person_id
-    if not is_owner and not any(g["grantee"] == viewer.person_id for g in grants):
-        return None
-    owner = f"@{hub['author_handle']}" if hub.get("author_handle") else hub["author"]
-    parts = [f"{owner} owner"]
     for g in grants:
         if g["grantee"] == hub["author"]:
             continue  # the owner is already named
