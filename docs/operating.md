@@ -319,6 +319,8 @@ app-1  | hint: start that newer version again, or restore a dump taken before th
 
 The name in brackets is the migration this version has no file for. These lines are from the drill, where a build without the file of migration 0203 stood in for the older version. The server refuses before it applies anything; the migration ledger was the same afterwards. Docker starts the container again and again, with a pause that grows each time: 9 attempts in the first 31 seconds, the last one 13 seconds after the one before. Each attempt adds the same two lines to the log. Between the attempts `docker compose ps` shows the status `Restarting (1)`. The port does not answer.
 
+The other commands refuse in the same way. On the refused stack `docker compose run --rm app reticula-mcp token --email someone@example.com --label laptop` printed the same two lines without the `app-1  |` prefix, minted no token and ended with status 1. Use `docker compose run --rm app` there and not `docker compose exec app`: the container that `exec` needs keeps restarting, and in the drill `exec` printed nothing and ended with status 137.
+
 There are three ways out:
 
 - Start the newer version again: set its `RETICULA_VERSION` and repeat step 3.
@@ -330,6 +332,8 @@ With `RETICULA_ALLOW_NEWER_SCHEMA=1` the older version starts on the newer schem
 ```
 app-1  | warning: the database has migrations this version does not have (0203_shared_rules): a newer version has used it; running on the newer schema because RETICULA_ALLOW_NEWER_SCHEMA is set
 ```
+
+A command such as `reticula-mcp token` prints the same line and then does its work.
 
 That is safe only when the release notes of the newer version say that its migrations change no table. Otherwise the older version reads and writes tables in a form it does not know. Take the variable out of `.env` again once the newer version runs. While it is set, nothing is refused.
 
