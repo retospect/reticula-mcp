@@ -198,9 +198,13 @@ def test_ok_everything_a_person_wrote_is_one_quoted_line(conn, make_account, bad
         hub=hub,
         ext_id=DOI,
         anchor=bad,
-        title="T " + bad,
+        title="T",
     )
-    p = paper(conn, a, hub=hub, title="P " + bad)
+    p = paper(conn, a, hub=hub, title="P")
+    # A write now flattens or refuses such titles; one stored before that rule,
+    # or by a rebuild, is still shown as one quoted line.
+    for address, title in ((n, "T " + bad), (addr(p), "P " + bad)):
+        conn.execute("UPDATE node SET title = %s WHERE address = %s", (title, address))
     outs = [
         handlers.search(conn, b, query=DOI),
         handlers.search(conn, b, query="", hub=hub),
