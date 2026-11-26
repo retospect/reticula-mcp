@@ -19,9 +19,9 @@ from reticula_mcp.errors import (
     ReticulaError,
 )
 from reticula_mcp.graph import access, api
-from reticula_mcp.permissions import readable_nodes_sql
+from reticula_mcp.permissions import can_read, readable_nodes_sql
 from reticula_mcp.resolve import resolve_person, resolve_ref
-from reticula_mcp.search import render
+from reticula_mcp.search import index, render
 
 Row = dict[str, Any]
 
@@ -95,6 +95,18 @@ def find_debug_hub(conn: Conn) -> Row | None:
     ).fetchone()
 
 
+def _is_instructions_hub(conn: Conn, hub: Row) -> bool:
+    """The instance's instructions hub: authored by the system account and
+    tagged ``slug:hub-instructions`` (an imposter's hub with the tag is not)."""
+    if "slug:hub-instructions" not in (hub.get("tags") or []):
+        return False
+    row = conn.execute(
+        "SELECT 1 FROM account WHERE person_id = %s AND status = 'system'",
+        (hub["author"],),
+    ).fetchone()
+    return row is not None
+
+
 def _require_can_add(conn: Conn, viewer: Account, hub: Row) -> None:
     if access.can_add_person(conn, viewer.person_id, hub["id"]):
         return
@@ -120,6 +132,21 @@ def _hubs_of_superseded(conn: Conn, viewer: Account, node: Row) -> list[Row]:
         (addresses, viewer.id),
     ).fetchall()
     return [r for r in rows if access.can_add_person(conn, viewer.person_id, r["id"])]
+
+
+def _too_long(row: Row) -> str:
+    """A last reply line when the note is longer than search by meaning reads
+    (title line included, as search.index.node_text joins them); else empty."""
+    title, text = row.get("title"), row.get("text") or ""
+    size = len(f"{title}\n{text}") if title else len(text)
+    reads = index.model_reads_chars()
+    if size <= reads:
+        return ""
+    return (
+        f"\nthis {row['kind']} is {size:,} characters; search by meaning reads only"
+        f" about the first {reads:,}. Split it into notes of one idea each and"
+        " link them (derived-from or related-to)."
+    )
 
 
 def _paper_next(node: Row, ext_id: str | None) -> str:
@@ -218,7 +245,7 @@ def put(
             )
     if kind == "paper":
         nxt = f"next: {_paper_next(node, ext_id)}\n{nxt}"
-    return f"saved {node['kind']} {_name(node)}{where}\n{nxt}"
+    return f"saved {node['kind']} {_name(node)}{where}\n{nxt}{_too_long(node)}"
 
 
 def edit(
@@ -265,7 +292,7 @@ def edit(
     return (
         f"updated {node['kind']} {_name(updated)}"
         " (older versions stay readable by address)"
-    )
+    ) + _too_long(updated)
 
 
 def link(
@@ -284,31 +311,7 @@ def link(
         if remove:
             api.remove_membership(conn, viewer, node["id"], hub["id"])
             return f"removed {_name(node)} from hub {_name(hub)}"
-        _require_can_add(conn, viewer, hub)
-        own = node["author"] == viewer.person_id
-        if not own and node["kind"] == "hub":
-            raise ReticulaError(
-                FORBIDDEN,
-                "you can only file your own hubs under a hub",
-                hint="a hub's filing decides who inherits access to what lies"
-                " beneath it, so only its author can change it",
-            )
-        before = conn.execute(
-            "SELECT 1 FROM membership WHERE node_id = %s AND hub_node_id = %s"
-            " AND author = %s AND NOT withdrawn",
-            (node["id"], hub["id"], viewer.person_id),
-        ).fetchone()
-        api.add_membership(conn, viewer, node["id"], hub["id"])
-        verb = "already filed" if before else "filed"
-        out = f"{verb} {_name(node)} under hub {_name(hub)}"
-        if own:
-            return out
-        return (
-            f"{out} as your statement, to organise it.\n"
-            "Hub members who cannot already read this note will not see it: only"
-            " its author can share it into the hub.\n"
-            "next: ask the author to link it to the hub themselves"
-        )
+        return _file(conn, viewer, node, hub)
     target = resolve_ref(conn, viewer, to)
     if node["author"] != viewer.person_id:
         raise ReticulaError(
@@ -330,6 +333,77 @@ def link(
     if changed and in_use is not None:
         out += _new_rel_line(rel, in_use)
     return out
+
+
+_NOT_OWN = (
+    " as your statement, to organise it.\n"
+    "Hub members who cannot already read this note will not see it: only"
+    " its author can share it into the hub.\n"
+    "next: ask the author to link it to the hub themselves"
+)
+
+
+def _check_filing(conn: Conn, viewer: Account, node: Row, hub: Row) -> bool:
+    """Refuse a filing the viewer may not make; True when the note is theirs."""
+    _require_can_add(conn, viewer, hub)
+    own = node["author"] == viewer.person_id
+    if not own and node["kind"] == "hub":
+        raise ReticulaError(
+            FORBIDDEN,
+            "you can only file your own hubs under a hub",
+            hint="a hub's filing decides who inherits access to what lies"
+            " beneath it, so only its author can change it",
+        )
+    return own
+
+
+def _file(conn: Conn, viewer: Account, node: Row, hub: Row) -> str:
+    own = _check_filing(conn, viewer, node, hub)
+    before = conn.execute(
+        "SELECT 1 FROM membership WHERE node_id = %s AND hub_node_id = %s"
+        " AND author = %s AND NOT withdrawn",
+        (node["id"], hub["id"], viewer.person_id),
+    ).fetchone()
+    api.add_membership(conn, viewer, node["id"], hub["id"])
+    verb = "already filed" if before else "filed"
+    out = f"{verb} {_name(node)} under hub {_name(hub)}"
+    if not own:
+        out += _NOT_OWN
+    return out if before else out + _still_filed(conn, viewer, node, hub)
+
+
+def _still_filed(conn: Conn, viewer: Account, node: Row, hub: Row) -> str:
+    """After a new filing: a line naming another hub the viewer filed the note
+    in, with the call that completes a move (withdraw it there). Empty when
+    there is none."""
+    rows = conn.execute(
+        "SELECT h.* FROM membership m JOIN node h ON h.id = m.hub_node_id"
+        " WHERE m.node_id = %s AND m.author = %s AND NOT m.withdrawn"
+        " AND m.hub_node_id <> %s AND h.kind = 'hub' AND h.tombstoned_at IS NULL"
+        " ORDER BY m.id",
+        (node["id"], viewer.person_id, hub["id"]),
+    ).fetchall()
+    if not rows:
+        return ""
+    first = dict(rows[0])
+    if not can_read(conn, viewer, first["id"]):
+        first[_UNREAD] = True
+    ref, old = render.short_ref(node["address"]), render.short_ref(first["address"])
+    call = f"link(ref='{ref}', to='{old}', remove=true)"
+    if len(rows) == 1:
+        return f"\nstill filed in hub {_short_name(first)}; to move it, also run {call}"
+    return (
+        f"\nstill filed in {len(rows)} other hubs, among them hub"
+        f" {_short_name(first)}; to move it out of that one, also run {call}"
+    )
+
+
+def _short_name(row: Row) -> str:
+    """Short id and title, without the address: for a hint line."""
+    ref = render.short_ref(row["address"])
+    if row.get(_UNREAD):
+        return ref
+    return f"{ref} {render.quote(render.label(row))}"
 
 
 def _new_rel_line(rel: str, in_use: list[tuple[str, int]]) -> str:
@@ -448,6 +522,15 @@ def share(
         raise ReticulaError(BAD_INPUT, "mode must be add, read or none")
     ref = person.strip()
     targets_self = ref in (f"@{viewer.handle}", viewer.person_id)
+    if mode == "none" and targets_self and _is_instructions_hub(conn, hub_row):
+        # bootstrap never grants over an existing row, so a `none` written
+        # here would cut the account off the instructions for good
+        raise ReticulaError(
+            FORBIDDEN,
+            "the Reticula instructions hub cannot be left",
+            hint="it holds the instructions every account reads; keeping it"
+            " shares nothing of yours and costs nothing",
+        )
     # Refuse before looking the person up: a viewer who may not grant must get
     # the same answer whether or not that handle exists or has access.
     access.precheck_grant(
@@ -457,7 +540,22 @@ def share(
         mode=mode,
         targets_self=targets_self,
     )
-    grantee = resolve_person(conn, person)
+    try:
+        grantee = resolve_person(conn, person)
+    except ReticulaError as e:
+        if e.code != NOT_FOUND:
+            raise
+        found = ref.lstrip("@")
+        if not ref.startswith("@") or not all(
+            c.isalnum() or c in "_-" for c in found
+        ):  # a person ID, or text that cannot be a handle: no search to suggest
+            raise
+        raise ReticulaError(
+            NOT_FOUND,
+            e.message,
+            hint=f'search(query="{found}", kind="person") lists people whose'
+            " handle contains it",
+        ) from e
     note = ""
     if mode == "add" and (hub_row["payload"] or {}).get("preset") == "personal":
         mode = "read"

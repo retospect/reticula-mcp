@@ -262,7 +262,22 @@ def ensure_shipped_content(
         " ORDER BY id"
     ).fetchall()
     for row in rows:
-        if not _has_grant(conn, hub["id"], row["person_id"]):
+        if not _has_grant(conn, hub["id"], row["person_id"]) or _left_it(
+            conn, hub["id"], row["person_id"]
+        ):
             api.set_grant(conn, system, hub["id"], row["person_id"], "read")
             result.granted.append(row["person_id"])
     return result
+
+
+def _left_it(conn: Conn, hub_node_id: int, person_id: str) -> bool:
+    """The account itself set its grant on this hub to ``none``. The
+    instructions hub can no longer be left (graph.handlers.share), so a row
+    written before that rule is given back as ``read``; a ``none`` written by
+    anyone else stays."""
+    row = conn.execute(
+        "SELECT 1 FROM hub_grant WHERE hub_node_id = %s AND grantee = %s"
+        " AND mode = 'none' AND granted_by = grantee",
+        (hub_node_id, person_id),
+    ).fetchone()
+    return row is not None
