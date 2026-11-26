@@ -92,6 +92,7 @@ def test_a_model_not_measured_here_gets_the_strictest_cut_and_says_so(caplog):
 
 
 def test_the_setting_names_the_model(monkeypatch):
+    pytest.importorskip("fastembed")  # get_embedder refuses fastembed without it
     monkeypatch.setenv("RETICULA_EMBEDDER", "fastembed")
     monkeypatch.setenv("RETICULA_EMBED_MODEL", "mixedbread-ai/mxbai-embed-large-v1")
     embedder._build.cache_clear()
