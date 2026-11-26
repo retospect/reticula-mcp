@@ -3,6 +3,10 @@
 ## Unreleased
 
 - Sign-in and accounts: a connector can register only when it returns to this computer or to a known client's host, unless `RETICULA_REGISTRATION=open`, and the same rule applies when it asks a person to sign in; many failed sign-ins for one e-mail address from many networks make further attempts for it wait, up to 30 seconds, without locking the account; sign-up refuses the 10,000 most common passwords (the SecLists list, MIT License); sign-in pages never opened no longer count against a connector's limit of open sign-ins; `reticula-mcp token` makes tokens that expire after 90 days unless `--no-expiry` is given; `reticula-mcp account disable` and `account passwd` revoke every connection and token of the account; a new handle may not contain "reticula" or "admin".
+- `reticula-mcp serve` refuses to start when `RETICULA_PUBLIC_URL` is `https` (or another address that is reached through a proxy) and `RETICULA_TRUSTED_PROXIES` is empty. The error names the URL and says to set the proxy's address; `RETICULA_TRUSTED_PROXIES=none` starts the server as before, with a short warning that every client shares one rate-limit bucket. `migrate`, `token` and `account` are not affected.
+- `/healthz` answers from a database check that is at most 2 seconds old, whether it succeeded or failed, so repeated requests do not each take a database connection. The answer itself is unchanged.
+- Every check of the repository runs `pip-audit` on the locked dependencies, and Dependabot proposes updates of the Python packages, the GitHub Actions and the base images.
+- `compose.yaml`: the database is on a network of its own that only the server joins and that has no route out; the server and the database drop the Linux capabilities they do not need and may not gain privileges, and so does the Tailscale container of `compose.tailscale.yaml`. The server gets the database password as `PGPASSWORD`, so a password with characters such as `@`, `:` or `/` works. No migration.
 
 ## 0.4.1 (2026-11-26)
 

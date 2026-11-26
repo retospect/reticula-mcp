@@ -89,7 +89,7 @@ CMD ["reticula-mcp", "serve", "--migrate"]
 
 # --- a wheel from the working tree (context: repository root) ----------------
 FROM python:3.13-slim AS wheel
-RUN pip install --no-cache-dir build
+RUN pip install --no-cache-dir build==1.6.1
 WORKDIR /src
 COPY pyproject.toml README.md LICENSE ./
 COPY src ./src

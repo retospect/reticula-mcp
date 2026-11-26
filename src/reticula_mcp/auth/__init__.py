@@ -43,9 +43,15 @@ from reticula_mcp.auth import authorize, config, metadata, registration, signin
 from reticula_mcp.auth.provider import DEFAULT_CLIENT_ID, ReticulaProvider
 from reticula_mcp.config import Settings
 from reticula_mcp.db.pool import Database
+from reticula_mcp.errors import BAD_INPUT, ReticulaError
 from reticula_mcp.seams import AuthWiring
 
-__all__ = ["DEFAULT_CLIENT_ID", "AuthWiring", "build_auth"]
+__all__ = [
+    "DEFAULT_CLIENT_ID",
+    "AuthWiring",
+    "build_auth",
+    "refuse_unset_proxy_trust",
+]
 
 log = logging.getLogger("reticula_mcp.auth")
 
@@ -64,10 +70,36 @@ def reached_through_a_proxy(settings: Settings) -> bool:
         return True
 
 
+def refuse_unset_proxy_trust(settings: Settings) -> None:
+    """Raise when the public URL says a proxy is in front and the operator has
+    neither named the proxy nor said that none is to be trusted."""
+    if (
+        settings.trusted_proxies
+        or settings.trusted_proxies_none
+        or not reached_through_a_proxy(settings)
+    ):
+        return
+    raise ReticulaError(
+        BAD_INPUT,
+        f"RETICULA_PUBLIC_URL is {settings.base_url}, which is reached through a"
+        " proxy, but RETICULA_TRUSTED_PROXIES is empty",
+        hint="set RETICULA_TRUSTED_PROXIES to the proxy's address (under docker"
+        " compose, the gateway address of the compose network, 172.31.88.1)."
+        " RETICULA_TRUSTED_PROXIES=none starts the server anyway, with every"
+        " client in one rate-limit bucket",
+    )
+
+
 def warn_if_proxy_untrusted(settings: Settings) -> bool:
-    """Log one loud warning when every client would share one throttle bucket."""
+    """Log one warning when every client would share one throttle bucket."""
     if settings.trusted_proxies or not reached_through_a_proxy(settings):
         return False
+    if settings.trusted_proxies_none:
+        log.warning(
+            "RETICULA_TRUSTED_PROXIES is none: every client shares one"
+            " rate-limit bucket because no peer is trusted"
+        )
+        return True
     log.warning(
         "RETICULA_PUBLIC_URL is %s but RETICULA_TRUSTED_PROXIES is empty: behind a"
         " reverse proxy or tunnel every client appears to come from the proxy, so"
