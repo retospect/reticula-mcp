@@ -19,6 +19,7 @@ from reticula_mcp.errors import (
     ReticulaError,
 )
 from reticula_mcp.graph import access, api
+from reticula_mcp.graph.materialize import PUBLIC
 from reticula_mcp.permissions import can_read, readable_nodes_sql
 from reticula_mcp.resolve import resolve_person, resolve_ref
 from reticula_mcp.search import index, render
@@ -506,6 +507,37 @@ def _list_access(conn: Conn, viewer: Account, hub: Row) -> str:
     return "\n".join(lines)
 
 
+def _share_public(conn: Conn, viewer: Account, hub_row: Row, mode: str) -> str:
+    """``share(hub=..., person="public", mode="read")``: the hub on the public
+    page /hubs (migration 0354), for its owner only."""
+    if hub_row["author"] != viewer.person_id:
+        raise ReticulaError(FORBIDDEN, "only the hub's owner can make it public")
+    if mode == "add":
+        raise ReticulaError(
+            BAD_INPUT,
+            "public is read only",
+            hint='share(hub=..., person="public", mode="read")',
+        )
+    if mode == "read" and hub_row["audience"] != "hub":
+        raise ReticulaError(
+            BAD_INPUT,
+            "a private hub cannot be public",
+            hint=f'edit(ref="{hub_row["address"][-8:]}", private=false) first',
+        )
+    api.set_grant(conn, viewer, hub_row["id"], PUBLIC, mode)
+    where = _name(hub_row)
+    ref = hub_row["address"][-8:]
+    if mode == "none":
+        return f"hub {where} is no longer on the public page."
+    return (
+        f"hub {where} is public now: anyone can see, without signing in, on this"
+        " server's page /hubs, the titles and ids of this hub, of your own"
+        " sub-hubs in it and of your own notes in it. Their text is not shown,"
+        " nor notes by other people, nor private notes."
+        f' share(hub="{ref}", person="public", mode="none") takes it off.'
+    )
+
+
 def share(
     conn: Conn,
     viewer: Account,
@@ -521,6 +553,8 @@ def share(
     if mode not in access.MODES:
         raise ReticulaError(BAD_INPUT, "mode must be add, read or none")
     ref = person.strip()
+    if ref.lower() == PUBLIC:  # the public page, not a person: "@public" would be
+        return _share_public(conn, viewer, hub_row, mode)
     targets_self = ref in (f"@{viewer.handle}", viewer.person_id)
     if mode == "none" and targets_self and _is_instructions_hub(conn, hub_row):
         # bootstrap never grants over an existing row, so a `none` written

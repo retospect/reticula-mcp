@@ -55,6 +55,7 @@ RESERVED_HANDLES = frozenset(
         "oauth",
         "operator",
         "postmaster",
+        "public",
         "reticula",
         "root",
         "security",

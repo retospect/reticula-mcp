@@ -27,7 +27,7 @@ from reticula_mcp.errors import (
     ReticulaError,
 )
 from reticula_mcp.graph import access
-from reticula_mcp.graph.materialize import apply_record
+from reticula_mcp.graph.materialize import PUBLIC, apply_record
 from reticula_mcp.graph.paper import normalize_ext_id
 from reticula_mcp.permissions import can_read, readable_nodes_sql
 from reticula_mcp.resolve import resolve_ref
@@ -690,13 +690,24 @@ def set_grant(
     ).fetchone()
     if hub is None or hub["kind"] != "hub":
         raise ReticulaError(NOT_FOUND, "no such hub")
-    if not fmt.is_person_id(grantee_person_id):
-        raise ReticulaError(BAD_INPUT, "grantee must be a person ID")
-    if get_account_by_person_id(conn, grantee_person_id) is None:
-        raise ReticulaError(NOT_FOUND, "no such person on this instance")
-    access.authorize_grant(
-        conn, granter=actor.person_id, hub=hub, grantee=grantee_person_id, mode=mode
-    )
+    if grantee_person_id == PUBLIC:
+        # the public page (migration 0354): the hub's author only, read or none
+        if actor.person_id != hub["author"] or mode not in ("read", "none"):
+            raise ReticulaError(
+                FORBIDDEN, "only the hub's owner makes it public, and only to read"
+            )
+    else:
+        if not fmt.is_person_id(grantee_person_id):
+            raise ReticulaError(BAD_INPUT, "grantee must be a person ID")
+        if get_account_by_person_id(conn, grantee_person_id) is None:
+            raise ReticulaError(NOT_FOUND, "no such person on this instance")
+        access.authorize_grant(
+            conn,
+            granter=actor.person_id,
+            hub=hub,
+            grantee=grantee_person_id,
+            mode=mode,
+        )
     existing = conn.execute(
         "SELECT mode FROM hub_grant WHERE hub_node_id = %s AND grantee = %s",
         (hub["id"], grantee_person_id),
