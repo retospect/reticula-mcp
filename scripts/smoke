@@ -493,7 +493,12 @@ async def mcp_steps(run: Run, session: ClientSession) -> None:
     run.ok("marker in the reply")
 
     run.begin("delete")
-    await call(run, session, "delete", ref=run.note)
+    reply = await call(run, session, "delete", ref=run.note)
+    # From 0.5.0 a delete asks first and names the call that confirms it; the
+    # smoke test is the person here and says yes. An older server deletes at once.
+    confirm = re.search(r'delete\(ref="([^"]+:yes-[0-9a-f]+)"\)', reply)
+    if confirm:
+        await call(run, session, "delete", ref=confirm.group(1))
     run.note_deleted = True
     reply = await call(run, session, "get", allow_error=True, ref=run.note)
     if run.marker in reply:
