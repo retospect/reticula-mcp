@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling==1.33.0"]
 build-backend = "hatchling.build"
 
 [project]
@@ -71,7 +71,18 @@ Issues = "https://github.com/retospect/reticula-mcp/issues"
 packages = ["src/reticula_mcp"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src", "docs", "tests", "scripts", "README.md", "LICENSE", "AGENTS.md", "CLAUDE.md"]
+# What a packager needs to build and test the release: the source, the tests and
+# the files the tests read. The working notes of the repository stay out.
+include = [
+    "src",
+    "tests",
+    "scripts",
+    "docs/operating.md",
+    "docs/format.md",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+]
 
 [tool.ruff]
 target-version = "py312"

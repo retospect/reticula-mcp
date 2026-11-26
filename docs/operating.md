@@ -21,9 +21,10 @@ The commands are written for the Docker Compose files in [`deploy/`](../deploy) 
 
    ```
    cp .env.example .env
+   chmod 600 .env
    ```
 
-   Set two values in `.env`:
+   The file will hold the database password, so only your own user may read it. Set two values in `.env`:
 
    - `RETICULA_DB_PASSWORD`: generate one with `openssl rand -hex 24`.
    - `RETICULA_VERSION`: the release you cloned, without the `v`. For the tag `v0.2.0` it is `0.2.0`.
@@ -553,6 +554,21 @@ This upgrade was rehearsed the same way, on a copy of a running 0.3.0 instance: 
 
 Measured on a copy of a running instance with 80 notes and the default model: a start with an empty model volume stayed under 0.7 GB and 52 processes. `docker compose exec app reticula-mcp reindex --drop` loads the model a second time in the same container and took the container to 1.3 GB, file cache included, and 78 processes. With `RETICULA_APP_MEMORY=1g` the start and that reindex still ran. With `512m` the server started, but the reindex ended after 1 second with status 137 and took the server container down with it, and Docker started it again. Give a larger model more: [Choose a model](#choose-a-model) lists the memory each model needs once loaded, and a reindex needs that twice.
 
+The next release after 0.4.1 adds no migration either. Read before you upgrade to it:
+
+- `reticula-mcp serve` does not start when `RETICULA_PUBLIC_URL` is an `https` address or names a host other than this machine, and `RETICULA_TRUSTED_PROXIES` is empty. Set it to the proxy's address, as under [A tunnel or proxy on the same host](#a-tunnel-or-proxy-on-the-same-host). `RETICULA_TRUSTED_PROXIES=none` starts the server as before, with every client in one rate-limit bucket. The refusal names the URL and what to set:
+
+  ```
+  [error:BadInput] RETICULA_PUBLIC_URL is https://notes.example.com, which is reached through a proxy, but RETICULA_TRUSTED_PROXIES is empty
+  hint: set RETICULA_TRUSTED_PROXIES to the proxy's address (under docker compose, the gateway address of the compose network, 172.31.88.1). RETICULA_TRUSTED_PROXIES=none starts the server anyway, with every client in one rate-limit bucket
+  ```
+
+  Other commands, such as `migrate` and `token`, are not refused.
+- In `compose.yaml` the database is on a network of its own that only the server joins, and that has no route out. The server and the database drop every Linux capability they do not need, and neither may gain privileges. The Tailscale container of `compose.tailscale.yaml` drops them all.
+- The server gets the database password as `PGPASSWORD` and no longer inside the URL, so a password with characters such as `@`, `:`, `/` or `#` works.
+
+Measured on a copy of a running 0.4.0 instance: `docker compose up -d --build --wait` with the new files created the network, recreated both containers and was healthy after 33 seconds, the image build included. The server container then had no capabilities at all, and the database container had the five its start needs (`CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETGID`, `SETUID`). The database could not reach the internet, and the server could, for the model download. A new stack with the database password `p@ss:w/rd?#%&x y` started and applied every migration. The Tailscale container ran without capabilities, printed its sign-in link, reached the server and could not reach the database. Its sign-in and Funnel were not tried.
+
 Migrations only move forward and each file runs in its own transaction. A migration file that has already been applied is never edited; changes arrive as new files. If the server reports that an applied file has changed, you are running mismatched code and database: do not continue.
 
 The version-zero note format may still change. Read the release notes before you upgrade across a format change.
@@ -604,13 +620,13 @@ In the drill 0.1.0 from PyPI ran on a database that 0.1.1 from PyPI had migrated
 
 ## Back up
 
-The whole instance is one PostgreSQL database. Dump it while the server runs:
+The whole instance is one PostgreSQL database. Dump it while the server runs. For a backup that is kept, use the encrypted command under [Encrypt the dump](#encrypt-the-dump). A plain dump is for a copy you use at once, for example before a restore:
 
 ```
-docker compose exec -T db pg_dump -U reticula --format=custom reticula > reticula-$(date +%Y%m%d).dump
+(umask 077; docker compose exec -T db pg_dump -U reticula --format=custom reticula > reticula-$(date +%Y%m%d).dump)
 ```
 
-The dump contains every note, the password hashes and the private keys of every account, unencrypted. The custom format is compressed, not encrypted: a search of the file for a line of a note finds nothing, and `pg_restore` turns the same file into readable SQL without asking for a key. Store the dump as carefully as the database itself. Keep a copy of `.env` with it: the dump does not contain the settings.
+`umask 077` makes the file readable by your own user only. The dump contains every note, the password hashes and the private keys of every account, unencrypted. The custom format is compressed, not encrypted: a search of the file for a line of a note finds nothing, and `pg_restore` turns the same file into readable SQL without asking for a key. Store the dump as carefully as the database itself. Keep a copy of `.env` with it: the dump does not contain the settings.
 
 The embedding model is not in the dump. It is downloaded again when needed.
 
@@ -653,6 +669,7 @@ Save this as `backup.sh` next to `compose.yaml` and `.env`, put your public key 
 ```
 #!/bin/bash
 set -euo pipefail
+umask 077
 cd "$(dirname "$0")"
 
 recipient=age1...
@@ -669,7 +686,7 @@ age -r "$recipient" < .env > "$dir/env.age"
 find "$dir" -name 'reticula-*.dump.age' -mtime +"$keep_days" -delete
 ```
 
-Each run writes one encrypted dump into `backups/`, replaces the encrypted copy of `.env` beside it, and removes dumps older than 14 days. A dump is written under a name that ends in `.part` and gets its own name when it is complete, so a file named `.dump.age` is a whole dump. `set -o pipefail` makes a failed dump fail the script.
+Each run writes one encrypted dump into `backups/`, replaces the encrypted copy of `.env` beside it, and removes dumps older than 14 days. A dump is written under a name that ends in `.part` and gets its own name when it is complete, so a file named `.dump.age` is a whole dump. `set -o pipefail` makes a failed dump fail the script. `umask 077` makes every file it writes readable by your own user only; that line was added after the tests below.
 
 `backup.sh`, `backup.log` and `backups/` are your own files in the clone. `git` does not track them, and moving the clone to another release, as in step 2 of "Upgrade", left them where they were.
 
@@ -734,9 +751,10 @@ Restore into an empty database. The steps below replace the data of an existing 
 
 The volume name in step 1 starts with the project name, which the compose file fixes to `reticula`. For a copy that was started under another project name, the volume is `<name>_reticula-db`, and every command below needs the same `-p <name>` or `COMPOSE_PROJECT_NAME`. Without it the commands act on the stack called `reticula`.
 
-1. Stop the stack and remove the database volume. This deletes the current data.
+1. Stop the stack and remove the database volume. This deletes the current data. If any of it may still be needed, take a plain dump of it first, while the stack runs, as under Back up, and keep it until the restore is checked.
 
    ```
+   (umask 077; docker compose exec -T db pg_dump -U reticula --format=custom reticula > reticula-before-restore.dump)
    docker compose down
    docker volume rm reticula_reticula-db
    ```
