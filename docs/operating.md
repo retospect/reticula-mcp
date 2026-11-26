@@ -864,13 +864,13 @@ A search compares the query with every vector the account may read, as long as t
 
 `RETICULA_EMBED_MODEL` names the model. The server knows three: each brings its own cut, the similarity below which a match by meaning is not shown, and bge-base its own instruction in front of every query. Any other model of `fastembed` can be named too; its cut is then bge-small's, and the log says that it has not been measured.
 
-| Model | Vectors | Download | Memory with the model loaded | Embedding 1,000 notes | Added to a put of a long note | Paraphrases found among 6,000 notes |
-|---|---|---|---|---|---|---|
-| `BAAI/bge-small-en-v1.5` | 384 | 67 MB | 0.3 GB | about 40 s | 0.2 s | 10 of 23 |
-| `BAAI/bge-base-en-v1.5` (default) | 768 | 219 MB | 0.8 GB | about 2 min | 0.6 s | 18 of 23 |
-| `mixedbread-ai/mxbai-embed-large-v1` | 1024 | 1.34 GB | 1.8 GB | about 6 min | 2 s | 18 of 23 |
+| Model | Vectors | Download | Memory with the model loaded | Embedding 1,000 notes | Added to a put of a long note | Paraphrases found | Nonsense answered among 6,000 notes |
+|---|---|---|---|---|---|---|---|
+| `BAAI/bge-small-en-v1.5` | 384 | 67 MB | 0.3 GB | about 40 s | 0.2 s | 15 of 23 | 3 of 6 |
+| `BAAI/bge-base-en-v1.5` (default) | 768 | 219 MB | 0.8 GB | about 2 min | 0.6 s | 17 of 23 | none |
+| `mixedbread-ai/mxbai-embed-large-v1` | 1024 | 1.34 GB | 1.8 GB | about 6 min | 2 s | 18 of 23 | none |
 
-Measured on a development machine with 2 threads, as the server runs the model, while other work ran on it: take the times as an order of size. Memory is that of a process with only the model loaded. A put embeds its note after it is saved and before it answers, so the time in the sixth column is added to the answer of `put` and `edit` for a note of 4,000 characters or more; nothing is locked meanwhile. The last column is from the relevance set of the tests, with 6,000 notes of the same subjects added: the paraphrases whose note scores above the best match of a nonsense query. mxbai finds more of the hard cases (4 of 5 where bge-base finds 3), at three times the cost.
+Measured on a development machine with 2 threads, as the server runs the model, while other work ran on it: take the times as an order of size. Memory is that of a process with only the model loaded. A put embeds its note after it is saved and before it answers, so the time in the sixth column is added to the answer of `put` and `edit` for a note of 4,000 characters or more; nothing is locked meanwhile. The last two columns are from the relevance set of the tests, with 6,000 notes of the same subjects added, at each model's own cut: the paraphrases whose note is shown, and the nonsense queries that get a note anyway. mxbai finds more of the hard cases (4 of 5 where bge-base finds 2), at three times the cost.
 
 Every model reads the first 512 tokens of a note, about 2,300 characters of English. The rest of a longer note is found by its words but not by its meaning.
 

@@ -1074,12 +1074,21 @@ def _budget_line(skipped: list[_Sub]) -> str:
 
 def _cut_hub_text(row: Row) -> list[str]:
     text = str(row.get("text") or "")
+    if _only_the_title(row, text):
+        return []  # the head line shows the title already
     shown = text[:HUB_TEXT_SHOWN]
     shown = "\n".join(shown.split("\n")[:HUB_TEXT_LINES])
     lines = _content(row, shown)
     if len(shown) < len(text):
         lines.append(f"(hub text cut: {len(shown)} of {len(text)} characters shown)")
     return lines
+
+
+def _only_the_title(row: Row, text: str) -> bool:
+    """A hub's text that says nothing but its title: no quoted block is shown
+    for it (debug note 4757cf47)."""
+    title = " ".join(str(row.get("title") or "").split()).casefold()
+    return bool(title) and " ".join(text.split()).casefold() == title
 
 
 def _render_hub_page(
