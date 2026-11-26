@@ -14,6 +14,7 @@ from reticula_mcp.accounts import Account
 from reticula_mcp.content import people
 from reticula_mcp.db.pool import Conn
 from reticula_mcp.errors import BAD_INPUT, ReticulaError
+from reticula_mcp.format.text import refuse_unstorable
 from reticula_mcp.permissions import readable_among_sql
 from reticula_mcp.resolve import resolve_ref
 from reticula_mcp.search import find, recent, render
@@ -240,6 +241,8 @@ def search(
     include_superseded: bool = False,
     since: str | None = None,
 ) -> str:
+    # the query is cleaned instead (clean_query drops what cannot be printed)
+    refuse_unstorable(hub=hub, kind=kind, since=since)
     q = clean_query(query)
     if len(q) > MAX_QUERY:
         raise ReticulaError(
@@ -366,6 +369,14 @@ def get(
     history: bool = False,
     depth: int = 1,
 ) -> str:
+    # bounded before it is split: ten full addresses take about 700 characters
+    if len(ref) > MAX_REF_CHARS:
+        raise ReticulaError(
+            BAD_INPUT,
+            f"ref is {len(ref)} characters long; the limit is {MAX_REF_CHARS}",
+            hint=f"give at most {MAX_REFS} refs, as short ids or addresses",
+        )
+    refuse_unstorable(ref=ref)
     refs = split_refs(ref)
     if len(refs) <= 1:
         return read_ref(conn, viewer, ref, history=history, depth=depth)
@@ -387,6 +398,8 @@ def get(
 
 #: Refs one ``get`` reads.
 MAX_REFS = 10
+#: Characters of the ``ref`` of one ``get``, all refs together.
+MAX_REF_CHARS = 2_000
 _REF_SPLIT = re.compile(r"[\s,]+")
 
 
@@ -395,11 +408,11 @@ def split_refs(ref: str) -> list[str]:
     An address, an id suffix or a page has no space or comma in it. A word
     handle has spaces ("gentle beacon"): a part between commas that is one
     is one ref, so several handles go between commas."""
-    seen: list[str] = []
+    seen: dict[str, None] = {}  # in order, each once
     for piece in ref.split(","):
         piece = " ".join(piece.split())
         ones = [piece] if handle_words.looks_spoken(piece) else _REF_SPLIT.split(piece)
         for one in ones:
-            if one and one not in seen:
-                seen.append(one)
-    return seen
+            if one:
+                seen[one] = None
+    return list(seen)

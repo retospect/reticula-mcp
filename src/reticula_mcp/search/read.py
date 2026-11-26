@@ -80,6 +80,8 @@ def _split_offset(ref: str) -> tuple[str, int]:
     if not plus:
         return ref, 0
     tail = tail.strip()
+    if len(tail) > len(str(MAX_OFFSET)) and _DIGITS_RE.fullmatch(tail):
+        return base.strip(), MAX_OFFSET  # past any text: not turned into an int
     if not _DIGITS_RE.fullmatch(tail):
         raise ReticulaError(
             BAD_INPUT,
@@ -141,7 +143,7 @@ def _withdrawn(conn: Conn, viewer: Account, ref: str) -> Row | None:
         cond, arg = "t.address = %(ref)s", ref
     else:
         suffix = ref.lower()
-        if not _SUFFIX_RE.match(suffix) or len(suffix.replace("-", "")) < 6:
+        if not _SUFFIX_RE.fullmatch(suffix) or len(suffix.replace("-", "")) < 6:
             return None
         cond, arg = ends_with_sql("t.address"), suffix
         tail = ends_with_params(suffix)

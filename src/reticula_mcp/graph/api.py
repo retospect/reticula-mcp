@@ -26,6 +26,7 @@ from reticula_mcp.errors import (
     NOT_FOUND,
     ReticulaError,
 )
+from reticula_mcp.format.text import refuse_unstorable
 from reticula_mcp.graph import access
 from reticula_mcp.graph.materialize import PUBLIC, apply_record
 from reticula_mcp.graph.paper import normalize_ext_id
@@ -43,6 +44,10 @@ MAX_PAPER_TITLE = 200
 _TITLE_BREAKS = frozenset("\t\n\v\f\r\x1c\x1d\x1e\x1f\x85")
 MAX_TAGS = 20
 MAX_TAG = 50
+MAX_SUPERSEDES = 20  # notes one put replaces
+# Joiners that emoji sequences and several scripts need: the only invisible
+# format characters (Unicode category Cf) a title or tag may hold.
+_JOINERS = frozenset("\u200c\u200d")
 MAX_ANCHOR = 500
 MAX_MODEL = 100
 MAX_EXT_ID = 300
@@ -103,20 +108,34 @@ def _check_length(name: str, value: str | None, limit: int) -> None:
         raise ReticulaError(BAD_INPUT, f"{name} is longer than {limit} characters")
 
 
-def clean_title(title: str | None, kind: str) -> str | None:
-    """A title as one line: tabs, line breaks and runs of whitespace become one
-    space and the ends are trimmed. Other control characters are refused, and
-    so is a title longer than its kind allows. Empty becomes None."""
-    if title is None:
-        return None
-    for ch in title:
-        if ch not in _TITLE_BREAKS and unicodedata.category(ch) == "Cc":
+def _refuse_hidden(name: str, value: str, *, breaks: frozenset[str]) -> None:
+    """Refuse a character in ``value`` that a reader cannot see or that
+    changes how the text around it is shown: control characters (other than
+    ``breaks``), invisible format characters such as direction overrides and
+    zero-width spaces (all of Unicode category Cf but the two joiners), and
+    private-use characters."""
+    for ch in value:
+        if ch in breaks or ch in _JOINERS:
+            continue
+        category = unicodedata.category(ch)
+        if category in ("Cc", "Cf", "Co", "Cs"):
+            kind = "control" if category == "Cc" else "invisible"
             raise ReticulaError(
                 BAD_INPUT,
-                f"title contains the control character U+{ord(ch):04X}",
-                hint="a title is one line of text: tabs and line breaks become"
-                " spaces, other control characters are not allowed",
+                f"{name} contains the {kind} character U+{ord(ch):04X}",
+                hint=f"a {name} is one line of visible text: tabs and line breaks"
+                " become spaces, control and invisible characters are not allowed",
             )
+
+
+def clean_title(title: str | None, kind: str) -> str | None:
+    """A title as one line: tabs, line breaks and runs of whitespace become one
+    space and the ends are trimmed. Other control characters and invisible
+    ones are refused (_refuse_hidden), and so is a title longer than its kind
+    allows. Empty becomes None."""
+    if title is None:
+        return None
+    _refuse_hidden("title", title, breaks=_TITLE_BREAKS)  # NUL and surrogates too
     flat = " ".join(title.split())
     limit = MAX_PAPER_TITLE if kind == "paper" else MAX_TITLE
     if len(flat) > limit:
@@ -212,12 +231,17 @@ def close_relation_name(rel: str, candidates: Iterable[str]) -> str | None:
 
 
 def _clean_tags(tags: Iterable[str] | None) -> list[str]:
+    given = list(tags or ())
+    # counted as given, before anything else is done with them
+    if len(given) > MAX_TAGS:
+        raise ReticulaError(BAD_INPUT, f"more than {MAX_TAGS} tags")
     out: list[str] = []
-    for tag in tags or ():
+    for tag in given:
         if not isinstance(tag, str):
             raise ReticulaError(BAD_INPUT, "tags must be strings")
         tag = tag.strip()
         _check_length("a tag", tag, MAX_TAG)
+        _refuse_hidden("tag", tag, breaks=frozenset())  # NUL and surrogates too
         if tag and tag not in out:
             out.append(tag)
             if len(out) > MAX_TAGS:
@@ -323,6 +347,18 @@ def create_atom(
     ``ext_id`` matches a paper the author can already read returns that paper
     and writes nothing. Returns the ``node`` row.
     """
+    # everything given is checked before the first query
+    if len(supersedes) > MAX_SUPERSEDES:
+        raise ReticulaError(
+            BAD_INPUT,
+            f"supersedes names {len(supersedes)} notes; at most {MAX_SUPERSEDES}",
+            hint="a note replaces a few notes; write it once per group",
+        )
+    refuse_unstorable(kind=kind, text=text, anchor=anchor, model=model, ext_id=ext_id)
+    for ref in supersedes:
+        if not isinstance(ref, str):
+            raise ReticulaError(BAD_INPUT, "supersedes must list references")
+        refuse_unstorable(supersedes=ref)
     kind = (kind or "").strip()
     if not kind:
         raise ReticulaError(BAD_INPUT, "kind is empty")
@@ -408,6 +444,10 @@ def update_atom(
     Takes a row lock on the node first, so two concurrent edits form a chain.
     Returns the ``node`` row; when nothing changes no version is written.
     """
+    refuse_unstorable(text=text)
+    if text is not None:
+        _check_length("text", text, MAX_TEXT)
+    tag_list_new = _clean_tags(tags) if tags is not None else None
     node = _lock_live_node(conn, node_id)
     if node["author"] != author.person_id:
         raise ReticulaError(FORBIDDEN, "only the author can edit a note")
@@ -424,10 +464,9 @@ def update_atom(
             raise ReticulaError(BAD_INPUT, f"a {node['kind']} needs a title")
         else:
             new.pop("title", None)
-    if tags is not None:
-        tag_list = _clean_tags(tags)
-        if tag_list:
-            new["tags"] = tag_list
+    if tag_list_new is not None:
+        if tag_list_new:
+            new["tags"] = tag_list_new
         else:
             new.pop("tags", None)
     _merge_extra(new, payload_extra)

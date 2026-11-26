@@ -119,7 +119,7 @@ def format_created(moment: datetime | int | None = None) -> str:
 
 def parse_created(text: str) -> datetime:
     """Parse the ``created`` field strictly; ``ValueError`` when malformed."""
-    if not _CREATED_RE.match(text):
+    if not _CREATED_RE.fullmatch(text):
         raise ValueError(f"created must look like 2026-11-25T07:14:38.123Z: {text!r}")
     return datetime.strptime(text, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=UTC)
 
@@ -226,13 +226,13 @@ def check_envelope(envelope: Mapping[str, Any]) -> list[str]:
         parse_address(envelope["address"]).person_id != envelope["author"]
     ):
         problems.append("author must equal the person part of address in v0")
-    if not isinstance(envelope["created"], str) or not _CREATED_RE.match(
+    if not isinstance(envelope["created"], str) or not _CREATED_RE.fullmatch(
         envelope["created"]
     ):
         problems.append("created is not RFC 3339 UTC with milliseconds")
     parents = envelope["parents"]
     if not isinstance(parents, list) or not all(
-        isinstance(p, str) and _HASH_RE.match(p) for p in parents
+        isinstance(p, str) and _HASH_RE.fullmatch(p) for p in parents
     ):
         problems.append("parents must be a list of version hashes")
     hub = envelope["hub"]
