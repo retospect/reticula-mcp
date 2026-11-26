@@ -4,7 +4,11 @@
 
 - `delete` asks first. `delete(ref="<id>")` deletes nothing: it names the note, the hubs it is filed in, and the call that deletes it, `delete(ref="<id>:yes-<code>")`, for after the person has said yes. The code is bound to you, the note and its version, and holds for 15 to 30 minutes; after an edit, or later, the first call gives a new one. In the trial, assistants asked a clear request to delete made both calls in one turn in 24 of 48 conversations without the last sentence of the answer, and in none of 48 with it (`docs/trials.md`, "Asking before a delete"). Both calls count against the write limit.
 
-## 0.4.2 (2026-11-26)
+## 0.4.3 (2026-11-26)
+
+- The changes listed under 0.4.2, published. The tag `v0.4.2` did not publish: the release workflow's check of the compose files did not set `RETICULA_DB_ADMIN_PASSWORD`, which 0.4.2 made required, so the workflow stopped before PyPI. The check sets it now, and a test keeps that check in step with `compose.yaml`.
+
+## 0.4.2 (2026-11-26) (tagged, not published)
 
 - Limits on the tools that only read, per account: at most 300 may start per minute (`RETICULA_READ_RATE`), 4 run at once (`RETICULA_READ_CONCURRENCY`; a further one waits up to 10 seconds, holding no database connection, then is refused), and one may take 20 seconds (`RETICULA_READ_SECONDS`). Over a limit the tool answers in the form of the write limit, for example `read limit reached (300/minute); try again in 12 s`. They are kept in the server's memory, per process.
 - `search(query="", since=...)` and `get` of a deleted address tell of a note deleted or taken out of a hub only when it happened while you could read that hub: a share given afterwards does not tell what was taken away before. `get(ref=<note>, depth=2)` counts only notes you may read in its "and N more" line.
