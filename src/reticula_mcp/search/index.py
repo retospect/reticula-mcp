@@ -61,13 +61,6 @@ HNSW_MAX_DIM = 2000  # pgvector cannot index wider `vector` columns
 INDEX_PREFIX = "embedding_hnsw_"
 
 
-def model_reads_chars() -> int:
-    """Characters of a note's text (title line included, as node_text builds
-    it) that the configured embedding model reads. Stub until RETICULA2's
-    version lands: 2,000 for bge-small (512 tokens)."""
-    return 2000
-
-
 def node_text(title: str | None, text: str) -> str:
     """What gets embedded for a node."""
     return f"{title}\n{text}"[:TEXT_LIMIT] if title else text[:TEXT_LIMIT]
