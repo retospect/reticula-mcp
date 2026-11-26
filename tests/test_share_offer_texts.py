@@ -88,7 +88,7 @@ def test_refuse_and_block_replies(conn, make_account):
         conn, ben, hub=f"{two[-8:]}:block", person="@ben", mode="none"
     ) == (
         f"refused @ada's share of hub id {two[-8:]} and stopped further shares"
-        " from @ada; sharing a hub with @ada lifts this"
+        " from @ada; a hub you share with @ada lifts this once they can read it"
     )
 
 
@@ -109,7 +109,7 @@ def test_block_after_refuse_and_get_of_a_waiting_hub(conn, make_account):
         conn, ben, hub=f"{one[-8:]}:block", person="@ben", mode="none"
     ) == (
         f"stopped further shares from @ada; their share of hub id {one[-8:]} was"
-        " already refused; sharing a hub with @ada lifts this"
+        " already refused; a hub you share with @ada lifts this once they can read it"
     )
 
 

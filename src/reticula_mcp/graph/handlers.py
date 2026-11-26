@@ -580,13 +580,14 @@ def _answer_offer(
         if block and offer["refused"]:
             return (
                 f"stopped further shares from {sharer}; their share of hub id"
-                f" {short} was already refused; sharing a hub with {sharer}"
-                " lifts this"
+                f" {short} was already refused; a hub you share with {sharer}"
+                " lifts this once they can read it"
             )
         if block:
             return (
                 f"refused {sharer}'s share of hub id {short} and stopped further"
-                f" shares from {sharer}; sharing a hub with {sharer} lifts this"
+                f" shares from {sharer}; a hub you share with {sharer} lifts this"
+                " once they can read it"
             )
         return (
             f"refused {sharer}'s share of hub id {short}; nothing of it was shown"

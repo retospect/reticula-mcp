@@ -236,7 +236,7 @@ def test_block_after_refuse_still_blocks_the_sharer(conn, pair):
     out = graph.share(conn, ben, hub=f"{short(hub)}:block", person="@ben", mode="none")
     assert out == (
         f"stopped further shares from @ada; their share of hub id {short(hub)} was"
-        " already refused; sharing a hub with @ada lifts this"
+        " already refused; a hub you share with @ada lifts this once they can read it"
     )
     second = mk_hub(conn, ada, "Second")
     assert "once they accept" in offer(conn, ada, second, ben)

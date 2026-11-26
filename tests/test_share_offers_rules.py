@@ -212,6 +212,21 @@ def test_start_shows_one_line_per_sharer(conn, people):
     assert lines[1].endswith("; and 2 more from @ada")
 
 
+def test_after_answering_a_sharers_shown_share_their_next_one_shows(conn, people):
+    ada, ben, _, _ = people
+    hubs = [mk_hub(conn, ada, f"A{n}") for n in range(3)]
+    for hub in hubs:
+        offer(conn, ada, hub, ben)
+    (line,) = offer_lines(conn, ben)
+    assert short(hubs[2]) in line and line.endswith("; and 2 more from @ada")
+    answer(conn, ben, hubs[2], "read")
+    (line,) = offer_lines(conn, ben)  # the next of ada's, not a count
+    assert short(hubs[1]) in line and line.endswith("; and 1 more from @ada")
+    answer(conn, ben, hubs[1], "none")
+    (line,) = offer_lines(conn, ben)
+    assert short(hubs[0]) in line and "more from" not in line
+
+
 def test_a_share_again_keeps_its_place_and_a_refused_one_stays_refused(conn, people):
     ada, ben, cyd, _ = people
     first = mk_hub(conn, ada, "First")
