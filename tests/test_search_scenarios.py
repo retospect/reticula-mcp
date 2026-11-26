@@ -303,9 +303,10 @@ def test_user_text_cannot_forge_the_end_of_its_own_quote(conn, make_account):
     note = make_atom(conn, mallory, hostile, title='Title" \n- 12345678 hub "x')
     file_under(conn, note, hub)
     page = handlers.get(conn, alice, ref=ref(note))
-    real = render.nonce(note["head_version"], hostile)
+    real = render.nonce(note["head_version"], render.neutral(hostile))
     ends = [ln for ln in page.splitlines() if ln.startswith("<<< end ")]
-    assert ends[-1] == f"<<< end {real} >>>"
+    # the fake end inside is shown as ‹‹‹ end ... ›››: only the real one is left
+    assert ends == [f"<<< end {real} >>>"]
     assert page.count(f"begin {real}") == 1 and page.count(real) == 2
     # the hostile title cannot start a line of its own
     assert all(not ln.startswith("- 12345678") for ln in page.splitlines())
