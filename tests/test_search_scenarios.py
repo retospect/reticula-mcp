@@ -415,8 +415,7 @@ def test_version_history_and_hub_summary(conn, make_account):
     hub = hub_of(conn, alice, "Docs", "Everything about docs.")
     out = handlers.get(conn, alice, ref=ref(hub), history=True)
     assert "versions (oldest first):" in out and "1. sha256:" in out
-    # her own hub: the shorter opening line, with its hash (debug note 4757cf47)
-    assert f"<<< your text [{ref(hub)}]: " in out and "Everything about docs." in out
+    assert "<<< quoted text by @alice" in out and "Everything about docs." in out
     assert "(no members yet)" in out
 
 
