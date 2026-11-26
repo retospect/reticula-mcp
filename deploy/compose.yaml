@@ -24,6 +24,14 @@ services:
     image: pgvector/pgvector:pg17
     restart: unless-stopped
     logging: *logging
+    # The image starts as root, sets the owner of the data directory and
+    # becomes the postgres user: these five capabilities, and no other.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    security_opt: ["no-new-privileges:true"]
+    # Only the server reaches the database: the network has no route out and
+    # no other service of the stack joins it.
+    networks: [database]
     environment:
       POSTGRES_USER: reticula
       POSTGRES_PASSWORD: ${RETICULA_DB_PASSWORD:?set RETICULA_DB_PASSWORD in .env}
@@ -48,11 +56,18 @@ services:
     # set RETICULA_APP_MEMORY in .env (docs/operating.md, Choose a model).
     mem_limit: ${RETICULA_APP_MEMORY:-2g}
     pids_limit: 512
+    # The server runs as its own user and needs no capability.
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks: [default, database]
     depends_on:
       db:
         condition: service_healthy
     environment:
-      RETICULA_DATABASE_URL: postgresql://reticula:${RETICULA_DB_PASSWORD}@db:5432/reticula
+      # The password goes to the database driver as PGPASSWORD, so it needs no
+      # escaping in the URL whatever characters it has.
+      RETICULA_DATABASE_URL: postgresql://reticula@db:5432/reticula
+      PGPASSWORD: ${RETICULA_DB_PASSWORD}
       # The server listens on 0.0.0.0 inside the container, so it cannot guess
       # the address clients use. Without a public URL that is the published
       # port on this machine.
@@ -89,6 +104,8 @@ networks:
     ipam:
       config:
         - subnet: ${RETICULA_SUBNET:-172.31.88.0/24}
+  database:
+    internal: true
 
 volumes:
   reticula-db:
