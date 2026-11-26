@@ -287,6 +287,9 @@ def _apply_grant(conn: Conn, rec: records.Record, payload: Row) -> None:
     mode = _text(payload.get("mode"))
     if hub is None:
         return
+    if payload.get("answers") is not None:
+        _answer_offer(conn, rec, payload, hub)
+        return
     if grantee == PUBLIC:
         # the public page: kept only when the hub's author gave read or none
         if rec.author != hub["author"] or mode not in ("read", "none"):
@@ -302,6 +305,35 @@ def _apply_grant(conn: Conn, rec: records.Record, payload: Row) -> None:
         except ReticulaError as exc:
             log.info("grant %s not applied: %s", rec.address, exc.message)
             return
+        if mode in ("read", "add"):
+            # a share the grantee of a block makes to its blocker lifts it
+            lifted = conn.execute(
+                "DELETE FROM share_block WHERE person = %s AND blocked = %s"
+                " RETURNING 1",
+                (rec.author, grantee),
+            ).fetchone()
+            if lifted:
+                conn.execute(
+                    "UPDATE share_offer SET held = false"
+                    " WHERE grantee = %s AND granted_by = %s",
+                    (rec.author, grantee),
+                )
+        if payload.get("pending") is True and mode in ("read", "add"):
+            _offer(conn, rec, hub, grantee, mode)
+            return
+        # a grant of any mode replaces a share that waits; none takes it back
+        conn.execute(
+            "DELETE FROM share_offer WHERE hub_node_id = %s AND grantee = %s",
+            (hub["id"], grantee),
+        )
+        if (
+            mode == "none"
+            and not conn.execute(
+                "SELECT 1 FROM hub_grant WHERE hub_node_id = %s AND grantee = %s",
+                (hub["id"], grantee),
+            ).fetchone()
+        ):
+            return  # it only took back a share that waited: no revoked row
     conn.execute(
         "INSERT INTO hub_grant (hub_node_id, grantee, grantee_account_id, mode,"
         " granted_by, address, record_id, created_at, updated_at)"
@@ -317,6 +349,99 @@ def _apply_grant(conn: Conn, rec: records.Record, payload: Row) -> None:
             "grantee": grantee,
             "mode": mode,
             "by": rec.author,
+            "address": rec.address,
+            "record_id": rec.id,
+            "at": rec.created_at,
+        },
+    )
+
+
+def _offer(conn: Conn, rec: records.Record, hub: Row, grantee: str, mode: str) -> None:
+    """A share that waits for its grantee (migration 0304): a share_offer row,
+    never a hub_grant row, so nothing of the hub reaches the grantee until a
+    record of theirs accepts it. Nothing at all when the grantee blocked the
+    sharer. A share from someone the grantee blocked is kept ``held``: the
+    sharer sees it wait like any other, the grantee never sees it."""
+    conn.execute(
+        "INSERT INTO share_offer (hub_node_id, grantee, grantee_account_id, mode,"
+        " granted_by, address, record_id, created_at, held)"
+        " VALUES (%(hub)s, %(grantee)s,"
+        " (SELECT id FROM account WHERE person_id = %(grantee)s), %(mode)s,"
+        " %(by)s, %(address)s, %(record_id)s, %(at)s,"
+        " EXISTS (SELECT 1 FROM share_block WHERE person = %(grantee)s"
+        "  AND blocked = %(by)s))"
+        " ON CONFLICT (hub_node_id, grantee) DO UPDATE SET mode = EXCLUDED.mode,"
+        " granted_by = EXCLUDED.granted_by, address = EXCLUDED.address,"
+        " record_id = EXCLUDED.record_id, created_at = EXCLUDED.created_at,"
+        " held = EXCLUDED.held",
+        {
+            "hub": hub["id"],
+            "grantee": grantee,
+            "mode": mode,
+            "by": rec.author,
+            "address": rec.address,
+            "record_id": rec.id,
+            "at": rec.created_at,
+        },
+    )
+
+
+def _answer_offer(conn: Conn, rec: records.Record, payload: Row, hub: Row) -> None:
+    """The grantee's own answer to the share that waits for them: ``answers``
+    names the address of that share's record, so an answer never applies to a
+    later share. ``read``/``add`` accept it at the lower of the offered and
+    the asked mode, checked again against what the sharer may grant now;
+    ``none`` refuses it, and with ``blocks`` also stops later shares from the
+    sharer."""
+    offer = conn.execute(
+        "SELECT * FROM share_offer WHERE hub_node_id = %s AND grantee = %s"
+        " AND address = %s AND NOT held",
+        (hub["id"], rec.author, _text(payload.get("answers"))),
+    ).fetchone()
+    if offer is None or _text(payload.get("to")) != rec.author:
+        log.info("answer %s not applied: no such share waits", rec.address)
+        return
+    conn.execute(
+        "DELETE FROM share_offer WHERE hub_node_id = %s AND grantee = %s",
+        (hub["id"], rec.author),
+    )
+    asked = _text(payload.get("mode"))
+    if asked not in ("read", "add"):
+        if payload.get("blocks") is True:
+            conn.execute(
+                "INSERT INTO share_block (person, blocked, record_id, created_at)"
+                " VALUES (%s, %s, %s, %s) ON CONFLICT (person, blocked) DO NOTHING",
+                (rec.author, offer["granted_by"], rec.id, rec.created_at),
+            )
+            conn.execute(
+                "UPDATE share_offer SET held = true"
+                " WHERE grantee = %s AND granted_by = %s",
+                (rec.author, offer["granted_by"]),
+            )
+        return
+    mode = "add" if asked == "add" and offer["mode"] == "add" else "read"
+    try:
+        access.authorize_grant(
+            conn, granter=offer["granted_by"], hub=hub, grantee=rec.author, mode=mode
+        )
+    except ReticulaError as exc:
+        log.info("answer %s not applied: %s", rec.address, exc.message)
+        return
+    conn.execute(
+        "INSERT INTO hub_grant (hub_node_id, grantee, grantee_account_id, mode,"
+        " granted_by, address, record_id, created_at, updated_at)"
+        " VALUES (%(hub)s, %(grantee)s,"
+        " (SELECT id FROM account WHERE person_id = %(grantee)s), %(mode)s,"
+        " %(by)s, %(address)s, %(record_id)s, %(at)s, %(at)s)"
+        " ON CONFLICT (hub_node_id, grantee) DO UPDATE SET mode = EXCLUDED.mode,"
+        " granted_by = EXCLUDED.granted_by, address = EXCLUDED.address,"
+        " record_id = EXCLUDED.record_id, updated_at = EXCLUDED.updated_at,"
+        " grantee_account_id = EXCLUDED.grantee_account_id",
+        {
+            "hub": hub["id"],
+            "grantee": rec.author,
+            "mode": mode,
+            "by": offer["granted_by"],
             "address": rec.address,
             "record_id": rec.id,
             "at": rec.created_at,
@@ -382,6 +507,8 @@ def rebuild(conn: Conn) -> dict[str, int]:
     conn.execute("DELETE FROM supersedes")
     conn.execute("DELETE FROM membership")
     conn.execute("DELETE FROM hub_grant")
+    conn.execute("DELETE FROM share_offer")
+    conn.execute("DELETE FROM share_block")
     conn.execute(
         "UPDATE node SET kind = 'unreplayed', title = NULL, text = '', tags = '{}',"
         " payload = '{}'::jsonb, ext_key = NULL, audience = 'private',"

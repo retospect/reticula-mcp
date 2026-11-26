@@ -17,7 +17,7 @@ from reticula_mcp.content import hooks as content_hooks
 from reticula_mcp.errors import ReticulaError
 from reticula_mcp.graph import handlers as graph
 from reticula_mcp.search import handlers, read
-from tests.graph_support import delete_now
+from tests.graph_support import delete_now, share_to
 from tests.search_support import use_hash_embedder
 
 _ADDRESS = re.compile(r"ret:p[a-z2-7]{26}/[0-9a-f-]{36}")
@@ -85,12 +85,12 @@ def test_a_reader_of_a_personal_hub_sees_the_owner_and_themself_only(
         graph.put(conn, alice, kind="hub", title="Alice's journal", preset="personal")
     )
     # a personal hub turns an add invitation into read
-    graph.share(conn, alice, hub=hub, person="@bob", mode="add")
+    share_to(conn, alice, hub, "@bob", "add")
     alone = handlers.get(conn, bob, ref=hub)
     assert access_line(alone) == reader_line("alice", "bob")
 
-    graph.share(conn, alice, hub=hub, person="@carol", mode="read")
-    graph.share(conn, alice, hub=hub, person="@dave", mode="read")
+    share_to(conn, alice, hub, "@carol", "read")
+    share_to(conn, alice, hub, "@dave", "read")
     crowded = handlers.get(conn, bob, ref=hub)
     # no other reader, and nothing that counts them: the line did not change
     assert access_line(crowded) == access_line(alone)
@@ -108,9 +108,9 @@ def test_a_member_of_a_group_hub_sees_everyone_and_a_reader_does_not(
         make_account(handle=h) for h in ("alice", "bob", "carol", "dave")
     )
     hub = address(graph.put(conn, alice, kind="hub", title="Team", preset="group"))
-    graph.share(conn, alice, hub=hub, person="@bob", mode="add")
-    graph.share(conn, alice, hub=hub, person="@carol", mode="read")
-    graph.share(conn, bob, hub=hub, person="@dave", mode="add")  # members invite
+    share_to(conn, alice, hub, "@bob", "add")
+    share_to(conn, alice, hub, "@carol", "read")
+    share_to(conn, bob, hub, "@dave", "add")  # members invite
 
     everyone = "access: @alice owner, @bob add, @carol read, @dave add"
     for member in (alice, bob, dave):  # the admin and the people who can add
@@ -126,9 +126,9 @@ def test_access_through_a_hub_above_follows_the_same_rule(conn, make_account):
     )
     top = address(graph.put(conn, alice, kind="hub", title="Top"))
     sub = address(graph.put(conn, alice, kind="hub", title="Sub", hub=top))
-    graph.share(conn, alice, hub=top, person="@bob", mode="add")
-    graph.share(conn, alice, hub=top, person="@carol", mode="read")
-    graph.share(conn, alice, hub=sub, person="@dave", mode="read")
+    share_to(conn, alice, top, "@bob", "add")
+    share_to(conn, alice, top, "@carol", "read")
+    share_to(conn, alice, sub, "@dave", "read")
 
     # bob can add (through Top): the whole list of the sub-hub, and the people
     # on Top, whose list he may see there too
@@ -151,7 +151,7 @@ def test_withdrawn_is_answered_only_to_those_the_author_shared_with(conn, make_a
         make_account(handle=h) for h in ("alice", "bob", "carol", "erin")
     )
     team = address(graph.put(conn, alice, kind="hub", title="Team"))
-    graph.share(conn, alice, hub=team, person="@bob", mode="add")
+    share_to(conn, alice, team, "@bob", "add")
     note = address(
         graph.put(
             conn, alice, text="confidential okapi census", title="Okapi", hub=team
@@ -161,7 +161,7 @@ def test_withdrawn_is_answered_only_to_those_the_author_shared_with(conn, make_a
     # organises, it gives his readers no access to the note
     shelf = address(graph.put(conn, bob, kind="hub", title="Bob's shelf"))
     graph.link(conn, bob, ref=note, to=shelf)
-    graph.share(conn, bob, hub=shelf, person="@carol", mode="read")
+    share_to(conn, bob, shelf, "@carol", "read")
     with pytest.raises(ReticulaError) as before:
         handlers.get(conn, carol, ref=note)
     assert before.value.code == "NotFound"
@@ -192,7 +192,7 @@ def test_withdrawn_is_answered_only_to_those_the_author_shared_with(conn, make_a
 def test_a_private_note_is_withdrawn_only_for_its_author(conn, make_account):
     alice, bob = make_account(handle="alice"), make_account(handle="bob")
     team = address(graph.put(conn, alice, kind="hub", title="Team"))
-    graph.share(conn, alice, hub=team, person="@bob", mode="add")
+    share_to(conn, alice, team, "@bob", "add")
     note = address(
         graph.put(conn, alice, text="private tapir memo", hub=team, private=True)
     )
@@ -216,7 +216,7 @@ def test_a_result_names_only_a_hub_the_viewer_may_read(conn, make_account):
         graph.put(conn, alice, text="cone 6 glaze fires at 1222 C", hub=ledger)
     )
     graph.link(conn, alice, ref=note, to=kiln, rel="part-of")
-    graph.share(conn, alice, hub=kiln, person="@bob", mode="read")
+    share_to(conn, alice, kiln, "@bob", "read")
 
     hers = handlers.search(conn, alice, query="glaze")
     assert '· in "Ledger"' in hers  # the hub it was filed in first

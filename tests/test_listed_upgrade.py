@@ -39,7 +39,7 @@ def test_an_upgrade_keeps_older_accounts_listed_and_new_ones_are_not(
         c.commit()
 
         ran = {m.version for m in migrate(c)}
-        assert 358 in ran
+        assert {304, 358} <= ran
         assert settings.listed(c, never) is True  # was listed, stays listed
         assert settings.listed(c, said_no) is False
         assert settings.listed(c, said_yes) is True

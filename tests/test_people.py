@@ -12,7 +12,7 @@ from reticula_mcp.content import handlers as content
 from reticula_mcp.errors import ReticulaError
 from reticula_mcp.graph import handlers
 from reticula_mcp.search import handlers as search
-from tests.graph_support import mk_hub
+from tests.graph_support import mk_hub, share_to
 
 NEXT = (
     'next: share(hub=<hub>, person="@handle", mode="add" or "read")'
@@ -357,7 +357,7 @@ def test_share_with_a_malformed_person_keeps_its_bad_input(conn, make_account):
 def test_a_viewer_who_may_not_grant_is_refused_before_the_lookup(conn, make_account):
     owner, outsider, reader = group(make_account, "pc-o", "pc-x", "pc-r")
     hub = mk_hub(conn, owner, "Team")
-    handlers.share(conn, owner, hub=hub, person="@pc-r", mode="read")
+    share_to(conn, owner, hub, "@pc-r", "read")
     for viewer in (outsider, reader):
         for mode in ("none", "read", "add"):
             known = err(

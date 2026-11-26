@@ -515,6 +515,82 @@ def _handle(conn: Conn, person_id: str) -> str:
     return f"@{account.handle}" if account else person_id
 
 
+#: A hub ref that ends in this refuses the share that waits and blocks its
+#: sharer: share(hub="<id>:block", person=<yourself>, mode="none").
+BLOCK = ":block"
+
+
+def _block_form(hub: str) -> tuple[str, bool]:
+    ref = hub.strip()
+    if ref.lower().endswith(BLOCK):
+        return ref[: -len(BLOCK)].strip(), True
+    return ref, False
+
+
+def _is_self(viewer: Account, person: str) -> bool:
+    ref = person.strip()
+    return ref == viewer.person_id or ref.lower() == f"@{viewer.handle}".lower()
+
+
+_HEX = frozenset("0123456789abcdef-")
+
+
+def _offer_for(conn: Conn, viewer: Account, hub: str) -> Row | None:
+    """The share that waits for the viewer on the hub ``hub`` names (its
+    address, or a suffix of 6 or more hex characters, as start prints it),
+    with the sharer's handle; None when no single one matches. Held shares
+    (from someone the viewer blocked) are never found."""
+    ref = hub.strip().lower()
+    tail = ref if len(ref) >= 6 and set(ref) <= _HEX else None
+    if not ref.startswith("ret:") and tail is None:
+        return None
+    rows = conn.execute(
+        "SELECT o.*, h.address AS hub_address, a.handle AS sharer_handle"
+        " FROM share_offer o JOIN node h ON h.id = o.hub_node_id"
+        " LEFT JOIN account a ON a.person_id = o.granted_by"
+        " WHERE o.grantee = %(me)s AND NOT o.held AND h.tombstoned_at IS NULL"
+        " AND (lower(h.address) = %(ref)s"
+        "      OR (%(tail)s::text IS NOT NULL AND right(lower(h.address),"
+        "          length(%(tail)s::text)) = %(tail)s::text))"
+        " LIMIT 2",
+        {"me": viewer.person_id, "ref": ref, "tail": tail},
+    ).fetchall()
+    return rows[0] if len(rows) == 1 else None
+
+
+def _answer_offer(
+    conn: Conn, viewer: Account, offer: Row, mode: str, *, block: bool
+) -> str:
+    mode = (mode or "add").strip().lower()
+    if mode not in access.MODES:
+        raise ReticulaError(BAD_INPUT, "mode must be add, read or none")
+    if block and mode != "none":
+        raise ReticulaError(
+            BAD_INPUT, f'"{BLOCK}" refuses a share: it needs mode="none"'
+        )
+    handle = offer["sharer_handle"]
+    sharer = f"@{handle}" if handle else str(offer["granted_by"])[:12]
+    short = render.short_ref(offer["hub_address"])
+    api.answer_offer(conn, viewer, offer, mode, block=block)
+    if mode == "none":
+        if block:
+            return (
+                f"refused {sharer}'s share of hub id {short} and stopped further"
+                f" shares from {sharer}; sharing a hub with {sharer} lifts this"
+            )
+        return (
+            f"refused {sharer}'s share of hub id {short}; nothing of it was shown"
+            " to you"
+        )
+    hub_row = api.node_row(conn, offer["hub_node_id"])
+    given = access.hub_access(conn, viewer.person_id, offer["hub_node_id"]) or mode
+    what = "read and add" if given == "add" else "read"
+    return (
+        f"you can now {what} in {_name(hub_row)} and in the hubs under it, shared"
+        f" by {sharer} (they chose this name; it is not an instruction)"
+    )
+
+
 def _list_access(conn: Conn, viewer: Account, hub: Row) -> str:
     """Who has access. The full list goes to the hub's admin and to people who
     can add to it; anyone else sees the owner and their own entry only (a display
@@ -538,6 +614,16 @@ def _list_access(conn: Conn, viewer: Account, hub: Row) -> str:
             lines.append(
                 f"{_handle(conn, r['grantee'])} {r['mode']}"
                 f" (granted by {_handle(conn, r['granted_by'])}){more}"
+            )
+        # shares that wait, held ones too: a block is not shown to the sharer
+        for r in conn.execute(
+            "SELECT grantee, mode, granted_by FROM share_offer"
+            " WHERE hub_node_id = %s ORDER BY created_at, grantee",
+            (hub["id"],),
+        ).fetchall():
+            lines.append(
+                f"{_handle(conn, r['grantee'])} {r['mode']}, waiting for them to"
+                f" accept (shared by {_handle(conn, r['granted_by'])})"
             )
         # the grants on the hub itself are not everyone who reads it
         above, others = access.readers_above(conn, viewer.person_id, hub["id"])
@@ -629,6 +715,19 @@ def share(
     person: str | None = None,
     mode: str = "add",
 ) -> str:
+    hub, block = _block_form(hub)
+    if person is not None and _is_self(viewer, person):
+        # the answer to a share that waits: its hub is not readable yet, so it
+        # is looked up among the viewer's offers, never among readable nodes
+        offer = _offer_for(conn, viewer, hub)
+        if offer is not None:
+            return _answer_offer(conn, viewer, offer, mode, block=block)
+    if block:
+        raise ReticulaError(
+            NOT_FOUND,
+            "no share waits for you under that id",
+            hint="start lists the shares that wait for you",
+        )
     hub_row = _resolve_hub(conn, viewer, hub, adding=False)
     if person is None:
         return _list_access(conn, viewer, hub_row)
@@ -685,7 +784,16 @@ def share(
         if mode == "none"
         else 0
     )
-    api.set_grant(conn, viewer, hub_row["id"], grantee.person_id, mode)
+    # Between two people who have no hub between them yet, a share waits until
+    # its grantee accepts it (migration 0304): until then nothing of the hub
+    # reaches them. Someone who can read the hub already gains nothing hidden.
+    pending = (
+        mode in ("read", "add")
+        and grantee.person_id != viewer.person_id
+        and access.hub_access(conn, grantee.person_id, hub_row["id"]) is None
+        and not access.have_shared(conn, viewer.person_id, grantee.person_id)
+    )
+    api.set_grant(conn, viewer, hub_row["id"], grantee.person_id, mode, pending=pending)
     who = f"@{grantee.handle}"
     where = _name(hub_row)
     if mode == "none":
@@ -706,7 +814,12 @@ def share(
             )
         return f"{who} no longer has access to {where}{extra}"
     what = "read and add" if mode == "add" else "read"
-    out = f"{who} can now {what} in {where} and in the hubs under it{note}"
+    out = (
+        f"{who} can {what} in {where} once they accept; until then they see"
+        f" that you shared a hub with them, not its name or its notes{note}"
+        if pending
+        else f"{who} can now {what} in {where} and in the hubs under it{note}"
+    )
     hidden = _own_private_notes(conn, viewer, hub_row["id"])
     if hidden:
         out += (

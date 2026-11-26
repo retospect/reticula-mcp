@@ -126,9 +126,16 @@ def test_two_people_share_a_hub_from_sign_up_to_revocation(
         assert call(live, bt, "get", ref=hub).startswith("[error:NotFound]")
         assert call(live, bt, "get", ref=note).startswith("[error:NotFound]")
 
-        # Sharing is one call and takes effect at once.
+        # Ada and Ben share no hub yet, so the share waits for Ben's yes. Until
+        # then Ben's start names Ada and the hub's id, never its title.
         shared = call(live, at, "share", hub=hub, person="@ben")
-        assert "@ben can now read and add" in shared
+        assert "@ben can read and add" in shared and "once they accept" in shared
+        waiting = call(live, bt, "start")
+        assert "Mastodon" not in waiting
+        assert f"@ada shared a hub with you, not yet accepted: id {hub[-8:]}" in waiting
+        assert "no results" in call(live, bt, "search", query="ActivityPub federation")
+        accepted = call(live, bt, "share", hub=hub[-8:], person="@ben", mode="add")
+        assert accepted.startswith("you can now read and add in ")
         assert "Mastodon" in call(live, bt, "start")
         found = call(live, bt, "search", query="ActivityPub federation")
         assert "Federation protocol" in found and "@ada" in found

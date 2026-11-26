@@ -219,6 +219,23 @@ def hubs_to_detach(conn: Conn, hub_node_id: int, person_id: str) -> list[Row]:
     ).fetchall()
 
 
+def have_shared(conn: Conn, a: str, b: str) -> bool:
+    """Has either person given the other read or add on a hub, and is it so
+    now? A grant they made, or one on a hub they own, counts; a hub of a third
+    person that both read does not. A share between two people for whom this
+    is false waits for its grantee (graph.handlers.share, migration 0304)."""
+    row = conn.execute(
+        "SELECT 1 FROM hub_grant g JOIN node h ON h.id = g.hub_node_id"
+        " WHERE g.mode IN ('read', 'add') AND h.kind = 'hub'"
+        " AND h.tombstoned_at IS NULL"
+        " AND ((g.grantee = %(b)s AND (g.granted_by = %(a)s OR h.author = %(a)s))"
+        "   OR (g.grantee = %(a)s AND (g.granted_by = %(b)s OR h.author = %(b)s)))"
+        " LIMIT 1",
+        {"a": a, "b": b},
+    ).fetchone()
+    return row is not None
+
+
 def authorize_grant(
     conn: Conn,
     *,

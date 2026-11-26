@@ -125,6 +125,9 @@ def test_handlers_commit_cleanly_through_a_real_transaction(two_conns):
     address = hub.split()[2]
     handlers.share(c2, alice, hub=address, person=f"@{bob.handle}")
     c2.commit()
+    # they share no hub yet: bob's yes (0304)
+    handlers.share(c2, bob, hub=address[-8:], person=f"@{bob.handle}", mode="add")
+    c2.commit()
     out = handlers.put(c1, bob, text="hi", hub=address)
     c1.commit()
     assert "saved note" in out

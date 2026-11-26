@@ -246,7 +246,7 @@ Five tool calls, no errors. [docs/trials.md](https://github.com/retospect/reticu
 | `edit` | Makes a new version of one of your own notes. The address stays. |
 | `link` | Files a note under a hub, withdraws it again, or adds another relation. |
 | `delete` | Deletes one of your own notes. The address stays; reading it says the note was withdrawn and returns no content. |
-| `share` | Gives an account access to a hub, changes it, revokes it, or lists who has it. |
+| `share` | Gives an account access to a hub, changes it, revokes it, or lists who has it. Between two people who have no hub between them yet, a share waits until the other person accepts it; `start` lists the shares that wait for you, with the calls that accept, refuse, or refuse and block. |
 
 A note is addressed as `ret:<person id>/<uuid>`. Wherever a tool takes a `ref`, the last six or more characters of the note's id also work if they are unique among the notes you can read.
 
