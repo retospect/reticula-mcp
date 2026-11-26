@@ -1,6 +1,6 @@
 # Trials with assistants that had never seen Reticula
 
-Reticula is used by language models, not by people. These trials watched models that knew nothing about it try to use it, recorded what they did, and ran again after each fix. This page is the record: the method, the rounds, what went wrong, what was changed and what is still open. About 13,400 runs in all.
+Reticula is used by language models, not by people. These trials watched models that knew nothing about it try to use it, recorded what they did, and ran again after each fix. This page is the record: the method, the rounds, what went wrong, what was changed and what is still open. About 13,600 runs in all.
 
 ## Method
 
@@ -978,7 +978,7 @@ Haiku with the client's own prompt did not call `start` for "What pressure does 
 
 ## Round eighteen: new parameters, and the standing line
 
-2,760 runs, on main `80268c5`, `08b4a3e` and `a9efdf7`. Three changes came with a new parameter each: a move in one call, `link(..., from_hub=...)` described as "Hub to move it out of."; a directory of people, with `profile(listed=...)` and `person` as a value of `search`'s `kind`; and words to say aloud after each id, switched with `profile(word_handles="on")`. Each was run alone beside main, on the gate cells.
+2,952 runs, on main `80268c5`, `08b4a3e` and `a9efdf7`, and on 0.3.0 as released. Three changes came with a new parameter each: a move in one call, `link(..., from_hub=...)` described as "Hub to move it out of."; a directory of people, with `profile(listed=...)` and `person` as a value of `search`'s `kind`; and words to say aloud after each id, switched with `profile(word_handles="on")`. Each was run alone beside main, on the gate cells.
 
 | Haiku, `start` first, 12 or 24 runs | Main | `from_hub` | Directory | Word handles |
 |---|---|---|---|---|
@@ -988,7 +988,7 @@ Haiku with the client's own prompt did not call `start` for "What pressure does 
 | scenario 4, second conversation, client's own prompt | 24 of 24 | 0 of 24 | 13 of 24 | 1 of 24 |
 
 - **Every new parameter lost a cell.** With this round, every new parameter tried since round twelve has cost the first call somewhere: `since` in eight of nine forms, `part` with a description and without, `from_hub` in two descriptions, `listed`, `word_handles`. A form inside an existing parameter has held each time it was tried (groups through `ref`). For 0.3.0 no tool gets a new parameter.
-- **The same arms with the standing line held.** The failed cells were run again with the line of round seventeen in the client's prompt, 12 runs each: scenario 18's first conversation in chat 12 of 12 on all four arms; scenario 4's three conversations with the client's own prompt 12 of 12 on all four, the weak "Forget ..." included (1 to 3 of 24 without the line). So the cost of a new parameter falls on clients that have not been onboarded. One batch of 12 a cell; it is to be repeated once 0.3.0 is live.
+- **The same arms with the standing line held.** The failed cells were run again with the line of round seventeen in the client's prompt, 12 runs each: scenario 18's first conversation in chat 12 of 12 on all four arms; scenario 4's three conversations with the client's own prompt 12 of 12 on all four, the weak "Forget ..." included (1 to 3 of 24 without the line). So the cost of a new parameter falls on clients that have not been onboarded. Repeated on 0.3.0 as released (192 runs, the same cells, 12 runs each, each parameter added to the release's tool list alone): without the line scenario 18's first conversation in chat began with `start` in 12, 5, 12 and 3 of 12 (release, `from_hub`, directory, word handles), and scenario 4's three conversations with the client's own prompt in 12/12/0, 1/0/0, 12/2/2 and 12/5/4; with the line, 12 of 12 in every cell of every arm. Two batches agree.
 - **`person` as a value of `kind`, alone** (the change to an existing description, without `listed`): chat, scenario 18's first conversation 11 of 12 against 11, scenario 4's first 21 of 24 against 24 and its third 19 of 24 against 22; with the client's own prompt scenario 18's first 12 of 12 on both, scenario 4's three conversations 24, 22 and 0 of 24 against 24, 24 and 1. At first read as noise and taken. Two more batches showed a cost: over three batches, scenario 4's first conversation in chat began with `start` in 52 of 60 runs with the sentence and 60 of 60 on main, and 24 of 24 on the same arm without it (below). Not taken: the directory ships without the sentence, and `listed` is held with the other parameters.
 
 ### What needs no new parameter
