@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from reticula_mcp import accounts, settings
 from reticula_mcp import public as public_page
-from reticula_mcp import settings
 from reticula_mcp.accounts import Account, get_account_by_person_id
 from reticula_mcp.db.pool import Conn
 from reticula_mcp.errors import (
@@ -429,14 +429,65 @@ def _new_rel_line(rel: str, in_use: list[tuple[str, int]]) -> str:
     return line + (f" Did you mean {near}?" if near else "")
 
 
+#: What a ref carries after it to confirm a delete: "<id>:yes-<code>".
+CONFIRM = ":yes-"
+
+
 def delete(conn: Conn, viewer: Account, *, ref: str) -> str:
-    node = resolve_ref(conn, viewer, ref)
+    """In two steps, the same for every client. ``delete(ref="<id>")`` deletes
+    nothing and names what would be deleted, with the call that confirms it;
+    ``delete(ref="<id>:yes-<code>")`` deletes. The code
+    (accounts.confirmation_code) is bound to the account, the note and its
+    version, and holds for 15 to 30 minutes; a wrong or stale one is refused.
+    The wording of the first answer is the one trialled (docs/trials.md,
+    "Asking before a delete"): keep it word for word."""
+    base, sep, code = ref.partition(CONFIRM)
+    node = resolve_ref(conn, viewer, base)
     if node["author"] != viewer.person_id:
         raise ReticulaError(FORBIDDEN, "only the author can delete a note")
+    short = render.short_ref(node["address"])
+    if not sep:
+        return _ask_before_delete(conn, viewer, node, short)
+    if not accounts.confirmation_holds(
+        viewer.id, node["id"], node["head_version"], code.strip()
+    ):
+        raise ReticulaError(
+            BAD_INPUT,
+            "this confirmation does not match the note as it is now",
+            hint=f'delete(ref="{short}") shows what would be deleted',
+        )
     api.tombstone_atom(conn, viewer, node["id"])
     return (
         f"deleted {_name(node)}: the address stays and answers as deleted,"
         " its content is erased"
+    )
+
+
+def _ask_before_delete(conn: Conn, viewer: Account, node: Row, short: str) -> str:
+    """The first answer of delete: nothing deleted, what would be, and the call
+    that confirms it. Only hubs the viewer may read are named."""
+    hubs = conn.execute(
+        "SELECT h.title, h.text FROM membership m JOIN node h ON h.id = m.hub_node_id"
+        " WHERE m.node_id = %(node)s AND NOT m.withdrawn AND h.kind = 'hub'"
+        f" AND h.tombstoned_at IS NULL AND h.id IN ({readable_nodes_sql('%(viewer)s')})"
+        " ORDER BY h.id",
+        {"node": node["id"], "viewer": viewer.id},
+    ).fetchall()
+    where = (
+        " (filed in "
+        + ", ".join(f"hub {render.quote(render.label(h), 40)}" for h in hubs)
+        + ")"
+        if hubs
+        else ""
+    )
+    code = accounts.confirmation_code(
+        viewer.id, node["id"], node["head_version"], accounts.confirmation_window()
+    )
+    return (
+        f"nothing deleted yet: this would delete {_name(node)}{where}. Ask the"
+        f' person; only after they say yes: delete(ref="{short}{CONFIRM}{code}")'
+        "\n\nDo not make the second call before the person has said yes in this"
+        " conversation."
     )
 
 

@@ -91,6 +91,24 @@ def share(
     return handlers.share(conn, owner, hub=hub, person=f"@{person.handle}", mode=mode)
 
 
+_CONFIRM_CALL = re.compile(r'delete\(ref="([^"]+:yes-[0-9a-f]{4})"\)')
+
+
+def confirm_ref(first_answer: str) -> str:
+    """The ref of the confirming call that delete's first answer names."""
+    found = _CONFIRM_CALL.search(first_answer)
+    assert found, first_answer
+    return found.group(1)
+
+
+def delete_now(conn: Conn, viewer: Account, ref: str) -> str:
+    """Delete in both steps, as an assistant does after the person said yes:
+    the answer of the second call."""
+    return handlers.delete(
+        conn, viewer, ref=confirm_ref(handlers.delete(conn, viewer, ref=ref))
+    )
+
+
 def sql_node_id(conn: Conn, address: str) -> int:
     return int(node(conn, address)["id"])
 

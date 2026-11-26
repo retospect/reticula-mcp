@@ -24,7 +24,7 @@ from reticula_mcp.content.handlers import short_id, start
 from reticula_mcp.db.pool import Conn
 from reticula_mcp.graph import handlers as graph
 from reticula_mcp.search.handlers import search
-from tests.graph_support import mk_hub, mk_note, share
+from tests.graph_support import delete_now, mk_hub, mk_note, share
 from tests.test_recent_support import Clock, by_others, shown_and_total
 
 LIST = ' List them with search(query="", since="7d").'
@@ -332,7 +332,7 @@ def test_what_the_viewer_cannot_read_is_not_counted_or_named(
         moved = mk_note(conn, bea, "to be taken out", hub=sub)
     assert block(start(conn, ana)) == [COUNTS + f"4 in {theirs(sub)}." + LIST]
     with clock.ago(days=1):
-        graph.delete(conn, bea, ref=deleted)
+        delete_now(conn, bea, deleted)
         graph.link(conn, bea, ref=moved, to=above)
         graph.link(conn, bea, ref=moved, to=sub, remove=True)
     out = start(conn, ana)

@@ -8,6 +8,7 @@ root key, and a signed identity record in the log.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import re
 import secrets
 import unicodedata
@@ -586,3 +587,41 @@ def account_for_token(conn: Conn, token: str) -> Account | None:
     """The account a valid bearer token belongs to, else None."""
     found = lookup_token(conn, token)
     return found[0] if found else None
+
+
+# --- confirmation codes ------------------------------------------------------
+
+#: A confirmation code holds for the window it was made in and the one after.
+CONFIRMATION_WINDOW_SECONDS = 15 * 60
+_CODE_RE = re.compile(r"[0-9a-f]{4}")
+
+
+def confirmation_window(now: float | None = None) -> int:
+    """The number of the current window of CONFIRMATION_WINDOW_SECONDS."""
+    moment = datetime.now(UTC).timestamp() if now is None else now
+    return int(moment // CONFIRMATION_WINDOW_SECONDS)
+
+
+def confirmation_code(account_id: int, node_id: int, version: str, window: int) -> str:
+    """The code that confirms deleting one note (graph.handlers.delete): four
+    hex characters of HMAC-SHA256 under keystore.confirmation_key() over the
+    account, the note, its version and the window. An edit of the note, another
+    account or another window gives another code; nobody without the server's
+    secret can compute one."""
+    message = f"delete:{account_id}:{node_id}:{version}:{window}".encode()
+    return hmac.new(keystore.confirmation_key(), message, hashlib.sha256).hexdigest()[
+        :4
+    ]
+
+
+def confirmation_holds(
+    account_id: int, node_id: int, version: str, code: str, now: float | None = None
+) -> bool:
+    """Is ``code`` the code of this window or of the one before?"""
+    if not _CODE_RE.fullmatch(code):  # compare_digest takes ASCII only
+        return False
+    window = confirmation_window(now)
+    return any(
+        hmac.compare_digest(code, confirmation_code(account_id, node_id, version, w))
+        for w in (window, window - 1)
+    )

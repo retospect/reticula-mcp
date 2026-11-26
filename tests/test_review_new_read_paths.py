@@ -17,7 +17,7 @@ from reticula_mcp.content import handlers as content
 from reticula_mcp.errors import ReticulaError
 from reticula_mcp.graph import handlers as graph
 from reticula_mcp.search import handlers
-from tests.graph_support import mk_hub, mk_note, share
+from tests.graph_support import delete_now, mk_hub, mk_note, share
 from tests.search_support import use_hash_embedder
 
 DOI = "10.1234/secret.paper"
@@ -102,7 +102,7 @@ def test_ok_deleted_note_shows_nothing(conn, make_account):
     n = mk_note(
         conn, a, "DELETEDBODY", hub=hub, ext_id=DOI, anchor="DELANCH", title="DELTITLE"
     )
-    graph.delete(conn, a, ref=n)
+    delete_now(conn, a, n)
     for viewer in (a, b):
         for out in (
             handlers.search(conn, viewer, query=DOI),

@@ -25,7 +25,7 @@ from reticula_mcp.search import recent as since_module
 from reticula_mcp.search import render
 from reticula_mcp.search.handlers import search
 from reticula_mcp.search.recent import parse_since
-from tests.graph_support import current, mk_hub, mk_note, share
+from tests.graph_support import current, delete_now, mk_hub, mk_note, share
 from tests.search_support import use_hash_embedder
 from tests.test_recent_support import (
     Clock,
@@ -523,7 +523,7 @@ def test_a_deletion_and_a_take_out_are_bare_lines(
         gone = mk_note(conn, bea, "TODELETE note", hub=hub)
         out_of_hub = mk_note(conn, bea, "TOREMOVE note", hub=hub)
     with clock.ago(days=1):
-        graph.delete(conn, bea, ref=gone)
+        delete_now(conn, bea, gone)
     with clock.ago(hours=20):
         graph.link(conn, bea, ref=out_of_hub, to=hub, remove=True)
     out = recent(conn, ana)
@@ -568,8 +568,8 @@ def test_a_deletion_is_told_only_to_who_could_read_the_note(
         private = mk_note(conn, bea, "PRIVATE note", hub=hub, private=True)
         unseen = mk_note(conn, bea, "UNSEEN note", hub=closed)
     with clock.ago(days=1):
-        graph.delete(conn, bea, ref=private)
-        graph.delete(conn, bea, ref=unseen)
+        delete_now(conn, bea, private)
+        delete_now(conn, bea, unseen)
         graph.link(
             conn, bea, ref=mk_note(conn, bea, "x", hub=closed), to=closed, remove=True
         )

@@ -10,7 +10,7 @@ from reticula_mcp.content import bootstrap, debug, hooks
 from reticula_mcp.content import handlers as content
 from reticula_mcp.errors import ReticulaError
 from reticula_mcp.graph import api, handlers
-from tests.graph_support import can_read, mk_hub, mk_note, share
+from tests.graph_support import can_read, delete_now, mk_hub, mk_note, share
 
 
 def err(call, *args, **kwargs) -> tuple[str, str]:
@@ -302,7 +302,7 @@ def test_start_counts_the_notes_that_get_lists(conn, make_account):
     old = mk_note(conn, ada, "first wording", hub=hub)
     mk_note(conn, ada, "second wording", hub=hub, supersedes=[old])
     gone = mk_note(conn, ada, "thrown away", hub=hub)
-    handlers.delete(conn, ada, ref=gone)
+    delete_now(conn, ada, gone)
     mk_note(conn, ada, "for ada only", hub=hub, private=True)
     mk_hub(conn, ada, "Bench drawer", parent=hub)
 

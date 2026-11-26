@@ -25,6 +25,7 @@ from reticula_mcp.search import embedder as embedder_module
 from reticula_mcp.search import handlers, hooks, index, worker
 from reticula_mcp.search.embedder import HashEmbedder
 from tests.conftest import PASSWORD
+from tests.graph_support import delete_now
 from tests.helpers import make_atom
 from tests.search_support import (
     SlowEmbedder,
@@ -175,7 +176,7 @@ def test_deleting_a_note_drops_its_vectors_of_every_model(
         " VALUES (%s, 'other-3', 3, '[1,2,3]', 'x')",
         (node_id,),
     )
-    graph.delete(conn, alice, ref=note)
+    delete_now(conn, alice, note)
     left = conn.execute(
         "SELECT count(*) AS n FROM embedding WHERE node_id = %s", (node_id,)
     ).fetchone()["n"]

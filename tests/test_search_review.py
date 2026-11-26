@@ -22,6 +22,7 @@ from reticula_mcp.search import handlers, read, render
 from tests.graph_support import (
     can_read,
     current,
+    delete_now,
     mk_hub,
     mk_note,
     share,
@@ -707,5 +708,5 @@ def test_an_address_without_the_scheme_is_read_like_the_full_one(conn, make_acco
     with pytest.raises(ReticulaError) as broken:
         handlers.get(conn, z, ref=bare[:-4] + "zzzz")
     assert broken.value.code == BAD_INPUT
-    graph.delete(conn, z, ref=note)
+    delete_now(conn, z, note)
     assert "withdrawn" in handlers.get(conn, z, ref=bare).splitlines()[0]

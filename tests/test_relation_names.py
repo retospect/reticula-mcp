@@ -6,7 +6,7 @@ from __future__ import annotations
 import pytest
 
 from reticula_mcp.graph import api, handlers
-from tests.graph_support import mk_note
+from tests.graph_support import delete_now, mk_note
 
 
 def notes(conn, who, n):
@@ -173,6 +173,6 @@ def test_a_deleted_notes_links_are_not_counted(conn, make_account):
     z = make_account()
     a, b, c = notes(conn, z, 3)
     relate(conn, z, a, b, "mentions")
-    handlers.delete(conn, z, ref=a)
+    delete_now(conn, z, a)
     assert api.relation_names_in_use(conn, z.person_id) == []
     assert "no other relation names" in relate(conn, z, b, c, "echoes")

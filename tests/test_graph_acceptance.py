@@ -13,6 +13,7 @@ from tests.graph_support import (
     addr,
     can_read,
     current,
+    delete_now,
     mk_hub,
     mk_note,
     node,
@@ -134,7 +135,7 @@ def test_07_tombstoned_atom_keeps_address_and_returns_no_content(conn, make_acco
     share(conn, alice, hub, bob)
     note = mk_note(conn, alice, "v1 secret words", hub=hub, title="Title")
     handlers.edit(conn, alice, ref=note, text="v2 more secret words")
-    assert "deleted" in handlers.delete(conn, alice, ref=note)
+    assert "deleted" in delete_now(conn, alice, note)
     row = node(conn, note)
     assert row["tombstoned_at"] is not None
     assert row["text"] == "" and row["title"] is None and row["payload"] == {}

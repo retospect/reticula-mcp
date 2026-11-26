@@ -14,7 +14,7 @@ from reticula_mcp.graph import api
 from reticula_mcp.graph import handlers as graph
 from reticula_mcp.resolve import MAX_REF, resolve_ref
 from reticula_mcp.search import handlers, read
-from tests.graph_support import mk_hub, mk_note, share
+from tests.graph_support import delete_now, mk_hub, mk_note, share
 from tests.helpers import make_atom
 from tests.search_support import spy_on_sql, use_hash_embedder
 
@@ -201,7 +201,7 @@ def test_a_deleted_address_resolves_only_for_who_could_have_read_it(conn, make_a
     hub = mk_hub(conn, ada, "Kiln")
     share(conn, ada, hub, ben, "read")
     note = mk_note(conn, ada, "kiln note", hub=hub)
-    graph.delete(conn, ada, ref=note)
+    delete_now(conn, ada, note)
     for viewer in (ada, ben):
         assert resolve_ref(conn, viewer, note, allow_tombstoned=True)["address"] == note
     with pytest.raises(ReticulaError) as exc:

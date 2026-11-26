@@ -16,6 +16,7 @@ from reticula_mcp import cli, records
 from reticula_mcp.content import bootstrap
 from reticula_mcp.db import connect
 from tests.auth_support import Assistant, Live, run_mcp, start_live
+from tests.graph_support import confirm_ref
 
 ADDRESS = re.compile(r"ret:p[a-z2-7]{26}/[0-9a-f-]{36}")
 
@@ -231,8 +232,10 @@ def test_two_people_share_a_hub_from_sign_up_to_revocation(
         assert "Federation protocol and moving" in call(live, at, "get", ref=hub)
         assert "An account can move" in call(live, bt, "get", ref=better)
 
-        # Deleting erases the content. The address still answers.
-        assert "content is erased" in call(live, at, "delete", ref=note)
+        # Deleting asks first, then erases the content. The address still answers.
+        asked = call(live, at, "delete", ref=note)
+        assert asked.startswith("nothing deleted yet")
+        assert "content is erased" in call(live, at, "delete", ref=confirm_ref(asked))
         gone = call(live, at, "get", ref=note)
         assert "ActivityPub" not in gone and note in gone
         assert note[-8:] not in call(
