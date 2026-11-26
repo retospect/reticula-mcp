@@ -292,7 +292,7 @@ def _offer_lines(conn: Conn, viewer: Account) -> list[str]:
     named or counted. One sharer cannot fill the lines of everyone else."""
     waiting = (
         " FROM share_offer o JOIN node h ON h.id = o.hub_node_id"
-        " WHERE o.grantee_account_id = %(viewer)s AND NOT o.held AND NOT o.refused"
+        " WHERE o.grantee_account_id = %(viewer)s AND NOT o.held"
         " AND h.tombstoned_at IS NULL"
     )
     rows = conn.execute(

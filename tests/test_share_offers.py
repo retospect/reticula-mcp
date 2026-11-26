@@ -220,9 +220,9 @@ def test_the_record_layer_refuses_what_the_tool_never_offers(conn, pair, make_ac
     assert note not in readable(conn, ben)
     # a refused share is not accepted afterwards either
     conn.execute(
-        "UPDATE share_offer SET held = false, refused = true WHERE address = %s",
-        (row["address"],),
+        "UPDATE share_offer SET held = false WHERE address = %s", (row["address"],)
     )
+    answer(conn, ben, hub, "none")
     with pytest.raises(ReticulaError):
         api.answer_offer(conn, ben, row, "read")
     assert note not in readable(conn, ben)

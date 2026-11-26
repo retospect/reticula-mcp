@@ -124,6 +124,12 @@ def _erase_residue(conn: Conn, account: Account, email: str) -> None:
         "DELETE FROM share_block WHERE person = %(p)s OR blocked = %(p)s",
         {"p": account.person_id},
     )
+    conn.execute(
+        "DELETE FROM share_refusal WHERE grantee = %(p)s OR sharer = %(p)s"
+        " OR hub_node_id IN (SELECT id FROM node WHERE author = %(p)s"
+        " AND kind = 'hub')",
+        {"p": account.person_id},
+    )
     prefix = f"{email.lower()}|"
     conn.execute(
         "DELETE FROM auth_event WHERE lower(subject) = %s"

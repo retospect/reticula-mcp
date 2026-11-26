@@ -547,19 +547,47 @@ def offer_for(
     tail = ref if len(ref) >= 6 and set(ref) <= _HEX else None
     if not ref.startswith("ret:") and tail is None:
         return None
+    params = {"me": viewer.person_id, "ref": ref, "tail": tail}
+    match = (
+        " AND (lower(h.address) = %(ref)s"
+        "      OR (%(tail)s::text IS NOT NULL AND right(lower(h.address),"
+        "          length(%(tail)s::text)) = %(tail)s::text))"
+    )
+    if refused:
+        # a share already refused (share_refusal), the newest, if none waits
+        found = conn.execute(
+            "SELECT o.*, h.address AS hub_address, a.handle AS sharer_handle"
+            " FROM share_offer o JOIN node h ON h.id = o.hub_node_id"
+            " LEFT JOIN account a ON a.person_id = o.granted_by"
+            " WHERE o.grantee = %(me)s AND NOT o.held AND h.tombstoned_at IS NULL"
+            f"{match} LIMIT 2",
+            params,
+        ).fetchall()
+        if found:
+            return {**found[0], "refused": False} if len(found) == 1 else None
+        row = conn.execute(
+            "SELECT r.hub_node_id, r.grantee, r.sharer AS granted_by, r.address,"
+            " NULL AS mode, h.address AS hub_address, a.handle AS sharer_handle"
+            " FROM share_refusal r JOIN node h ON h.id = r.hub_node_id"
+            " LEFT JOIN account a ON a.person_id = r.sharer"
+            " WHERE r.grantee = %(me)s AND h.tombstoned_at IS NULL"
+            f"{match} ORDER BY r.created_at DESC LIMIT 1",
+            params,
+        ).fetchone()
+        return {**row, "refused": True, "held": False} if row else None
     rows = conn.execute(
         "SELECT o.*, h.address AS hub_address, a.handle AS sharer_handle"
         " FROM share_offer o JOIN node h ON h.id = o.hub_node_id"
         " LEFT JOIN account a ON a.person_id = o.granted_by"
         " WHERE o.grantee = %(me)s AND h.tombstoned_at IS NULL"
-        " AND (o.refused AND %(refused)s OR NOT o.refused AND NOT o.held)"
+        " AND NOT o.held"
         " AND (lower(h.address) = %(ref)s"
         "      OR (%(tail)s::text IS NOT NULL AND right(lower(h.address),"
         "          length(%(tail)s::text)) = %(tail)s::text))"
         " LIMIT 2",
-        {"me": viewer.person_id, "ref": ref, "tail": tail, "refused": refused},
+        params,
     ).fetchall()
-    return rows[0] if len(rows) == 1 else None
+    return {**rows[0], "refused": False} if len(rows) == 1 else None
 
 
 def _answer_offer(
@@ -629,7 +657,7 @@ def _list_access(conn: Conn, viewer: Account, hub: Row) -> str:
         # shares that wait, held ones too: a block is not shown to the sharer
         for r in conn.execute(
             "SELECT grantee, mode, granted_by FROM share_offer"
-            " WHERE hub_node_id = %s AND NOT refused ORDER BY created_at, grantee",
+            " WHERE hub_node_id = %s ORDER BY created_at, grantee",
             (hub["id"],),
         ).fetchall():
             lines.append(

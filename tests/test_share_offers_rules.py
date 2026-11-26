@@ -191,17 +191,6 @@ def test_at_most_20_wait_from_one_sharer_to_one_person(conn, people):
         offer(conn, ada, mk_hub(conn, ada, "One too many"), ben)
 
 
-def test_at_most_100_wait_for_one_person(conn, make_account):
-    ben = make_account(handle="ben")
-    for s in range(5):
-        sharer = make_account(handle=f"many-{s}")
-        for n in range(20):
-            offer(conn, sharer, mk_hub(conn, sharer, f"H{n}"), ben)
-    late = make_account(handle="late")
-    with pytest.raises(ReticulaError):
-        offer(conn, late, mk_hub(conn, late, "Late"), ben)
-
-
 def test_start_shows_one_line_per_sharer(conn, people):
     ada, ben, cyd, _ = people
     for n in range(3):

@@ -759,15 +759,11 @@ def set_grant(
         if get_account_by_person_id(conn, grantee) is None:
             raise ReticulaError(NOT_FOUND, "no such person on this instance")
         offer = conn.execute(
-            "SELECT mode, granted_by, refused FROM share_offer WHERE hub_node_id = %s"
+            "SELECT mode, granted_by FROM share_offer WHERE hub_node_id = %s"
             " AND grantee = %s FOR UPDATE",
             (hub["id"], grantee),
         ).fetchone()
-        own_offer = (
-            offer is not None
-            and offer["granted_by"] == actor.person_id
-            and not offer["refused"]
-        )
+        own_offer = offer is not None and offer["granted_by"] == actor.person_id
         withdraw = mode == "none" and own_offer and actor.person_id != hub["author"]
         if not withdraw:
             access.authorize_grant(
@@ -781,7 +777,7 @@ def set_grant(
         "SELECT mode FROM hub_grant WHERE hub_node_id = %s AND grantee = %s",
         (hub["id"], grantee),
     ).fetchone()
-    waiting = offer is not None and (mode != "none" or not offer["refused"])
+    waiting = offer is not None
     if (existing and existing["mode"] == mode and not waiting) or (
         existing is None and not waiting and mode == "none"
     ):
@@ -800,10 +796,13 @@ def _offer_checked(
     conn: Conn, actor: Account, hub: Row, grantee: str, mode: str, offer: Row | None
 ) -> bool:
     """A share that will wait: refused when it would replace another
-    sharer's (unless the actor is the hub's admin) or go over a cap; nothing
-    written when it already waits as asked, or was refused (the sharer is
-    told it waits either way)."""
-    if offer is not None and offer["refused"]:
+    sharer's (unless the actor is the hub's admin) or go over
+    access.OFFERS_PER_SHARER from the actor to the person; nothing written
+    when it already waits as asked, or the person refused this hub from the
+    actor (the sharer is told it waits either way). Past
+    access.OFFERS_PER_PERSON for the person it is held (materialize._offer),
+    which the sharer is not told: that is the person's, not theirs."""
+    if access.refused(conn, hub["id"], grantee, actor.person_id):
         return True
     if offer is not None and offer["granted_by"] != actor.person_id:
         if actor.person_id != hub["author"]:
@@ -815,23 +814,16 @@ def _offer_checked(
     elif offer is not None and offer["mode"] == mode:
         return True
     if offer is None:
-        counts = conn.execute(
-            "SELECT count(*) FILTER (WHERE granted_by = %(me)s) AS mine,"
-            " count(*) FILTER (WHERE NOT held) AS shown"
-            " FROM share_offer WHERE grantee = %(to)s AND NOT refused",
-            {"me": actor.person_id, "to": grantee},
+        mine = conn.execute(
+            "SELECT count(*) AS n FROM share_offer WHERE grantee = %s"
+            " AND granted_by = %s",
+            (grantee, actor.person_id),
         ).fetchone()
-        if counts and counts["mine"] >= access.OFFERS_PER_SHARER:
+        if mine and mine["n"] >= access.OFFERS_PER_SHARER:
             raise ReticulaError(
                 FORBIDDEN,
                 f"{access.OFFERS_PER_SHARER} of your shares already wait for that"
                 " person; they need an answer before you share more",
-            )
-        if counts and counts["shown"] >= access.OFFERS_PER_PERSON:
-            raise ReticulaError(
-                FORBIDDEN,
-                f"that person has {access.OFFERS_PER_PERSON} shares waiting; they"
-                " need answers before more can wait",
             )
     _write_grant(conn, actor, hub, grantee, mode)
     return True
@@ -887,9 +879,15 @@ def answer_offer(
         (hub["id"], actor.person_id, offer["address"]),
     ).fetchone()
     if now is None:
-        raise gone
-    if now["refused"]:  # held too once blocked: a block again answers the same
+        # a block may still act on a share refused before
         if not (block and mode == "none"):
+            raise gone
+        now = conn.execute(
+            "SELECT address, sharer AS granted_by FROM share_refusal"
+            " WHERE hub_node_id = %s AND grantee = %s AND address = %s FOR UPDATE",
+            (hub["id"], actor.person_id, offer["address"]),
+        ).fetchone()
+        if now is None:
             raise gone
     elif now["held"]:
         raise gone
