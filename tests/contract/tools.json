@@ -15,17 +15,6 @@
      }
     ],
     "default": null
-   },
-   "listed": {
-    "anyOf": [
-     {
-      "type": "boolean"
-     },
-     {
-      "type": "null"
-     }
-    ],
-    "default": null
    }
   },
   "required": []
@@ -293,17 +282,6 @@
    "remove": {
     "default": false,
     "type": "boolean"
-   },
-   "from_hub": {
-    "anyOf": [
-     {
-      "type": "string"
-     },
-     {
-      "type": "null"
-     }
-    ],
-    "default": null
    }
   },
   "required": [

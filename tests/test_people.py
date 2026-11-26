@@ -1,5 +1,5 @@
-"""The directory of people: search(kind="person"), profile(listed=...), the line
-in start, and the hint share gives for a handle that does not exist."""
+"""The directory of people: search(kind="person"), who is left out of it, and the
+hint share gives for a handle that does not exist."""
 
 from __future__ import annotations
 
@@ -251,16 +251,7 @@ def test_other_kinds_are_not_affected(conn, make_account):
     )
 
 
-# --- profile -------------------------------------------------------------------
-
-
-def test_the_profile_says_it_is_listed_by_default(conn, make_account):
-    z = make_account()
-    out = content.profile(conn, z)
-    lines = out.splitlines()
-    assert lines[lines.index("verified: no") + 1] == (
-        "listed in the directory of people: yes"
-    )
+# --- storage (moves to the settings of RETICULA5 when they land) ------------------
 
 
 def test_an_account_created_before_set_listed_is_listed(conn, make_account):
@@ -277,57 +268,6 @@ def test_the_column_defaults_to_true_for_a_row_that_does_not_name_it(conn):
         " WHERE table_name = 'account' AND column_name = 'listed'"
     ).fetchone()
     assert row == {"column_default": "true", "is_nullable": "NO"}
-
-
-def test_listed_false_takes_the_account_out_and_the_profile_says_so(conn, make_account):
-    z, other = group(make_account, "prof-z", "prof-o")
-    out = content.profile(conn, z, listed=False)
-    assert out.splitlines()[0] == (
-        "Listed in the directory of people: no. Others can still share with you by"
-        " your exact handle."
-    )
-    assert "listed in the directory of people: no" in out.splitlines()
-    assert "listed in the directory of people: no" in content.profile(conn, z)
-    assert handles(find(conn, other, "prof-")) == ["prof-o"]
-
-
-def test_listed_true_puts_the_account_back(conn, make_account):
-    z, other = group(make_account, "back-z", "back-o")
-    content.profile(conn, z, listed=False)
-    out = content.profile(conn, z, listed=True)
-    assert out.splitlines()[0] == (
-        'Listed in the directory of people: yes. Others find you with search(kind="person").'
-    )
-    assert "listed in the directory of people: yes" in out.splitlines()
-    assert handles(find(conn, other, "back-")) == ["back-o", "back-z"]
-
-
-def test_the_same_value_again_says_already_listed(conn, make_account):
-    z = make_account()
-    assert content.profile(conn, z, listed=True).splitlines()[0] == (
-        "Already listed: yes. Nothing changed."
-    )
-    content.profile(conn, z, listed=False)
-    assert content.profile(conn, z, listed=False).splitlines()[0] == (
-        "Already listed: no. Nothing changed."
-    )
-
-
-def test_a_rename_and_listed_together_show_both_sentences(conn, make_account):
-    z = make_account(handle="both-old")
-    out = content.profile(conn, z, handle="both-new", listed=False)
-    first, second = out.splitlines()[:2]
-    assert first.startswith("Renamed @both-old to @both-new.")
-    assert second.startswith("Listed in the directory of people: no.")
-    assert "listed in the directory of people: no" in out.splitlines()
-
-
-def test_the_same_handle_and_listed_together_still_set_listed(conn, make_account):
-    z = make_account(handle="same-h")
-    out = content.profile(conn, z, handle="same-h", listed=False)
-    assert out.splitlines()[0] == "Handle is already @same-h. Nothing changed."
-    assert out.splitlines()[1].startswith("Listed in the directory of people: no.")
-    assert not people.is_listed(conn, z)
 
 
 def test_the_same_handle_alone_keeps_its_answer(conn, make_account):
@@ -349,24 +289,6 @@ def test_setting_listed_moves_updated_at_only_for_that_account(conn, make_accoun
         ).fetchall()
     }
     assert rows["upd-z"].year > 2020 and rows["upd-o"].year == 2020
-
-
-# --- start ---------------------------------------------------------------------
-
-
-def test_start_says_whether_the_account_is_listed(conn, make_account):
-    z = make_account()
-    lines = content.start(conn, z).splitlines()
-    first = next(i for i, ln in enumerate(lines) if ln.startswith("Account: @"))
-    assert lines[first + 1] == (
-        "Listed in the directory of people: yes. profile(listed=false) takes you out."
-    )
-    assert lines[first + 2] == ""
-    content.profile(conn, z, listed=False)
-    lines = content.start(conn, z).splitlines()
-    assert lines[first + 1] == (
-        "Listed in the directory of people: no. profile(listed=true) puts you back."
-    )
 
 
 # --- share ---------------------------------------------------------------------

@@ -16,7 +16,7 @@ from typing import Any
 
 from reticula_mcp import accounts, connection
 from reticula_mcp.accounts import Account
-from reticula_mcp.content import bootstrap, people
+from reticula_mcp.content import bootstrap
 from reticula_mcp.db.pool import Conn
 from reticula_mcp.graph import access
 from reticula_mcp.permissions import read_through_above_sql, readable_nodes_sql
@@ -40,10 +40,6 @@ def short_id(address: str) -> str:
 
 def _verified_text(viewer: Account) -> str:
     return "yes" if viewer.verified else "no"
-
-
-def _yes_no(value: bool) -> str:
-    return "yes" if value else "no"
 
 
 def _day(moment: Any) -> str:
@@ -271,15 +267,6 @@ def _other_instructions(conn: Conn, viewer: Account) -> list[dict[str, Any]]:
     ).fetchall()
 
 
-def _listed_line(listed: bool) -> str:
-    if listed:
-        return (
-            "Listed in the directory of people: yes. profile(listed=false) takes"
-            " you out."
-        )
-    return "Listed in the directory of people: no. profile(listed=true) puts you back."
-
-
 def start(conn: Conn, viewer: Account) -> str:
     """Identity, the starter instruction, and the caller's hubs."""
     starter = bootstrap.starter_instruction()
@@ -288,7 +275,6 @@ def start(conn: Conn, viewer: Account) -> str:
         f"Account: @{viewer.handle} (person {viewer.person_id},"
         f" verified: {_verified_text(viewer)}). It belongs to the person you work"
         " for; `(you)` in tool output means that person.",
-        _listed_line(people.is_listed(conn, viewer)),
         "",
         starter.text.rstrip(),
         "",
@@ -357,45 +343,23 @@ def _identity_versions(conn: Conn, viewer: Account) -> int:
     return int(row["n"]) if row else 0
 
 
-def profile(
-    conn: Conn,
-    viewer: Account,
-    *,
-    handle: str | None = None,
-    listed: bool | None = None,
-) -> str:
-    """Show the account, rename its handle, or set whether it is listed."""
-    said: list[str] = []
+def profile(conn: Conn, viewer: Account, *, handle: str | None = None) -> str:
+    """Show the account, or rename its handle."""
     if handle is not None:
         old = viewer.handle
         viewer = accounts.set_handle(conn, viewer, handle)
         if viewer.handle == old:
-            if listed is None:
-                return f"Handle is already @{old}. Nothing changed."
-            said.append(f"Handle is already @{old}. Nothing changed.")
-        else:
-            said.append(
-                f"Renamed @{old} to @{viewer.handle}. The person ID did not change:"
-                f" {viewer.person_id}. Your notes keep their addresses."
-            )
-    if listed is not None:
-        if people.is_listed(conn, viewer) == listed:
-            said.append(f"Already listed: {_yes_no(listed)}. Nothing changed.")
-        else:
-            people.set_listed(conn, viewer, listed)
-            said.append(
-                "Listed in the directory of people: yes. Others find you with"
-                ' search(kind="person").'
-                if listed
-                else "Listed in the directory of people: no. Others can still share"
-                " with you by your exact handle."
-            )
-    head = "\n".join(said) if said else f"@{viewer.handle}"
+            return f"Handle is already @{old}. Nothing changed."
+        head = (
+            f"Renamed @{old} to @{viewer.handle}. The person ID did not change:"
+            f" {viewer.person_id}. Your notes keep their addresses."
+        )
+    else:
+        head = f"@{viewer.handle}"
     out = [
         head,
         f"person: {viewer.person_id}",
         f"verified: {_verified_text(viewer)}",
-        f"listed in the directory of people: {_yes_no(people.is_listed(conn, viewer))}",
         f"created: {_day(viewer.created_at)}",
         f"identity: {viewer.identity_address}"
         f" ({_identity_versions(conn, viewer)} versions)",

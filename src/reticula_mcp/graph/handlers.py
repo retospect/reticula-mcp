@@ -298,24 +298,14 @@ def link(
     to: str,
     rel: str = "part-of",
     remove: bool = False,
-    from_hub: str | None = None,
 ) -> str:
     rel = (rel or "part-of").strip()
     node = resolve_ref(conn, viewer, ref)
-    if from_hub is not None and (rel != "part-of" or remove):
-        raise ReticulaError(
-            BAD_INPUT,
-            "from_hub moves a filing: it needs rel='part-of' and no remove",
-        )
     if rel == "part-of":
         hub = _resolve_hub(conn, viewer, to, adding=not remove)
         if remove:
             api.remove_membership(conn, viewer, node["id"], hub["id"])
             return f"removed {_name(node)} from hub {_name(hub)}"
-        if from_hub is not None:
-            # one transaction: refused as a whole if either half is refused
-            with conn.transaction():
-                return _move(conn, viewer, node, hub, from_hub)
         return _file(conn, viewer, node, hub)
     target = resolve_ref(conn, viewer, to)
     if node["author"] != viewer.person_id:
@@ -379,8 +369,8 @@ def _file(conn: Conn, viewer: Account, node: Row, hub: Row) -> str:
 
 def _still_filed(conn: Conn, viewer: Account, node: Row, hub: Row) -> str:
     """After a new filing: a line naming another hub the viewer filed the note
-    in, with the call that would have moved it instead. Empty when there is
-    none."""
+    in, with the call that completes a move (withdraw it there). Empty when
+    there is none."""
     rows = conn.execute(
         "SELECT h.* FROM membership m JOIN node h ON h.id = m.hub_node_id"
         " WHERE m.node_id = %s AND m.author = %s AND NOT m.withdrawn"
@@ -393,15 +383,13 @@ def _still_filed(conn: Conn, viewer: Account, node: Row, hub: Row) -> str:
     first = dict(rows[0])
     if not can_read(conn, viewer, first["id"]):
         first[_UNREAD] = True
-    ref, to, old = (render.short_ref(r["address"]) for r in (node, hub, first))
-    where = (
-        f"hub {_short_name(first)}"
-        if len(rows) == 1
-        else f"{len(rows)} other hubs, among them hub {_short_name(first)}"
-    )
+    ref, old = render.short_ref(node["address"]), render.short_ref(first["address"])
+    call = f"link(ref='{ref}', to='{old}', remove=true)"
+    if len(rows) == 1:
+        return f"\nstill filed in hub {_short_name(first)}; to move it, also run {call}"
     return (
-        f"\nstill filed in {where}; to move it instead,"
-        f" link(ref='{ref}', to='{to}', from_hub='{old}')"
+        f"\nstill filed in {len(rows)} other hubs, among them hub"
+        f" {_short_name(first)}; to move it out of that one, also run {call}"
     )
 
 
@@ -411,24 +399,6 @@ def _short_name(row: Row) -> str:
     if row.get(_UNREAD):
         return ref
     return f"{ref} {render.quote(render.label(row))}"
-
-
-def _move(conn: Conn, viewer: Account, node: Row, hub: Row, from_ref: str) -> str:
-    """Withdraw the filing under ``from_ref`` and file under ``hub``. The caller
-    runs this in one transaction, so a refusal of either half undoes both; the
-    cycle check of the new filing sees the state after the withdrawal."""
-    old = _resolve_hub(conn, viewer, from_ref, adding=False)
-    if old["id"] == hub["id"]:
-        raise ReticulaError(
-            BAD_INPUT,
-            "from_hub and to are the same hub",
-            hint="to file it there, leave out from_hub",
-        )
-    own = _check_filing(conn, viewer, node, hub)
-    api.remove_membership(conn, viewer, node["id"], old["id"])
-    api.add_membership(conn, viewer, node["id"], hub["id"])
-    out = f"moved {_name(node)} from hub {_name(old)} to hub {_name(hub)}"
-    return out if own else out + _NOT_OWN
 
 
 def _new_rel_line(rel: str, in_use: list[tuple[str, int]]) -> str:

@@ -209,23 +209,15 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
                 " Omit to just show the profile."
             ),
         ] = None,
-        listed: Annotated[
-            bool | None,
-            Field(
-                description="False takes you out of the directory of people (others"
-                " can still share with you by your exact handle); true puts you back."
-            ),
-        ] = None,
         *,
         ctx: Context,
     ) -> str:
         """Show your profile (handle, person ID, verification, hubs), or rename your handle.
 
         Pass `handle` to change it; your person ID and all your notes keep their
-        addresses. Handles are unique on this instance. Pass `listed` to choose
-        whether search(kind="person") lists you.
+        addresses. Handles are unique on this instance.
         """
-        return await run(ctx, content_handlers.profile, handle=handle, listed=listed)
+        return await run(ctx, content_handlers.profile, handle=handle)
 
     @mcp.tool(structured_output=False)
     async def search(
@@ -484,10 +476,6 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
                 " adding it."
             ),
         ] = False,
-        from_hub: Annotated[
-            str | None,
-            Field(description="Hub to move it out of."),
-        ] = None,
         *,
         ctx: Context,
     ) -> str:
@@ -505,7 +493,6 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
             to=to,
             rel=rel,
             remove=remove,
-            from_hub=from_hub,
         )
 
     @mcp.tool(structured_output=False)
