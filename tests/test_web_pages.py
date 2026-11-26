@@ -19,7 +19,7 @@ from reticula_mcp.graph import materialize
 from reticula_mcp.web import hubs
 from reticula_mcp.web.html import CSP
 from tests.auth_support import PASSWORD, start_live
-from tests.graph_support import mk_hub, mk_note, share
+from tests.graph_support import delete_now, mk_hub, mk_note, share
 
 
 @pytest.fixture
@@ -53,7 +53,7 @@ def test_only_the_owners_own_live_notes_and_sub_hubs_are_shown(
     their_sub = mk_hub(conn, bea, "Bea's corner", parent=hub)
     secret = mk_note(conn, ana, "x", hub=hub, title="Private plan", private=True)
     gone = mk_note(conn, ana, "x", hub=hub, title="Deleted talk")
-    graph.delete(conn, ana, ref=gone)
+    delete_now(conn, ana, gone)
     old = mk_note(conn, ana, "x", hub=hub, title="Old schedule")
     new = mk_note(conn, ana, "x", hub=hub, title="New schedule")
     graph.link(conn, ana, ref=new, to=old, rel="supersedes")

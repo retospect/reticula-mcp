@@ -11,7 +11,7 @@ import pytest
 from reticula_mcp.errors import ReticulaError
 from reticula_mcp.graph import handlers as graph
 from reticula_mcp.search import handlers
-from tests.graph_support import mk_hub, mk_note, share
+from tests.graph_support import delete_now, mk_hub, mk_note, share
 from tests.search_support import use_hash_embedder
 
 
@@ -28,10 +28,10 @@ def test_a_deletion_before_the_share_is_not_told(conn, make_account):
     ada, ben = make_account(handle="ada"), make_account(handle="ben")
     hub = mk_hub(conn, ada, "Board")
     before = mk_note(conn, ada, "deleted before ben came in", hub=hub)
-    graph.delete(conn, ada, ref=before)
+    delete_now(conn, ada, before)
     share(conn, ada, hub, ben, "read")
     after = mk_note(conn, ada, "deleted after ben came in", hub=hub)
-    graph.delete(conn, ada, ref=after)
+    delete_now(conn, ada, after)
 
     listing = handlers.search(conn, ben, query="", since="7d")
     assert f"- {short(after)} note deleted by @ada" in listing

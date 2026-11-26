@@ -12,7 +12,16 @@ from reticula_mcp.graph import api, handlers
 from reticula_mcp.graph.materialize import rebuild
 from reticula_mcp.graph.paper import normalize_ext_id
 from reticula_mcp.search import hooks
-from tests.graph_support import addr, can_read, mk_hub, mk_note, node, readable, share
+from tests.graph_support import (
+    addr,
+    can_read,
+    delete_now,
+    mk_hub,
+    mk_note,
+    node,
+    readable,
+    share,
+)
 
 
 def code_of(call, *args, **kwargs) -> str:
@@ -46,7 +55,7 @@ def build_world(conn, make_account) -> dict[str, Any]:
     handlers.link(conn, alice, ref=paper, to=other)
     gone = mk_note(conn, alice, "to be deleted", hub=top)
     handlers.edit(conn, alice, ref=gone, text="to be deleted, v2")
-    handlers.delete(conn, alice, ref=gone)
+    delete_now(conn, alice, gone)
     removed = mk_note(conn, bob, "removed by admin", hub=top)
     handlers.link(conn, alice, ref=removed, to=top, remove=True)
     leaver = mk_note(conn, bob, "withdrawn by author", hub=mid)
@@ -204,7 +213,7 @@ def test_node_changed_hook_runs_for_insert_edit_and_tombstone(
     assert seen == [nid, nid]
     handlers.edit(conn, alice, ref=n, text="v2")  # no change: no new version
     assert seen == [nid, nid]
-    handlers.delete(conn, alice, ref=n)
+    delete_now(conn, alice, n)
     assert seen == [nid, nid, nid]
     seen.clear()
     rebuild(conn)

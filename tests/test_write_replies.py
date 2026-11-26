@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from reticula_mcp.graph import api, handlers
 from reticula_mcp.search import handlers as search
-from tests.graph_support import addr, mk_hub, mk_note, share
+from tests.graph_support import addr, delete_now, mk_hub, mk_note, share
 
 
 def named(address: str, title: str) -> str:
@@ -72,7 +72,7 @@ def test_link_names_both_ends(conn, make_account):
 def test_delete_names_what_it_deleted(conn, make_account):
     z = make_account()
     note = mk_note(conn, z, "x", title="Gone")
-    out = handlers.delete(conn, z, ref=note)
+    out = delete_now(conn, z, note)
     assert out.startswith(f"deleted {named(note, 'Gone')}: the address stays")
 
 

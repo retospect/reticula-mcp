@@ -21,10 +21,9 @@ import pytest
 
 from reticula_mcp.db.pool import Conn
 from reticula_mcp.errors import ReticulaError
-from reticula_mcp.graph import handlers as graph_handlers
 from reticula_mcp.permissions import readable_among_sql, readable_nodes_sql
 from reticula_mcp.resolve import ends_with_params, ends_with_sql, resolve_ref
-from tests.graph_support import mk_hub, mk_note, share
+from tests.graph_support import delete_now, mk_hub, mk_note, share
 from tests.helpers import make_atom
 from tests.search_support import file_under, hub_of, use_hash_embedder
 from tests.test_readable_hubs import World, graph, world  # noqa: F401
@@ -210,7 +209,7 @@ def test_a_withdrawn_note_answers_by_short_id_as_by_address(
     hub = mk_hub(conn, ada, "Studio")
     share(conn, ada, hub, ben, "read")
     gone = mk_note(conn, ada, "an old note", hub=hub)
-    graph_handlers.delete(conn, ada, ref=gone)
+    delete_now(conn, ada, gone)
     for viewer in (ada, ben):
         by_address = handlers.get(conn, viewer, ref=gone)
         assert f"{gone[-8:]} withdrawn" in by_address

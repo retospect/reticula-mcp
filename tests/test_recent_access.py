@@ -22,7 +22,7 @@ from reticula_mcp.db.pool import Conn
 from reticula_mcp.graph import handlers as graph
 from reticula_mcp.search import render
 from reticula_mcp.search.handlers import search
-from tests.graph_support import mk_hub, mk_note, share
+from tests.graph_support import delete_now, mk_hub, mk_note, share
 from tests.test_recent_support import (
     Clock,
     by_others,
@@ -235,7 +235,7 @@ def test_a_note_deleted_after_it_was_listed_is_gone_and_not_counted(
     before = recent(conn, ana)
     assert short(c) in listed(before), before
     assert shown_and_total(before) == (4, 4), before
-    graph.delete(conn, bea, ref=c)
+    delete_now(conn, bea, c)
     after = recent(conn, ana)
     assert shown_and_total(after) == (4, 4), after
     assert f"- {short(c)} note deleted by @bea · now" in after.splitlines()

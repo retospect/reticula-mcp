@@ -19,6 +19,7 @@ from reticula_mcp.errors import ReticulaError
 from reticula_mcp.graph import handlers as graph
 from reticula_mcp.resolve import resolve_ref
 from reticula_mcp.search import handlers, read, render
+from tests.graph_support import delete_now
 from tests.helpers import make_atom
 from tests.search_support import file_under, spy_on_sql, use_hash_embedder
 
@@ -1026,7 +1027,7 @@ def test_a_withdrawn_note_with_an_offset_reads_as_withdrawn(conn, make_account):
     alice = make_account(handle="alice")
     out = graph.put(conn, alice, text="soon gone", title="Gone")
     ref = address(out)
-    graph.delete(conn, alice, ref=ref)
+    delete_now(conn, alice, ref)
     assert "withdrawn" in get(conn, alice, f"{ref}+20")
     assert get(conn, alice, f"{ref}+20") == get(conn, alice, ref)
 

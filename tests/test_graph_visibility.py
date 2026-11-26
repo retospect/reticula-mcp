@@ -15,6 +15,7 @@ from reticula_mcp.graph.materialize import apply_record
 from tests.graph_support import (
     addr,
     can_read,
+    delete_now,
     insert_membership,
     mk_hub,
     mk_note,
@@ -311,7 +312,7 @@ def test_tombstoned_hub_cuts_off_what_is_filed_beneath_it(conn, make_account):
     share(conn, alice, top, bob, "read")
     share(conn, alice, mid, carol, "read")
     assert can_read(conn, bob, leaf) and can_read(conn, carol, leaf)
-    handlers.delete(conn, alice, ref=mid)
+    delete_now(conn, alice, mid)
     assert not can_read(conn, bob, leaf)  # the middle hub no longer carries access
     assert not can_read(conn, carol, leaf) and not can_read(conn, carol, mid)
     assert can_read(conn, alice, leaf)
@@ -323,7 +324,7 @@ def test_tombstoned_atom_is_unreadable_to_everyone(conn, make_account):
     hub = mk_hub(conn, alice, "H")
     share(conn, alice, hub, bob)
     note = mk_note(conn, bob, "n", hub=hub)
-    handlers.delete(conn, bob, ref=note)
+    delete_now(conn, bob, note)
     assert note not in readable(conn, bob) | readable(conn, alice)
 
 
@@ -418,7 +419,7 @@ def test_can_add_rules(conn, make_account):
     # a plain note is not a hub; a tombstoned hub takes nothing
     plain = mk_note(conn, alice, "n")
     assert not permissions.can_add(conn, alice, sql_node_id(conn, plain))
-    handlers.delete(conn, alice, ref=sub)
+    delete_now(conn, alice, sub)
     assert not permissions.can_add(conn, alice, sid)
     # accept: anyone
     api.update_atom(conn, alice, pid, payload_extra={"accept": "anyone"})

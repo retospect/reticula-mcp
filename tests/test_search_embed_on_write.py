@@ -17,6 +17,7 @@ from reticula_mcp.db.pool import Database
 from reticula_mcp.graph import handlers as graph
 from reticula_mcp.search import find, hooks, index, worker
 from tests.conftest import PASSWORD
+from tests.graph_support import delete_now
 from tests.helpers import make_atom
 from tests.search_support import (
     SlowEmbedder,
@@ -167,7 +168,7 @@ def test_every_way_of_writing_a_node_reaches_the_backlog(conn, make_account, loa
     assert raw["id"] not in pending(conn)
     note = address(graph.put(conn, ada, text="to be deleted", title="Gone"))
     gone = node(conn, note)["id"]
-    graph.delete(conn, ada, ref=note)
+    delete_now(conn, ada, note)
     assert gone not in pending(conn)  # a deleted note needs no vector
 
 

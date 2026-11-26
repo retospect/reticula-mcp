@@ -17,6 +17,7 @@ from reticula_mcp.content import hooks as content_hooks
 from reticula_mcp.errors import ReticulaError
 from reticula_mcp.graph import handlers as graph
 from reticula_mcp.search import handlers, read
+from tests.graph_support import delete_now
 from tests.search_support import use_hash_embedder
 
 _ADDRESS = re.compile(r"ret:p[a-z2-7]{26}/[0-9a-f-]{36}")
@@ -166,7 +167,7 @@ def test_withdrawn_is_answered_only_to_those_the_author_shared_with(conn, make_a
     assert before.value.code == "NotFound"
     assert "Okapi" not in handlers.get(conn, carol, ref=shelf)
 
-    graph.delete(conn, alice, ref=note)
+    delete_now(conn, alice, note)
 
     # carol reads a hub that holds a filing about the note, but not one made by
     # its author: she learns nothing, exactly like a stranger or a made-up address
@@ -195,7 +196,7 @@ def test_a_private_note_is_withdrawn_only_for_its_author(conn, make_account):
     note = address(
         graph.put(conn, alice, text="private tapir memo", hub=team, private=True)
     )
-    graph.delete(conn, alice, ref=note)
+    delete_now(conn, alice, note)
     assert "withdrawn" in handlers.get(conn, alice, ref=note)
     with pytest.raises(ReticulaError) as exc:
         handlers.get(conn, bob, ref=note)
