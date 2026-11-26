@@ -134,7 +134,7 @@ def read_through_above_sql(hub: str = "%(hub)s") -> str:
         " WHERE above_.author <> self_.author"
         " OR EXISTS (SELECT 1 FROM hub_grant ga_"
         "   WHERE ga_.hub_node_id = above_.id AND ga_.mode IN ('read', 'add')"
-        "   AND ga_.grantee <> self_.author"
+        "   AND ga_.grantee <> self_.author AND ga_.grantee <> 'public'"
         "   AND NOT EXISTS (SELECT 1 FROM hub_grant gd_"
         "     WHERE gd_.hub_node_id = self_.id AND gd_.grantee = ga_.grantee"
         "     AND gd_.mode IN ('read', 'add'))))"

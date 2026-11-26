@@ -14,7 +14,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from reticula_mcp import accounts, connection, settings
+from reticula_mcp import accounts, connection, public, settings
 from reticula_mcp.accounts import Account
 from reticula_mcp.content import bootstrap
 from reticula_mcp.db.pool import Conn
@@ -93,7 +93,7 @@ def _hub_rows(conn: Conn, viewer: Account) -> list[dict[str, Any]]:
         " (h.author = %(person)s) AS own,"
         f" {read_through_above_sql('h.id')} AS above,"
         " (SELECT count(*) FROM hub_grant g WHERE g.hub_node_id = h.id"
-        "   AND g.mode IN ('read', 'add')) AS grants"
+        "   AND g.mode IN ('read', 'add') AND g.grantee <> 'public') AS grants"
         " FROM node h LEFT JOIN account o ON o.person_id = h.author"
         " WHERE h.kind = 'hub' AND h.tombstoned_at IS NULL"
         f" AND h.id IN ({readable_nodes_sql('%(viewer)s')})"
@@ -152,6 +152,11 @@ def _hub_line(conn: Conn, viewer: Account, row: dict[str, Any]) -> str:
         elif others_above:
             everyone = "everyone who has a hub above it"
             shared = f"{shared} and {everyone}" if names else everyone
+        if public.on_page(conn, row["id"]):
+            # the public page is not a person: named apart, never as "nobody"
+            shared = (
+                public.PAGE if shared == "nobody" else f"{shared}, and {public.PAGE}"
+            )
         count = f"  shared with {shared},"
     elif shown == "add" and not above and not others_above:
         # Said as who they are: "2 people have access" was read as two people

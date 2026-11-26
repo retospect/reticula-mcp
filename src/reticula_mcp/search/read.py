@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from reticula_mcp import format as fmt
+from reticula_mcp import public
 from reticula_mcp.accounts import Account
 from reticula_mcp.db.pool import Conn
 from reticula_mcp.errors import BAD_INPUT, NOT_FOUND, ReticulaError
@@ -801,8 +802,8 @@ def _access_line(conn: Conn, viewer: Account, hub: Row) -> str | None:
     # a grant is named as it was given; a hub above may give more
     adders = adders_from_above(conn, viewer.person_id, hub["id"])
     for g in grants:
-        if g["grantee"] == hub["author"]:
-            continue  # the owner is already named
+        if g["grantee"] in (hub["author"], public.PUBLIC_GRANTEE):
+            continue  # the owner is already named; the public page comes last
         who = f"@{g['handle']}" if g["handle"] else g["grantee"]
         more = " (add through a hub above)" if g["grantee"] in adders else ""
         parts.append(f"{who} {g['mode']}{more}")
@@ -815,6 +816,8 @@ def _access_line(conn: Conn, viewer: Account, hub: Row) -> str | None:
         parts.append("other people through a hub above")
     elif others:
         parts.append("everyone with access to a hub above this one")
+    if public.on_page(conn, hub["id"]):
+        parts.append(f"{public.PAGE} (titles only)")
     return "access: " + ", ".join(parts)
 
 

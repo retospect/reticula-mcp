@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from reticula_mcp import public as public_page
 from reticula_mcp import settings
 from reticula_mcp.accounts import Account, get_account_by_person_id
 from reticula_mcp.db.pool import Conn
@@ -478,6 +479,8 @@ def _list_access(conn: Conn, viewer: Account, hub: Row) -> str:
         # a grant is printed as it was given; a hub above may give more
         adders = access.adders_from_above(conn, viewer.person_id, hub["id"])
         for r in rows:
+            if r["grantee"] == PUBLIC:
+                continue  # not a person: said below, from public_nodes()
             more = (
                 "; add through a hub above this one" if r["grantee"] in adders else ""
             )
@@ -495,6 +498,11 @@ def _list_access(conn: Conn, viewer: Account, hub: Row) -> str:
         elif others:
             lines.append(
                 "Everyone with access to a hub above this one can read it too."
+            )
+        if public_page.on_page(conn, hub["id"]):
+            lines.append(
+                f"{public_page.PAGE} /hubs shows the titles of this hub and of"
+                " the owner's own notes in it, to anyone"
             )
         lines.append(
             "add: reads the hub and adds notes of their own. read: reads only."

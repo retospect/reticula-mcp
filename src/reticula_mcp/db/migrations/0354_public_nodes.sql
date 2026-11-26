@@ -12,8 +12,9 @@
 --   share: that member shares it themselves), recursively;
 -- - in each of these hubs, the notes and papers filed by their own author
 --   when that author is the public hub's author, live, in audience 'hub',
---   and not superseded by any live note (narrower than current_nodes: it
---   can hide more, never less).
+--   and not superseded by a live note of that same author (the page shows
+--   only the owner's notes, so only the owner's correction takes one off;
+--   another member's superseding note does not).
 --
 -- Not shown: notes by other members, private notes, deleted or superseded
 -- notes, instructions, debug notes, handles and person IDs (the page reads
@@ -56,5 +57,6 @@ LANGUAGE sql STABLE AS $$
       AND n.tombstoned_at IS NULL AND n.audience = 'hub'
       AND NOT EXISTS (
             SELECT 1 FROM supersedes s JOIN node w ON w.id = s.new_node_id
-            WHERE s.old_node_id = n.id AND w.tombstoned_at IS NULL)
+            WHERE s.old_node_id = n.id AND w.tombstoned_at IS NULL
+              AND w.author = t.owner)
 $$;

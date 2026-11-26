@@ -78,6 +78,8 @@ def readers_above(
         "  SELECT above.id, g.grantee, above.visible, g.id FROM above"
         "  JOIN hub_grant g ON g.hub_node_id = above.id"
         "    AND g.mode IN ('read', 'add')"
+        # 'public' is the public page, not a person (public.py)
+        "    AND g.grantee <> 'public'"
         # a grant counts only on a hub whose audience is 'hub' (hub_access)
         "  WHERE above.audience = 'hub'"
         ") SELECT m.person, bool_or(m.visible) AS visible,"

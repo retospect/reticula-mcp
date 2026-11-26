@@ -155,3 +155,46 @@ def test_the_generated_graphs_have_public_hubs_with_notes(world: World) -> None:
             }
             with_notes += bool(kinds - {"hub"})
     assert with_notes >= len(SEEDS) // 4, with_notes
+
+
+@pytest.mark.parametrize("seed", SEEDS[:60], ids=lambda s: f"seed{s}")
+def test_the_public_hubs_are_those_of_a_python_walk(world: World, seed: int) -> None:
+    """The hubs of public_nodes() equal a walk written here from the graph:
+    from each hub its live owner made public, down owner-filed, live,
+    audience-hub edges to the owner's own live audience-hub sub-hubs."""
+    with graph(world, seed) as g:
+        hubs = [i for i, n in g.nodes.items() if n.kind == "hub"]
+        good = add_public_grants(world, seed, hubs)
+        roots = {
+            h for h in good if not g.nodes[h].tomb and g.nodes[h].audience == "hub"
+        }
+        want: set[int] = set()
+        for root in roots:
+            owner = g.nodes[root].author
+            todo, seen = [root], {root}
+            while todo:
+                at = todo.pop()
+                for edge in g.edges:
+                    c = g.nodes.get(edge.node)
+                    if (
+                        edge.hub == at
+                        and c is not None
+                        and c.kind == "hub"
+                        and not edge.withdrawn
+                        and edge.audience == "hub"
+                        and edge.author == c.author == owner
+                        and not c.tomb
+                        and c.audience == "hub"
+                        and c.id not in seen
+                    ):
+                        seen.add(c.id)
+                        todo.append(c.id)
+            want |= seen
+        got = {
+            r["node_id"]
+            for r in world.conn.execute(
+                "SELECT p.node_id FROM public_nodes() p JOIN node n ON n.id = p.node_id"
+                " WHERE n.kind = 'hub'"
+            ).fetchall()
+        }
+        assert got == want, (seed, sorted(got - want), sorted(want - got))
