@@ -47,6 +47,17 @@ def test_only_loopback_and_known_hosts_register_by_default(fresh_db_url: str) ->
         assert _register(live, "https://notclaude.ai/cb") == 400
 
 
+def test_the_operator_can_add_a_known_client_host(fresh_db_url: str) -> None:
+    """RETICULA_KNOWN_CLIENTS extends who may register, without opening it."""
+    hosts = ("claude.ai", "claude.com", "chatgpt.com")
+    with start_live(fresh_db_url, known_clients=hosts) as live:
+        assert _register(live, "https://chatgpt.com/connector/oauth/cb") == 201
+        assert _register(live, "https://elsewhere.example/cb") == 400
+    assert Settings.from_env(
+        {"RETICULA_KNOWN_CLIENTS": "claude.ai, chatgpt.com"}
+    ).known_clients == ("claude.ai", "chatgpt.com")
+
+
 def test_the_operator_can_open_registration(fresh_db_url: str) -> None:
     with start_live(fresh_db_url, registration="open") as live:
         assert _register(live, "https://elsewhere.example/cb") == 201
