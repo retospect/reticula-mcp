@@ -754,6 +754,15 @@ The shell reports the status of the last program of the line, and that is the en
 
 ### On a schedule
 
+The script also signs each file it writes, so that a copy can be checked later for a change on the way or in storage. The signature uses `ssh-keygen`, which comes with OpenSSH. Make the signing key once, on the database machine, in `deploy/`:
+
+```
+(umask 077; ssh-keygen -q -t ed25519 -N '' -C reticula-backup -f backup-signing.key)
+printf 'reticula-backup %s\n' "$(cut -d' ' -f1,2 backup-signing.key.pub)" > allowed_signers
+```
+
+The first line writes the private key `backup-signing.key`, which stays on this machine and which git ignores, and its public half. The second writes `allowed_signers`, the file that checks a signature. Copy `allowed_signers` to your own computer, beside the private key of `age`. The signature tells you that a file comes from this machine unchanged. It cannot tell you more: whoever controls this machine can sign too.
+
 Save this as `backup.sh` next to `compose.yaml` and `.env`, put your public key in the line `recipient=`, and run `chmod +x backup.sh`:
 
 ```
@@ -763,6 +772,7 @@ umask 077
 cd "$(dirname "$0")"
 
 recipient=age1...
+signing_key=backup-signing.key
 dir=backups
 keep_days=14
 
@@ -772,13 +782,16 @@ trap 'rm -f "$out.part"' EXIT
 docker compose exec -T db pg_dump -U reticula --format=custom reticula \
   | age -r "$recipient" > "$out.part"
 mv "$out.part" "$out"
+ssh-keygen -Y sign -q -f "$signing_key" -n reticula-backup "$out"
 age -r "$recipient" < .env > "$dir/env.age"
-find "$dir" -name 'reticula-*.dump.age' -mtime +"$keep_days" -delete
+rm -f "$dir/env.age.sig"
+ssh-keygen -Y sign -q -f "$signing_key" -n reticula-backup "$dir/env.age"
+find "$dir" -name 'reticula-*.dump.age*' -mtime +"$keep_days" -delete
 ```
 
-Each run writes one encrypted dump into `backups/`, replaces the encrypted copy of `.env` beside it, and removes dumps older than 14 days. A dump is written under a name that ends in `.part` and gets its own name when it is complete, so a file named `.dump.age` is a whole dump. `set -o pipefail` makes a failed dump fail the script. `umask 077` makes every file it writes readable by your own user only; that line was added after the tests below.
+Each run writes one encrypted dump into `backups/` with its signature in a file ending in `.sig`, replaces the encrypted copy of `.env` and its signature, and removes dumps and signatures older than 14 days. `ssh-keygen` does not overwrite a signature file: it stops and asks. That is why the old signature of `env.age` is removed first. Two runs of this script against a throwaway stack wrote three files and three signatures and nothing into the log, and every signature checked as under [Check a backup](#check-a-backup). A dump is written under a name that ends in `.part` and gets its own name when it is complete, so a file named `.dump.age` is a whole dump. `set -o pipefail` makes a failed dump fail the script. `umask 077` makes every file it writes readable by your own user only; that line was added after the tests below.
 
-`backup.sh`, `backup.log` and `backups/` are your own files in the clone. `git` does not track them, and moving the clone to another release, as in step 2 of "Upgrade", left them where they were.
+`backup.sh`, `backup.log`, `backups/`, `backup-signing.key` and `allowed_signers` are your own files in the clone. `git` does not track them, and moving the clone to another release, as in step 2 of "Upgrade", left them where they were.
 
 For `gpg`, write `gpg --batch --trust-model always --encrypt --recipient "$recipient"` in place of `age -r "$recipient"` in both lines, set `recipient` to the address of the key, and let the names end in `.gpg`. Import the public key as the user whose crontab runs the script.
 
@@ -817,7 +830,24 @@ That line was not part of the test. The other machine gets encrypted files and n
 
 ### Check a backup
 
-Check a file before you depend on it. Decrypting it to nowhere reads all of it. That needs the private key, so do it on your own computer with a copy of the file:
+Check the signature first, on your own computer, with `allowed_signers` from the database machine:
+
+```
+ssh-keygen -Y verify -f allowed_signers -I reticula-backup -n reticula-backup -s reticula-20261125-023000.dump.age.sig < reticula-20261125-023000.dump.age
+```
+
+Status 0 and `Good "reticula-backup" signature` say that the file is the one the database machine signed. Measured with OpenSSH 10.3 and with 9.2, the version of Debian 12:
+
+| The file | Status and message |
+|---|---|
+| as written | 0, `Good "reticula-backup" signature for reticula-backup` |
+| one byte changed | 255, `Signature verification failed: incorrect signature` |
+| cut short | 255, `Signature verification failed: incorrect signature` |
+| signed with another key | 255, `Could not verify signature.` |
+| signed for another purpose (`-n`) | 255, `Couldn't verify signature: namespace does not match` |
+| without its `.sig` file | 255, `Couldn't read signature file: No such file or directory` |
+
+Do not decrypt or restore a file whose signature does not check. Then check the file itself. Decrypting it to nowhere reads all of it. That needs the private key, so do it on your own computer with a copy of the file:
 
 ```
 age --decrypt -i reticula-backup-key.txt < reticula-20261125-023000.dump.age > /dev/null
@@ -841,7 +871,7 @@ Restore into an empty database. The steps below replace the data of an existing 
 
 The volume name in step 1 starts with the project name, which the compose file fixes to `reticula`. For a copy that was started under another project name, the volume is `<name>_reticula-db`, and every command below needs the same `-p <name>` or `COMPOSE_PROJECT_NAME`. Without it the commands act on the stack called `reticula`.
 
-1. Stop the stack and remove the database volume. This deletes the current data. If any of it may still be needed, take a plain dump of it first, while the stack runs, as under Back up, and keep it until the restore is checked.
+1. Check the signature of the dump as under [Check a backup](#check-a-backup), if it has one, and go on only with status 0. Stop the stack and remove the database volume. This deletes the current data. If any of it may still be needed, take a plain dump of it first, while the stack runs, as under Back up, and keep it until the restore is checked.
 
    ```
    (umask 077; docker compose exec -T db pg_dump -U reticula --format=custom reticula > reticula-before-restore.dump)
@@ -1042,7 +1072,8 @@ The following was measured up to 0.4.1, when the server downloaded a model at it
 | Search index (embeddings) | a table in the same database, rebuildable with `reindex` |
 | Embedding model | in the image, under `/opt/reticula/models`; up to 0.4.1 the volume `reticula_reticula-models` |
 | Settings and the two database passwords | `deploy/.env`, which git ignores. The server container gets only the password of `reticula` |
-| Backups written by `backup.sh` | `deploy/backups/`, encrypted. The key that opens them is not on this machine |
+| Backups written by `backup.sh` | `deploy/backups/`, encrypted and signed. The key that opens them is not on this machine |
+| The key that signs the backups | `deploy/backup-signing.key`; the file that checks the signatures, `allowed_signers`, also on your own computer |
 | The key file that encrypts the accounts' private keys | `deploy/secrets/reticula.key`, which git ignores. Its copy belongs elsewhere, not beside the backups |
 | The identity of the Tailscale node of `compose.tailscale.yaml` | Docker volume `reticula_reticula-tailscale` |
 | Shipped instruction texts | inside the installed package; copied into the database when migrations run |
