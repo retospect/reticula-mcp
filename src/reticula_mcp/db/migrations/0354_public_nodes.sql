@@ -14,18 +14,25 @@
 --   when that author is the public hub's author, live, in audience 'hub',
 --   and not superseded by a live note of that same author (the page shows
 --   only the owner's notes, so only the owner's correction takes one off;
---   another member's superseding note does not).
+--   another member's superseding note does not);
+-- - the owner's own private sub-hubs (audience not 'hub') filed by the owner
+--   under one of these hubs, live, as a row with private = true: the page
+--   says "private hub" for it and reads neither its title nor its address.
+--   The walk does not go into them: nothing under a private hub is returned.
 --
--- Not shown: notes by other members, private notes, deleted or superseded
--- notes, instructions, debug notes, handles and person IDs (the page reads
--- only title and address of these ids).
+-- Not shown: notes by other members, private notes (no placeholder),
+-- members' sub-hubs, deleted or superseded notes, instructions, debug notes,
+-- handles and person IDs (the page reads only title and address of the
+-- rows that are not private).
 --
--- Returns the tree: (node_id, parent_hub_id); parent_hub_id is NULL for a
--- public hub itself. A note filed in two shown hubs comes twice.
+-- Returns the tree: (node_id, parent_hub_id, private); parent_hub_id is NULL
+-- for a public hub itself. A note filed in two shown hubs comes twice.
 --
--- A new function: no table, column, index or row changes.
-CREATE OR REPLACE FUNCTION public_nodes()
-RETURNS TABLE (node_id bigint, parent_hub_id bigint)
+-- A new function: no table, column, index or row changes. (Dropped first: a
+-- development database may hold its first, two-column form.)
+DROP FUNCTION IF EXISTS public_nodes();
+CREATE FUNCTION public_nodes()
+RETURNS TABLE (node_id bigint, parent_hub_id bigint, private boolean)
 LANGUAGE sql STABLE AS $$
     WITH RECURSIVE roots AS (
         SELECT h.id, h.author AS owner
@@ -45,9 +52,9 @@ LANGUAGE sql STABLE AS $$
           AND m.author = c.author AND c.author = t.owner
           AND c.kind = 'hub' AND c.tombstoned_at IS NULL AND c.audience = 'hub'
     )
-    SELECT t.hub_id, t.parent FROM tree t
+    SELECT t.hub_id, t.parent, false FROM tree t
   UNION
-    SELECT n.id, t.hub_id
+    SELECT n.id, t.hub_id, false
     FROM tree t
     JOIN membership m ON m.hub_node_id = t.hub_id
     JOIN node n ON n.id = m.node_id
@@ -59,4 +66,11 @@ LANGUAGE sql STABLE AS $$
             SELECT 1 FROM supersedes s JOIN node w ON w.id = s.new_node_id
             WHERE s.old_node_id = n.id AND w.tombstoned_at IS NULL
               AND w.author = t.owner)
+  UNION
+    SELECT c.id, t.hub_id, true
+    FROM tree t
+    JOIN membership m ON m.hub_node_id = t.hub_id
+    JOIN node c ON c.id = m.node_id
+    WHERE NOT m.withdrawn AND m.author = c.author AND c.author = t.owner
+      AND c.kind = 'hub' AND c.tombstoned_at IS NULL AND c.audience <> 'hub'
 $$;

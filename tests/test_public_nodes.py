@@ -86,8 +86,11 @@ def test_public_nodes_show_only_the_owners_own_live_notes(
         assert before == after, f"a public grant changed what an account reads ({seed})"
 
         rows = conn.execute(
-            "SELECT node_id, parent_hub_id FROM public_nodes()"
+            "SELECT node_id, parent_hub_id, private FROM public_nodes()"
         ).fetchall()
+        private = {r["node_id"] for r in rows if r["private"]}
+        # nothing is returned under a private hub
+        assert not {r["parent_hub_id"] for r in rows} & private, seed
         roots = {r["node_id"] for r in rows if r["parent_hub_id"] is None}
         # each root: its author granted it read
         for root in roots:
@@ -108,7 +111,8 @@ def test_public_nodes_show_only_the_owners_own_live_notes(
             for r in conn.execute(
                 "SELECT n.id, n.author, n.kind, n.audience, n.tombstoned_at,"
                 " EXISTS (SELECT 1 FROM supersedes s JOIN node w ON w.id = s.new_node_id"
-                "   WHERE s.old_node_id = n.id AND w.tombstoned_at IS NULL) AS superseded"
+                "   WHERE s.old_node_id = n.id AND w.tombstoned_at IS NULL"
+                "   AND w.author = n.author) AS superseded"
                 " FROM node n WHERE n.id = ANY(%s)",
                 ([r["node_id"] for r in rows],),
             ).fetchall()
@@ -121,7 +125,13 @@ def test_public_nodes_show_only_the_owners_own_live_notes(
         )
         for r in rows:
             n = info[r["node_id"]]
-            assert n["tombstoned_at"] is None and n["audience"] == "hub", (seed, n)
+            assert n["tombstoned_at"] is None, (seed, n)
+            if r["private"]:
+                # the owner's own private sub-hub: a placeholder, never a root
+                assert n["kind"] == "hub" and n["audience"] != "hub", (seed, n)
+                assert r["parent_hub_id"] is not None, (seed, n)
+            else:
+                assert n["audience"] == "hub", (seed, n)
             assert n["kind"] in ("hub", "note", "paper"), (seed, n)
             if n["kind"] != "hub":
                 assert not n["superseded"], (seed, n)
@@ -131,8 +141,9 @@ def test_public_nodes_show_only_the_owners_own_live_notes(
                 # the filing is the author's own, live, audience hub
                 filed = conn.execute(
                     "SELECT 1 FROM membership m WHERE m.node_id = %s AND m.hub_node_id = %s"
-                    " AND NOT m.withdrawn AND m.audience = 'hub' AND m.author = %s",
-                    (n["id"], p, n["author"]),
+                    " AND NOT m.withdrawn AND m.author = %s"
+                    " AND (m.audience = 'hub' OR %s)",
+                    (n["id"], p, n["author"], r["private"]),
                 ).fetchone()
                 assert filed, (seed, n, "no own filing")
             owner = accounts.get(n["author"])
@@ -190,11 +201,30 @@ def test_the_public_hubs_are_those_of_a_python_walk(world: World, seed: int) -> 
                         seen.add(c.id)
                         todo.append(c.id)
             want |= seen
+        want_private = {
+            c.id
+            for edge in g.edges
+            if edge.hub in want
+            and (c := g.nodes.get(edge.node)) is not None
+            and c.kind == "hub"
+            and not edge.withdrawn
+            and edge.author == c.author
+            and c.author == g.nodes[edge.hub].author
+            and not c.tomb
+            and c.audience != "hub"
+        }
+        got_private = {
+            r["node_id"]
+            for r in world.conn.execute(
+                "SELECT node_id FROM public_nodes() WHERE private"
+            ).fetchall()
+        }
+        assert got_private == want_private, (seed, got_private, want_private)
         got = {
             r["node_id"]
             for r in world.conn.execute(
                 "SELECT p.node_id FROM public_nodes() p JOIN node n ON n.id = p.node_id"
-                " WHERE n.kind = 'hub'"
+                " WHERE n.kind = 'hub' AND NOT p.private"
             ).fetchall()
         }
         assert got == want, (seed, sorted(got - want), sorted(want - got))

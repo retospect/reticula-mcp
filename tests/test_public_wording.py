@@ -4,6 +4,7 @@ access list say "the public page". One test per place (RETICULA1)."""
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 
 import pytest
@@ -120,6 +121,43 @@ def test_share_access_list_says_the_public_page(
         ) in out
     assert "public" not in graph.share(conn, ana, hub=sub).split("the public page")[0]
     assert "the public page" not in graph.share(conn, bea, hub=hub)
+
+
+def test_an_owners_private_sub_hub_is_only_the_words_private_hub(
+    conn: Conn, make_account: Callable[..., Account]
+) -> None:
+    """Its title and short id appear nowhere in /hubs, and nothing filed under
+    it does; a member's sub-hub and private notes have no placeholder."""
+    ana, bea = make_account(handle="ana"), make_account(handle="bea")
+    hub = mk_hub(conn, ana, "Lab")
+    share(conn, ana, hub, bea, "add")
+    secret = mk_hub(conn, ana, "SECRETHUBTITLE", parent=hub)
+    graph.edit(conn, ana, ref=secret, private=True)
+    inner = mk_note(conn, ana, "x", hub=secret, title="INNERNOTETITLE")
+    deeper = mk_hub(conn, ana, "DEEPERHUBTITLE", parent=secret)
+    hers = mk_hub(conn, bea, "BEASHUBTITLE", parent=hub)
+    hidden = mk_note(conn, ana, "x", hub=hub, title="PRIVATENOTETITLE", private=True)
+    graph.share(conn, ana, hub=hub, person="public", mode="read")
+    body = hubs.body(conn)
+    assert body.count('<span class="private">private hub</span>') == 1
+    for word in (
+        "SECRETHUBTITLE",
+        "INNERNOTETITLE",
+        "DEEPERHUBTITLE",
+        "BEASHUBTITLE",
+        "PRIVATENOTETITLE",
+    ):
+        assert word not in body, word
+    for ref in (secret, inner, deeper, hers, hidden):
+        assert ref[-8:] not in body, ref
+    assert body.count("private hub") == 1
+    # it is under the public hub, as a leaf
+    assert re.search(r"<details><summary>Lab .*?<li><span class=\"private\">", body)
+    # the access line of the private sub-hub does not claim the public page
+    line = next(
+        ln for ln in get(conn, ana, ref=secret).splitlines() if ln.startswith("access:")
+    )
+    assert "public page" not in line
 
 
 def test_only_the_owners_own_correction_takes_a_note_off(

@@ -20,19 +20,24 @@ def on_page(conn: Conn, hub_id: int) -> bool:
     """Whether the hub is on the public page (itself public, or an owner's
     sub-hub of a public hub)."""
     row = conn.execute(
-        "SELECT EXISTS (SELECT 1 FROM public_nodes() p WHERE p.node_id = %s) AS on",
+        "SELECT EXISTS (SELECT 1 FROM public_nodes() p"
+        " WHERE p.node_id = %s AND NOT p.private) AS on",
         (hub_id,),
     ).fetchone()
     return bool(row and row["on"])
 
 
-def opened(conn: Conn, hub_id: int) -> tuple[list[tuple[int, str | None]], int]:
+def opened(
+    conn: Conn, hub_id: int
+) -> tuple[list[tuple[int, str | None]], int, int]:
     """What a public hub puts on the page below it: its sub-hubs (id, title),
-    and how many notes, counted once each."""
+    how many notes (counted once each), and how many private sub-hubs show
+    as "private hub"."""
     rows = conn.execute(
-        "SELECT p.node_id, p.parent_hub_id, n.kind, n.title"
+        "SELECT p.node_id, p.parent_hub_id, p.private, n.kind, n.title"
         " FROM public_nodes() p JOIN node n ON n.id = p.node_id",
     ).fetchall()
+    private: set[int] = set()
     children: dict[int, list[dict]] = {}
     for r in rows:
         if r["parent_hub_id"] is not None:
@@ -44,11 +49,13 @@ def opened(conn: Conn, hub_id: int) -> tuple[list[tuple[int, str | None]], int]:
     while todo:
         at = todo.pop(0)
         for r in children.get(at, []):
-            if r["kind"] == "hub":
+            if r["private"]:
+                private.add(r["node_id"])
+            elif r["kind"] == "hub":
                 if r["node_id"] not in seen:
                     seen.add(r["node_id"])
                     subs.append((r["node_id"], r["title"]))
                     todo.append(r["node_id"])
             else:
                 notes.add(r["node_id"])
-    return subs, len(notes)
+    return subs, len(notes), len(private)
