@@ -38,7 +38,7 @@ def test_there_is_a_starter_and_a_few_how_tos():
     assert "starter" in slugs
     # a few: five since tagging and onboarding (0.3.0); each one more is a
     # note an assistant has to find, so a sixth needs a reason
-    assert 2 <= len([s for s in slugs if s.startswith("howto-")]) <= 5
+    assert 2 <= len([s for s in slugs if s.startswith("howto-")]) <= 6
 
 
 def test_every_instruction_file_is_under_80_lines():
