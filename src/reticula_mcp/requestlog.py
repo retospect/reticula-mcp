@@ -79,6 +79,16 @@ def one_line(text: str, limit: int) -> str:
     return flat if len(flat) <= limit else flat[: limit - 3] + "..."
 
 
+def path_field(path: str) -> str:
+    """The request path as one field of the line. A path is percent-decoded,
+    so it can hold spaces and quotes; such a path is written JSON-quoted, like
+    ``agent=``, and every other path as it is."""
+    flat = one_line(path, 120) or "-"
+    if any(c in flat for c in ' "\\'):
+        return json.dumps(flat)
+    return flat
+
+
 def reason_of(status: int, headers: Headers, body: bytes) -> str:
     """Why the server refused, from its own answer; ``""`` when it does not say."""
     said = ""
@@ -181,7 +191,7 @@ class RequestLog:
         request = Request(scope)
         parts = [
             scope.get("method", "-"),
-            one_line(path, 120) or "-",
+            path_field(path),
             str(status),
             f"{(time.perf_counter() - started) * 1000:.0f}ms",
             f"from={client_address(request, self.settings)}",

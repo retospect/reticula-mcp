@@ -11,10 +11,19 @@
 # separate development stack beside this one, use compose.dev.yaml.
 name: reticula
 
+# Docker's log of each container is kept to 5 files of 10 MB, so a flood of
+# requests cannot fill the disk that the database volume shares.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   db:
     image: pgvector/pgvector:pg17
     restart: unless-stopped
+    logging: *logging
     environment:
       POSTGRES_USER: reticula
       POSTGRES_PASSWORD: ${RETICULA_DB_PASSWORD:?set RETICULA_DB_PASSWORD in .env}
@@ -33,6 +42,12 @@ services:
       args:
         RETICULA_VERSION: ${RETICULA_VERSION:?set RETICULA_VERSION in .env}
     restart: unless-stopped
+    logging: *logging
+    # The server with the default model uses about 0.6 GB; a `reindex` run in
+    # this container loads the model a second time. A larger model needs more:
+    # set RETICULA_APP_MEMORY in .env (docs/operating.md, Choose a model).
+    mem_limit: ${RETICULA_APP_MEMORY:-2g}
+    pids_limit: 512
     depends_on:
       db:
         condition: service_healthy

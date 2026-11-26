@@ -38,7 +38,7 @@ dependencies = [
     "mcp>=1.30,<2",
     "psycopg[binary,pool]>=3.3.6",
     "pgvector>=0.4",
-    "cryptography>=45",
+    "cryptography>=46.0.7",
     "argon2-cffi>=23.1",
     "uvicorn>=0.30",
     # The lettered groups of a big hub (search/groups.py). Already in every

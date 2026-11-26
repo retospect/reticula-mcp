@@ -19,10 +19,18 @@
 # not published on any host port.
 name: reticula-dev
 
+# The same log limits as compose.yaml: 5 files of 10 MB per container.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   db:
     image: pgvector/pgvector:pg17
     restart: unless-stopped
+    logging: *logging
     environment:
       POSTGRES_USER: reticula
       POSTGRES_PASSWORD: reticula-dev
@@ -43,6 +51,7 @@ services:
       target: source
     image: reticula-dev-app
     restart: unless-stopped
+    logging: *logging
     depends_on:
       db:
         condition: service_healthy
@@ -79,6 +88,7 @@ services:
     profiles: [proxy]
     image: caddy:2-alpine
     restart: unless-stopped
+    logging: *logging
     depends_on:
       app:
         condition: service_healthy

@@ -359,7 +359,7 @@ app-1  | 2026-11-25T13:13:48Z POST /mcp 200 2ms from=172.31.89.1 agent="ExampleC
 app-1  | 2026-11-25T13:13:49Z POST /token 400 3ms from=172.31.89.1 agent="ExampleConnector/1.0" reason="invalid_grant: credential is invalid, expired or revoked"
 ```
 
-A line has the time in UTC, the method, the path without its query string, the status and the time until the answer began. Then:
+A line has the time in UTC, the method, the path without its query string, the status and the time until the answer began. A path that holds a space, a quote or a backslash after its percent signs are decoded is written in double quotes, as `agent=` is: `GET "/no such page" 404`. Then:
 
 | Field | What it is |
 |---|---|
@@ -545,6 +545,13 @@ This upgrade was rehearsed the same way, on a copy of a running 0.3.0 instance: 
 - Without a new sign-in, the minted token and the access token of a connection answered `start`. The refresh grant with the refresh token from 0.3.0 returned a new pair, and its access token answered `start`.
 - `/`, `/hubs`, `/connect`, `/results` and `/slides` answered with status 200 and a `Content-Security-Policy` header. `/hubs` said `No hub is public on this server yet`.
 - After `share(hub=..., person="public", mode="read")` on a hub of one of those accounts, `/hubs` listed that hub by its title and short id, and nothing else of it: no address and no text. `/hubs` keeps a page for 60 seconds, so the change showed within a minute. After `mode="none"` the list was empty again.
+
+0.4.1 adds no migration. Its `compose.yaml` sets limits that 0.4.0 does not have, and moving the clone in step 2 brings them in:
+
+- Docker keeps the log of each container to 5 files of 10 MB, so a flood of requests cannot fill the disk that the database volume shares. `compose.tailscale.yaml` sets the same for its container.
+- The server container may use at most 2 GB of memory and 512 processes. `RETICULA_APP_MEMORY` in `.env` sets another memory limit, for example `RETICULA_APP_MEMORY=4g`.
+
+Measured on a copy of a running instance with 80 notes and the default model: a start with an empty model volume stayed under 0.7 GB and 52 processes. `docker compose exec app reticula-mcp reindex --drop` loads the model a second time in the same container and took the container to 1.3 GB, file cache included, and 78 processes. With `RETICULA_APP_MEMORY=1g` the start and that reindex still ran. With `512m` the server started, but the reindex ended after 1 second with status 137 and took the server container down with it, and Docker started it again. Give a larger model more: [Choose a model](#choose-a-model) lists the memory each model needs once loaded, and a reindex needs that twice.
 
 Migrations only move forward and each file runs in its own transaction. A migration file that has already been applied is never edited; changes arrive as new files. If the server reports that an applied file has changed, you are running mismatched code and database: do not continue.
 
@@ -888,6 +895,8 @@ A search compares the query with every vector the account may read, as long as t
 | `mixedbread-ai/mxbai-embed-large-v1` | 1024 | 1.34 GB | 1.8 GB | about 6 min | 2 s | 18 of 23 | none |
 
 Measured on a development machine with 2 threads, as the server runs the model, while other work ran on it: take the times as an order of size. Memory is that of a process with only the model loaded. A put embeds its note after it is saved and before it answers, so the time in the sixth column is added to the answer of `put` and `edit` for a note of 4,000 characters or more; nothing is locked meanwhile. The last two columns are from the relevance set of the tests, with 6,000 notes of the same subjects added, at each model's own cut: the paraphrases whose note is shown, and the nonsense queries that get a note anyway. mxbai finds more of the hard cases (4 of 5 where bge-base finds 2), at three times the cost.
+
+The server container has a memory limit of 2 GB from 0.4.1 on, set with `RETICULA_APP_MEMORY` in `.env`. That fits bge-small and bge-base, also during a `reindex` in the container, which loads the model a second time. For mxbai set at least twice its memory from the table, for example `RETICULA_APP_MEMORY=4g`; that value was not measured.
 
 Every model reads the first 512 tokens of a note, about 2,300 characters of English. The rest of a longer note is found by its words but not by its meaning.
 

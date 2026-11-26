@@ -18,6 +18,12 @@ services:
   tailscale:
     image: tailscale/tailscale:v1.104.7
     restart: unless-stopped
+    # as for the services of compose.yaml: 5 files of 10 MB
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     environment:
       # The name of the node in the tailnet, and the first label of its public
       # name. Machine names of a tailnet with HTTPS certificates are public.
