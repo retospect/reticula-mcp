@@ -25,6 +25,7 @@ NAV = (
     ("/slides", "Slides"),
     ("/hubs", "Public hubs"),
     ("/connect", "Connect"),
+    ("/results", "How well it works"),
     ("/vision", "Vision"),
     ("/privacy", "Privacy"),
     (REPO, "Source on GitHub"),

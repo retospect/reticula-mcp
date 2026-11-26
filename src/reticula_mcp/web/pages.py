@@ -18,7 +18,7 @@ from starlette.routing import Route
 
 from reticula_mcp.config import Settings
 from reticula_mcp.db.pool import Database
-from reticula_mcp.web import hubs, slides, texts
+from reticula_mcp.web import hubs, results, slides, texts
 from reticula_mcp.web.html import HEADERS, page, respond
 
 HUBS_SECONDS = 60
@@ -78,6 +78,7 @@ def routes(settings: Settings, db: Database) -> list[Route]:
     return [
         fixed("Reticula", texts.FRONT, "/"),
         fixed("Slides · Reticula", slides.body(), "/slides"),
+        fixed("How well it works · Reticula", results.body(), "/results"),
         fixed("Vision · Reticula", texts.VISION, "/vision"),
         fixed("Privacy · Reticula", texts.PRIVACY, "/privacy"),
         Route("/hubs", endpoint=hub_page, methods=["GET", "HEAD"]),

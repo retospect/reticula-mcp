@@ -31,6 +31,8 @@ with other people on the same server, to read or to add to.</p>
 <li><a href="/connect">Connect an assistant</a>: sign up and add the connector.</li>
 <li><a href="/slides">Slides</a>: four pages on what it is and how it works.</li>
 <li><a href="/hubs">Public hubs</a> on this server.</li>
+<li><a href="/results">How well it works</a>: a benchmark against pasting
+all notes and against no memory.</li>
 <li><a href="/vision">Vision</a>: what it is for, and what is designed but not built.</li>
 <li><a href="/privacy">Privacy</a>: what the server stores and who can read it.</li>
 <li><a href="{REPO}">Source on GitHub</a>, licensed AGPL-3.0-or-later; you
