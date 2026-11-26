@@ -49,6 +49,14 @@ def world(template_db: str) -> Iterator[World]:
     yield from _world_in_own_database(template_db)
 
 
+def reader(conn: Conn, viewer: int) -> SimpleNamespace:
+    """The viewer as _withdrawn reads it: account id and person id."""
+    row = conn.execute(
+        "SELECT person_id FROM account WHERE id = %s", (viewer,)
+    ).fetchone()
+    return SimpleNamespace(id=viewer, person_id=row["person_id"] if row else None)
+
+
 def old_withdrawn(conn: Conn, viewer: int, ref: str) -> dict[str, Any] | None:
     person = conn.execute(
         "SELECT person_id FROM account WHERE id = %s", (viewer,)
@@ -91,7 +99,7 @@ def test_withdrawn_tells_whom_the_rule_of_before_told(world: World, seed: int) -
         refs = [r["address"] for r in gone]
         refs += [r["address"] for r in live]  # a live node is never "withdrawn"
         for viewer in world.viewers:
-            who = SimpleNamespace(id=viewer)
+            who = reader(conn, viewer)
             for ref in refs:
                 want = old_withdrawn(conn, viewer, ref)
                 got = read._withdrawn(conn, who, ref)
@@ -113,7 +121,7 @@ def test_the_comparison_sees_both_answers(world: World) -> None:
             ]
             for viewer in world.viewers:
                 for ref in gone:
-                    if read._withdrawn(conn, SimpleNamespace(id=viewer), ref):
+                    if read._withdrawn(conn, reader(conn, viewer), ref):
                         told += 1
                     else:
                         refused += 1

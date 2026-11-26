@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `search(query="", since=...)` and `get` of a deleted address tell of a note deleted or taken out of a hub only when it happened while you could read that hub: a share given afterwards does not tell what was taken away before. `get(ref=<note>, depth=2)` counts only notes you may read in its "and N more" line.
+
 ## 0.4.1 (2026-11-26)
 
 - A write that fails now counts against the write limit (`RETICULA_WRITE_RATE`, 600 an hour by default); it did not before. A NUL character or a lone surrogate in any parameter is refused with `BadInput` for every tool before the database is asked; the query of `search` still removes them itself.
