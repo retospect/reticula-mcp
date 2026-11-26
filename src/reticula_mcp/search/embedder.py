@@ -69,15 +69,18 @@ _BGE_QUERY = "Represent this sentence for searching relevant passages: "
 # bge-small's, and the log says so
 UNMEASURED_MAX_DISTANCE = 0.35
 KNOWN_MODELS: dict[str, ModelSettings] = {
-    # similarity 0.65: nonsense reaches 0.63 on the relevance set (0.68
-    # among 6,000 notes); 4 of 18 paraphrases are cut there (see the class)
+    # Counts at the cut itself, among the relevance set and 6,000 notes:
+    # paraphrases shown of 23, the five of debug note baada5c5 shown, and
+    # nonsense queries (of 6) that get a note.
+    # similarity 0.65: 15 of 23, 1 of 5; nonsense reaches 0.63 on the
+    # relevance set but 0.68 among 6,000 notes, where 3 of 6 get a note
     "BAAI/bge-small-en-v1.5": ModelSettings(384, 0.35),
-    # with its query instruction, similarity 0.50: nonsense reaches 0.451 on
-    # the relevance set and 0.491 among 6,000 notes; 18 of 23 paraphrases
-    # and 3 of the 5 of debug note baada5c5 are above it there
+    # with its query instruction, similarity 0.50: 17 of 23, 2 of 5 (the two
+    # lighthouse queries and "dromedary" stay below it); nonsense reaches
+    # 0.451 on the relevance set and 0.491 among 6,000 notes: none
     "BAAI/bge-base-en-v1.5": ModelSettings(768, 0.50, _BGE_QUERY),
-    # plain queries, similarity 0.59: nonsense reaches 0.582 among 6,000
-    # notes; 18 of 23 paraphrases and 4 of the 5 of baada5c5 are above it
+    # plain queries, similarity 0.59: 18 of 23, 4 of 5 ("glowing tall
+    # coastal house" stays below it); nonsense reaches 0.582: none
     "mixedbread-ai/mxbai-embed-large-v1": ModelSettings(1024, 0.41),
     # its size is known; its cut was not measured
     "sentence-transformers/all-MiniLM-L6-v2": ModelSettings(
