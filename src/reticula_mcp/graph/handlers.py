@@ -20,7 +20,7 @@ from reticula_mcp.errors import (
 from reticula_mcp.graph import access, api
 from reticula_mcp.permissions import can_read, readable_nodes_sql
 from reticula_mcp.resolve import resolve_person, resolve_ref
-from reticula_mcp.search import render
+from reticula_mcp.search import index, render
 
 Row = dict[str, Any]
 
@@ -133,6 +133,21 @@ def _hubs_of_superseded(conn: Conn, viewer: Account, node: Row) -> list[Row]:
     return [r for r in rows if access.can_add_person(conn, viewer.person_id, r["id"])]
 
 
+def _too_long(row: Row) -> str:
+    """A last reply line when the note is longer than search by meaning reads
+    (title line included, as search.index.node_text joins them); else empty."""
+    title, text = row.get("title"), row.get("text") or ""
+    size = len(f"{title}\n{text}") if title else len(text)
+    reads = index.model_reads_chars()
+    if size <= reads:
+        return ""
+    return (
+        f"\nthis {row['kind']} is {size:,} characters; search by meaning reads only"
+        f" about the first {reads:,}. Split it into notes of one idea each and"
+        " link them (derived-from or related-to)."
+    )
+
+
 def _paper_next(node: Row, ext_id: str | None) -> str:
     """The hint for writing notes about a paper, with its real identifier."""
     ident = node.get("ext_key") or ext_id or "<the same id>"
@@ -229,7 +244,7 @@ def put(
             )
     if kind == "paper":
         nxt = f"next: {_paper_next(node, ext_id)}\n{nxt}"
-    return f"saved {node['kind']} {_name(node)}{where}\n{nxt}"
+    return f"saved {node['kind']} {_name(node)}{where}\n{nxt}{_too_long(node)}"
 
 
 def edit(
@@ -272,7 +287,7 @@ def edit(
     return (
         f"updated {node['kind']} {_name(updated)}"
         " (older versions stay readable by address)"
-    )
+    ) + _too_long(updated)
 
 
 def link(
