@@ -232,6 +232,10 @@ def purge_stale(conn: Conn) -> None:
     """
     grace = timedelta(days=3)
     conn.execute("DELETE FROM oauth_pending WHERE expires_at < now()")
+    conn.execute(
+        "DELETE FROM web_session WHERE expires_at <= now()"
+        " OR last_seen_at + make_interval(secs => idle_seconds) <= now()"
+    )
     conn.execute("DELETE FROM oauth_code WHERE expires_at < now() - %s", (grace,))
     conn.execute(
         "DELETE FROM oauth_token WHERE expires_at IS NOT NULL"

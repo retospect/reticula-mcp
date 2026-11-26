@@ -29,11 +29,12 @@ from starlette.routing import Route
 from reticula_mcp import account_admin, accounts, refusal
 from reticula_mcp import settings as account_settings
 from reticula_mcp.accounts import Account
-from reticula_mcp.auth import config, grants, page, signin, websession
+from reticula_mcp.auth import config, grants, page, signin, throttle, websession
 from reticula_mcp.auth.netaddr import caller_bucket
 from reticula_mcp.auth.web import read_limited
 from reticula_mcp.config import Settings
 from reticula_mcp.db.pool import Database
+from reticula_mcp.errors import ReticulaError
 from reticula_mcp.web.html import e
 from reticula_mcp.web.html import page as frame
 
@@ -68,17 +69,40 @@ def _form(raw: bytes) -> dict[str, str] | None:
     return signin._form(raw)  # the size, field-count and NUL rules of /signin
 
 
+#: One export per account in this time, in seconds.
+EXPORT_EVERY = 600
+EXPORT_KIND = "export"
+HSTS = "max-age=31536000"
+
+
+def _origin_of(url: str) -> str | None:
+    """scheme://host[:port] of ``url``, lowercase, the default port left out:
+    how two origins are compared."""
+    try:
+        parts = urlsplit(url.strip())
+        port = parts.port
+    except ValueError:
+        return None
+    scheme = parts.scheme.lower()
+    host = (parts.hostname or "").lower()
+    if not scheme or not host:
+        return None
+    if ":" in host:
+        host = f"[{host}]"
+    default = {"http": 80, "https": 443}.get(scheme)
+    return f"{scheme}://{host}" + (f":{port}" if port and port != default else "")
+
+
 def routes(settings: Settings, db: Database) -> list[Route]:
     secure = settings.base_url.startswith("https://")
     cookie_name = "__Host-reticula_session" if secure else "reticula_session"
-    origin = "{0.scheme}://{0.netloc}".format(urlsplit(settings.base_url))
+    origin = _origin_of(settings.base_url)
 
     def same_origin(request: Request) -> bool:
         sent = request.headers.get("origin")
-        if sent is not None:
-            return sent == origin
-        referer = request.headers.get("referer", "")
-        return referer == origin or referer.startswith(origin + "/")
+        if sent is None:
+            sent = request.headers.get("referer")
+        return sent is not None and _origin_of(sent) == origin
 
     def set_session(response: Response, token: str, keep: bool) -> None:
         response.set_cookie(
@@ -216,7 +240,10 @@ def routes(settings: Settings, db: Database) -> list[Route]:
             not same_origin(request)
             or form is None
             or not nonce
-            or not secrets.compare_digest(form.get("form", ""), nonce)
+            or not secrets.compare_digest(
+                form.get("form", "").encode("utf-8", "replace"),
+                nonce.encode("utf-8", "replace"),
+            )
         ):
             refusal.note("account: signin_form")
             return _respond(
@@ -234,6 +261,7 @@ def routes(settings: Settings, db: Database) -> list[Route]:
         agent = "".join(
             c for c in request.headers.get("user-agent", "") if c.isprintable()
         )
+        presented = request.cookies.get(cookie_name)
 
         def run() -> str | None:
             with signin.hash_slots, db.connection() as conn:
@@ -246,6 +274,12 @@ def routes(settings: Settings, db: Database) -> list[Route]:
                     if known is not None:
                         record(known.id, "web sign-in failed", "Failed")
                     return None if found == "bad_credentials" else found
+                # the session this browser presented, if any, ends here
+                if presented:
+                    conn.execute(
+                        "DELETE FROM web_session WHERE id_hash = %s",
+                        (websession.digest(presented),),
+                    )
                 token = websession.create(
                     conn, found.id, keep=keep, agent=agent, bucket=bucket
                 )
@@ -580,16 +614,49 @@ def routes(settings: Settings, db: Database) -> list[Route]:
                 429 if problem == "throttled" else 401,
             )
 
-        def run() -> bytes:
-            with db.connection() as conn:
-                data = account_admin.export_zip(conn, account)
-                conn.commit()
+        def run() -> bytes | Response:
+            with account_admin.export_slot(account.id):
+                with db.connection() as conn:
+                    allowed = throttle.acquire(
+                        conn, EXPORT_KIND, str(account.id), 1, EXPORT_EVERY
+                    )
+                    conn.commit()
+                    if not allowed:
+                        return _respond(
+                            "Export",
+                            "<p>One export every 10 minutes: try again later."
+                            ' <a href="/account">Back</a>.</p>',
+                            429,
+                        )
+                    rows = account_admin.export_rows(conn, account)
+                    conn.commit()
+                # the connection is back in the pool while the zip is built
+                with account_admin.build_zip(account, rows) as spooled:
+                    data = spooled.read()
             record(account.id, "export")
             return data
 
-        data = await anyio.to_thread.run_sync(run)
+        try:
+            result = await anyio.to_thread.run_sync(run)
+        except ReticulaError as exc:
+            if exc.code == account_admin.TOO_LARGE:
+                return _respond(
+                    "Export",
+                    f"<p>{e(exc.message)}: too large for a download here."
+                    f" {e(exc.hint or '')}.</p>",
+                    413,
+                )
+            if exc.code == "Conflict":
+                return _respond(
+                    "Export",
+                    "<p>An export of this account is running already.</p>",
+                    409,
+                )
+            raise
+        if isinstance(result, Response):
+            return result
         return Response(
-            data,
+            result,
             media_type="application/zip",
             headers={
                 **HEADERS,
@@ -650,7 +717,18 @@ def routes(settings: Settings, db: Database) -> list[Route]:
             with db.connection() as conn, conn.transaction():
                 return account_admin.delete_everything(conn, account)
 
-        counts = await anyio.to_thread.run_sync(run)
+        try:
+            counts = await anyio.to_thread.run_sync(run)
+        except ReticulaError as exc:
+            # the transaction rolled back: every step or none
+            refusal.note(f"account: delete_{exc.code}")
+            return _respond(
+                "Delete",
+                "<h1>Nothing was deleted</h1><p>One step of the deletion failed"
+                f" ({e(exc.message)}), so none of it was done. Try again; if it"
+                " fails again, ask the operator of this server.</p>",
+                409,
+            )
         response = _respond(
             "Deleted",
             f"<h1>The account is deleted</h1><p>{counts['notes']} notes and"
@@ -659,7 +737,20 @@ def routes(settings: Settings, db: Database) -> list[Route]:
         clear_session(response)
         return response
 
-    return [
+    def hsts(
+        endpoint: Callable[[Request], Awaitable[Response]],
+    ) -> Callable[[Request], Awaitable[Response]]:
+        if not secure:
+            return endpoint
+
+        async def wrapped(request: Request) -> Response:
+            response = await endpoint(request)
+            response.headers["Strict-Transport-Security"] = HSTS
+            return response
+
+        return wrapped
+
+    found_routes = [
         Route("/account", endpoint=account_get, methods=["GET", "HEAD"]),
         Route("/account/signin", endpoint=signin_get, methods=["GET", "HEAD"]),
         Route("/account/signin", endpoint=signin_post, methods=["POST"]),
@@ -685,17 +776,19 @@ def routes(settings: Settings, db: Database) -> list[Route]:
         Route("/account/delete", endpoint=delete_get, methods=["GET", "HEAD"]),
         Route("/account/delete", endpoint=action(do_delete), methods=["POST"]),
     ]
+    return [
+        Route(r.path, endpoint=hsts(r.endpoint), methods=list(r.methods or ()))
+        for r in found_routes
+    ]
 
 
 def record(account_id: int, event: str, outcome: str = "ok") -> None:
     """An event of these pages for RETICULA3's activity log
     (reticula_mcp.activity.record: queued, never blocks or raises); nothing
     until that module exists."""
-    try:
-        from reticula_mcp import activity  # type: ignore[attr-defined]
-    except ImportError:
-        return
-    activity.record(account_id, event, outcome=outcome)
+    activity = account_admin._activity()
+    if activity is not None:
+        activity.record(account_id, event, outcome=outcome)
 
 
 def activity_lines(conn: Any, account: Account) -> list[str]:
@@ -703,8 +796,7 @@ def activity_lines(conn: Any, account: Account) -> list[str]:
     (the page escapes them). Empty, and the section left out, until a module
     ``reticula_mcp.activity`` with ``lines(conn, account_id) -> list[str]``
     exists."""
-    try:
-        from reticula_mcp import activity  # type: ignore[attr-defined]
-    except ImportError:
+    activity = account_admin._activity()
+    if activity is None:
         return []
     return list(activity.lines(conn, account.id))

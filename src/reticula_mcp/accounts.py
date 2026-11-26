@@ -23,7 +23,7 @@ from argon2.exceptions import InvalidHashError, VerificationError
 from reticula_mcp import format as fmt
 from reticula_mcp import keystore, records
 from reticula_mcp.db.pool import Conn
-from reticula_mcp.errors import BAD_INPUT, CONFLICT, NOT_FOUND, ReticulaError
+from reticula_mcp.errors import BAD_INPUT, CONFLICT, FORBIDDEN, NOT_FOUND, ReticulaError
 
 SYSTEM_HANDLE = "reticula"
 SYSTEM_EMAIL = "system@reticula.invalid"
@@ -179,6 +179,19 @@ def set_password(conn: Conn, account: Account, password: str) -> None:
         "UPDATE account SET password_hash = %s WHERE id = %s",
         (hash_password(password), account.id),
     )
+
+
+def lock_for_write(conn: Conn, account: Account) -> None:
+    """The first step of every write: a share lock on the account row, held to
+    the end of the write's transaction, and its status checked under it.
+    Deleting an account takes the row FOR UPDATE, so a write that started
+    before waits for nothing and is deleted with the rest, and a write after
+    it finds the account disabled."""
+    row = conn.execute(
+        "SELECT status FROM account WHERE id = %s FOR SHARE", (account.id,)
+    ).fetchone()
+    if row is None or row["status"] not in ("active", "provisional"):
+        raise ReticulaError(FORBIDDEN, "account is not available")
 
 
 def set_status(conn: Conn, account: Account, status: str) -> None:

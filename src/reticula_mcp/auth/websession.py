@@ -26,6 +26,8 @@ IDLE = timedelta(minutes=30)
 MAXIMUM = timedelta(hours=12)
 KEEP = timedelta(days=30)
 REAUTH_WINDOW = timedelta(minutes=10)
+#: Sessions one account may have; the oldest end first.
+MAX_PER_ACCOUNT = 20
 TOKEN_BYTES = 32
 _CSRF_LABEL = b"reticula account form"
 
@@ -51,7 +53,10 @@ def csrf_for(token: str) -> str:
 
 
 def csrf_ok(token: str, form_value: str) -> bool:
-    return bool(form_value) and hmac.compare_digest(csrf_for(token), form_value)
+    # as bytes: compare_digest refuses a str with non-ASCII characters
+    return bool(form_value) and hmac.compare_digest(
+        csrf_for(token).encode(), form_value.encode("utf-8", "replace")
+    )
 
 
 def create(
@@ -63,9 +68,9 @@ def create(
     lifetime = KEEP if keep else MAXIMUM
     idle = KEEP if keep else IDLE
     conn.execute(
-        "INSERT INTO web_session (id_hash, account_id, expires_at, idle_seconds,"
-        " reauth_at, keep, agent, bucket)"
-        " VALUES (%s, %s, now() + %s, %s, now(), %s, %s, %s)",
+        "INSERT INTO web_session (id_hash, account_id, created_at, expires_at,"
+        " idle_seconds, reauth_at, keep, agent, bucket)"
+        " VALUES (%s, %s, clock_timestamp(), now() + %s, %s, now(), %s, %s, %s)",
         (
             digest(token),
             account_id,
@@ -75,6 +80,13 @@ def create(
             agent[:120],
             bucket[:64],
         ),
+    )
+    # at most MAX_PER_ACCOUNT: the oldest beyond that end
+    conn.execute(
+        "DELETE FROM web_session WHERE account_id = %s AND id_hash IN ("
+        " SELECT id_hash FROM web_session WHERE account_id = %s"
+        " ORDER BY created_at DESC, id_hash OFFSET %s)",
+        (account_id, account_id, MAX_PER_ACCOUNT),
     )
     return token
 
@@ -130,10 +142,19 @@ def end_all(conn: Conn, account_id: int) -> int:
     ).rowcount
 
 
+def purge(conn: Conn) -> None:
+    """Housekeeping: sessions past their end or idle too long."""
+    conn.execute(
+        "DELETE FROM web_session WHERE expires_at <= now()"
+        " OR last_seen_at + make_interval(secs => idle_seconds) <= now()"
+    )
+
+
 def count(conn: Conn, account_id: int) -> int:
     row = conn.execute(
         "SELECT count(*) AS n FROM web_session WHERE account_id = %s"
-        " AND expires_at > now()",
+        " AND expires_at > now()"
+        " AND last_seen_at + make_interval(secs => idle_seconds) > now()",
         (account_id,),
     ).fetchone()
     return int(row["n"]) if row else 0

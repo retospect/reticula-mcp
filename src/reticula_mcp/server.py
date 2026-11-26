@@ -30,7 +30,7 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from reticula_mcp import __version__, connection, keystore, permissions
+from reticula_mcp import __version__, accounts, connection, keystore, permissions
 from reticula_mcp.auth import account_web, build_auth, throttle
 from reticula_mcp.config import Settings, parse_rate
 from reticula_mcp.content import handlers as content_handlers
@@ -225,6 +225,10 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
                     # words after ids, when this connection has them on
                     with handles.during(conn, viewer):
                         if write:
+                            # under a share lock on the account row: a delete
+                            # of the account waits for this write, or this
+                            # write finds the account gone (accounts.py)
+                            accounts.lock_for_write(conn, viewer)
                             return handler(conn, viewer, **params)
                         # A tool that only reads asks once who reads which
                         # hubs. A tool that writes never does: see
