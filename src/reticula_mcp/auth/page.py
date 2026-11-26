@@ -75,6 +75,7 @@ MESSAGES = {
     "signup_rate": "Too many accounts were created from your network. Try again later.",
     "expired": "This page has expired. Reload it and try again.",
     "generic": "Something went wrong. Try again.",
+    "common_password": "That password is one of the most common ones. Choose another.",
 }
 
 

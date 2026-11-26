@@ -106,10 +106,12 @@ def _time_on_other_lines() -> None:
 def _serve(settings: Settings, auto_migrate: bool) -> int:
     import uvicorn
 
+    from reticula_mcp.auth import refuse_unset_proxy_trust
     from reticula_mcp.db import connect
     from reticula_mcp.db.migrate import pending
     from reticula_mcp.server import build_app
 
+    refuse_unset_proxy_trust(settings)  # before anything is migrated or listened on
     if auto_migrate:
         _migrate(settings)
     with connect(settings.require_database_url()) as conn:
@@ -143,16 +145,30 @@ def _serve(settings: Settings, auto_migrate: bool) -> int:
     return 0
 
 
-def _token(settings: Settings, email: str, label: str, ttl_days: int | None) -> int:
+#: Days an operator token lasts unless --ttl-days or --no-expiry says otherwise.
+TOKEN_DAYS = 90
+
+
+def _token(
+    settings: Settings,
+    email: str,
+    label: str,
+    ttl_days: int | None,
+    no_expiry: bool = False,
+) -> int:
     from reticula_mcp import accounts
     from reticula_mcp.db import connect
 
+    if no_expiry and ttl_days is not None:
+        raise ReticulaError(BAD_INPUT, "give --ttl-days or --no-expiry, not both")
     if ttl_days is not None and ttl_days <= 0:
         raise ReticulaError(
             BAD_INPUT,
             "--ttl-days must be at least 1",
-            hint="leave it out for a token that does not expire",
+            hint="--no-expiry for a token that does not expire",
         )
+    if ttl_days is None and not no_expiry:
+        ttl_days = TOKEN_DAYS
     with connect(settings.require_database_url()) as conn:
         account = accounts.get_account_by_email(conn, email)
         if account is None:
@@ -184,6 +200,56 @@ def _account_create(
     return 0
 
 
+def _account_disable(settings: Settings, email: str) -> int:
+    from reticula_mcp import accounts
+    from reticula_mcp.auth import grants
+    from reticula_mcp.db import connect
+
+    with connect(settings.require_database_url()) as conn:
+        account = accounts.get_account_by_email(conn, email)
+        if account is None:
+            raise ReticulaError("NotFound", f"no account with e-mail {email!r}")
+        if account.status == "system":
+            raise ReticulaError(BAD_INPUT, "the instance's own account stays enabled")
+        accounts.set_status(conn, account, "disabled")
+        n_grants, n_tokens = grants.revoke_everything(conn, account.id)
+        conn.commit()
+    print(
+        f"disabled @{account.handle}; revoked {n_grants} connections and"
+        f" {n_tokens} tokens"
+    )
+    return 0
+
+
+def _read_new_password() -> str:
+    if sys.stdin.isatty():
+        password = getpass.getpass("New password: ")
+        if getpass.getpass("Again: ") != password:
+            raise ReticulaError("BadInput", "passwords differ")
+        return password
+    return sys.stdin.readline().rstrip("\n")
+
+
+def _account_passwd(settings: Settings, email: str) -> int:
+    from reticula_mcp import accounts
+    from reticula_mcp.auth import grants
+    from reticula_mcp.db import connect
+
+    password = _read_new_password()
+    with connect(settings.require_database_url()) as conn:
+        account = accounts.get_account_by_email(conn, email)
+        if account is None:
+            raise ReticulaError("NotFound", f"no account with e-mail {email!r}")
+        accounts.set_password(conn, account, password)
+        n_grants, n_tokens = grants.revoke_everything(conn, account.id)
+        conn.commit()
+    print(
+        f"new password for @{account.handle}; revoked {n_grants} connections and"
+        f" {n_tokens} tokens: sign in again"
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="reticula-mcp", description=__doc__)
     parser.add_argument("--version", action="version", version=__version__)
@@ -199,7 +265,12 @@ def build_parser() -> argparse.ArgumentParser:
     token = sub.add_parser("token", help="mint a bearer token for an account")
     token.add_argument("--email", required=True)
     token.add_argument("--label", default="cli")
-    token.add_argument("--ttl-days", type=int)
+    token.add_argument(
+        "--ttl-days", type=int, help=f"days until it expires (default {TOKEN_DAYS})"
+    )
+    token.add_argument(
+        "--no-expiry", action="store_true", help="a token that never expires"
+    )
 
     account = sub.add_parser("account", help="account administration")
     account_sub = account.add_subparsers(dest="account_command", required=True)
@@ -209,6 +280,15 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument(
         "--password", help="omit to be prompted (or to read one line from stdin)"
     )
+    disable = account_sub.add_parser(
+        "disable", help="disable an account and revoke all its connections and tokens"
+    )
+    disable.add_argument("--email", required=True)
+    passwd = account_sub.add_parser(
+        "passwd",
+        help="set a new password (prompted) and revoke all connections and tokens",
+    )
+    passwd.add_argument("--email", required=True)
     _register_lane_commands(sub)
     return parser
 
@@ -254,7 +334,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         if func is not None:
             return int(func(settings, args))
         if args.command == "token":
-            return _token(settings, args.email, args.label, args.ttl_days)
+            return _token(
+                settings, args.email, args.label, args.ttl_days, args.no_expiry
+            )
+        if args.command == "account" and args.account_command == "disable":
+            return _account_disable(settings, args.email)
+        if args.command == "account" and args.account_command == "passwd":
+            return _account_passwd(settings, args.email)
         if args.command == "account":
             return _account_create(settings, args.email, args.password, args.handle)
     except ReticulaError as exc:

@@ -69,8 +69,14 @@ class Settings:
     read_seconds: float = 20.0
     # Peers whose X-Forwarded-For is believed (IPs or CIDRs); empty = trust nobody.
     trusted_proxies: tuple[str, ...] = ()
+    # RETICULA_TRUSTED_PROXIES=none: the operator says that no peer is to be
+    # trusted. ``trusted_proxies`` is then empty, as when nothing is set.
+    trusted_proxies_none: bool = False
     # Hosts an assistant's connector returns to that the sign-in page does not warn about.
     known_clients: tuple[str, ...] = ("claude.ai", "claude.com")
+    # Which connectors may register: known (loopback and the known clients'
+    # hosts) or open (any https host).
+    registration: str = "known"
     embed_model: str | None = None  # model name for the fastembed embedder
     # Stateless streamable HTTP: no server-side MCP sessions, so a restart or a
     # second worker never strands a connected assistant.
@@ -87,6 +93,12 @@ class Settings:
             value = e.get(f"RETICULA_{name}", "").strip()
             return value or default
 
+        proxies = tuple(
+            part.strip()
+            for part in (get("TRUSTED_PROXIES") or "").split(",")
+            if part.strip()
+        )
+        proxies_none = len(proxies) == 1 and proxies[0].lower() == "none"
         settings = cls(
             database_url=get("DATABASE_URL"),
             public_url=(get("PUBLIC_URL") or "").rstrip("/") or None,
@@ -100,11 +112,8 @@ class Settings:
             read_rate=get("READ_RATE", "300/minute") or "300/minute",
             read_concurrency=_int("READ_CONCURRENCY", get("READ_CONCURRENCY", "4")),
             read_seconds=_number("READ_SECONDS", get("READ_SECONDS", "20")),
-            trusted_proxies=tuple(
-                part.strip()
-                for part in (get("TRUSTED_PROXIES") or "").split(",")
-                if part.strip()
-            ),
+            trusted_proxies=() if proxies_none else proxies,
+            trusted_proxies_none=proxies_none,
             known_clients=tuple(
                 part.strip().lower()
                 for part in (get("KNOWN_CLIENTS", "claude.ai,claude.com") or "").split(
@@ -112,6 +121,7 @@ class Settings:
                 )
                 if part.strip()
             ),
+            registration=(get("REGISTRATION", "known") or "known").lower(),
             embed_model=get("EMBED_MODEL"),
             stateless_http=(get("STATELESS_HTTP", "true") or "true").lower()
             not in ("0", "false", "no", "off"),
@@ -126,6 +136,8 @@ class Settings:
             raise ReticulaError(
                 BAD_INPUT, "RETICULA_EMBEDDER must be auto|hash|fastembed"
             )
+        if self.registration not in ("known", "open"):
+            raise ReticulaError(BAD_INPUT, "RETICULA_REGISTRATION must be known|open")
         if self.signup not in ("open", "closed"):
             raise ReticulaError(BAD_INPUT, "RETICULA_SIGNUP must be open|closed")
         parse_rate(self.signup_rate)
@@ -139,7 +151,19 @@ class Settings:
         if self.read_seconds < 0:
             raise ReticulaError(BAD_INPUT, "RETICULA_READ_SECONDS must be 0 or more")
         self._check_base_url()
+        if self.trusted_proxies_none and self.trusted_proxies:
+            raise ReticulaError(
+                BAD_INPUT,
+                "RETICULA_TRUSTED_PROXIES: none must stand alone, not beside addresses",
+            )
         for proxy in self.trusted_proxies:
+            if proxy.lower() == "none":
+                raise ReticulaError(
+                    BAD_INPUT,
+                    "RETICULA_TRUSTED_PROXIES: none must stand alone, not in a list"
+                    " with addresses",
+                    hint="use none by itself, or list only addresses",
+                )
             try:
                 ipaddress.ip_network(proxy, strict=False)
             except ValueError as exc:

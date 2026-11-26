@@ -220,8 +220,10 @@ def _page_for(live, name, redirect):
     )
 
 
-def test_fixed_lookalike_client_is_flagged_on_the_page(live_auth):
-    text = _page_for(live_auth, "Claude", "https://claude-ai.example/cb").text
+def test_fixed_lookalike_client_is_flagged_on_the_page(fresh_db_url):
+    # an unknown host registers only when the operator opened registration
+    with start_live(fresh_db_url, registration="open") as live:
+        text = _page_for(live, "Claude", "https://claude-ai.example/cb").text
     assert "<strong>claude-ai.example</strong> gets access to your notes" in text
     assert "calls itself" in text and "Claude" in text
     assert text.index("claude-ai.example") < text.index("calls itself")
@@ -635,7 +637,7 @@ def test_sound_host_allow_list_applies_to_mcp_only(fresh_db_url):
             assert evil.status_code == 421
             r = c.post(
                 "/register",
-                json={"redirect_uris": ["https://a.example/c"]},
+                json={"redirect_uris": [CLAUDE_REDIRECT]},
                 headers={"Host": "evil.example"},
             )
             assert r.status_code == 201
