@@ -3,6 +3,7 @@ nothing of what the request carried."""
 
 from __future__ import annotations
 
+import json
 import logging
 
 import pytest
@@ -10,7 +11,7 @@ from starlette.datastructures import Headers
 
 from reticula_mcp import accounts
 from reticula_mcp.db import connect
-from reticula_mcp.requestlog import one_line, reason_of
+from reticula_mcp.requestlog import one_line, path_field, reason_of
 from tests.auth_support import PASSWORD, Assistant, start_live
 
 JSON = Headers({"content-type": "application/json"})
@@ -62,6 +63,38 @@ def test_a_line_cannot_be_broken_or_grown_by_what_a_caller_sends():
     )
     assert one_line("Pröbe\x00/1.0", 80) == "Pr be /1.0"
     assert len(one_line("x" * 500, 80)) == 80
+
+
+def test_a_path_with_a_space_or_a_quote_is_one_quoted_field():
+    forged = '/x 200 0ms from=203.0.113.9 agent="Fake/1.0"'
+    field = path_field(forged)
+    assert field == json.dumps(forged)
+    assert field.startswith('"') and field.endswith('"')
+    assert path_field('/a"b') == '"/a\\"b"'
+    assert path_field("/a\\b") == '"/a\\\\b"'
+    assert path_field("/a\tb") == '"/a b"'  # white space is one space first
+
+
+def test_a_plain_path_is_written_as_it_is():
+    for path in (
+        "/mcp",
+        "/signin",
+        "/.well-known/oauth-authorization-server",
+        "/a%2Fb",
+    ):
+        assert path_field(path) == path
+    assert path_field("") == "-"
+    assert len(path_field("/" + "x" * 500)) == 120
+
+
+def test_a_logged_path_with_spaces_cannot_add_fields(lines):
+    live, read = lines
+    http = live.http()
+    r = http.get("/no%20such%20page%20200%200ms%20from=203.0.113.9")
+    assert r.status_code == 404
+    (line,) = [ln for ln in read() if ln.startswith("GET ")]
+    assert line.startswith('GET "/no such page 200 0ms from=203.0.113.9" 404 ')
+    assert " from=203.0.113.9 " not in line
 
 
 @pytest.fixture

@@ -359,7 +359,7 @@ app-1  | 2026-11-25T13:13:48Z POST /mcp 200 2ms from=172.31.89.1 agent="ExampleC
 app-1  | 2026-11-25T13:13:49Z POST /token 400 3ms from=172.31.89.1 agent="ExampleConnector/1.0" reason="invalid_grant: credential is invalid, expired or revoked"
 ```
 
-A line has the time in UTC, the method, the path without its query string, the status and the time until the answer began. Then:
+A line has the time in UTC, the method, the path without its query string, the status and the time until the answer began. A path that holds a space, a quote or a backslash after its percent signs are decoded is written in double quotes, as `agent=` is: `GET "/no such page" 404`. Then:
 
 | Field | What it is |
 |---|---|
