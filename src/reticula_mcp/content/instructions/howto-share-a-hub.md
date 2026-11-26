@@ -10,6 +10,7 @@ Use this when the person wants someone else to read or add to a group of notes.
 To see who has access, run `share(hub=<hub>)` without `person`.
 To take access away, run `share(hub=<hub>, person="@name", mode="none")`. Notes already written by that person stay in the hub.
 To leave a hub someone else shared with the person, run `share(hub=<hub>, person=<the person's own handle>, mode="none")`, but only when the person asks for it. Their notes filed there stay readable to them. The hub "Reticula instructions" cannot be left.
+To put a hub on this server's public page, run `share(hub=<hub>, person="public", mode="read")`, but only when the person asks for it. Anyone can then see, without signing in, the titles and ids of the hub, of the person's own sub-hubs in it and of their own notes in it, but not their text. `share(hub=<hub>, person="public", mode="none")` takes it off.
 
 Who may invite: in a `group` hub any member may invite. In a `moderated` hub only the hub's owner may. If `share` answers with a Forbidden error, say so and do not look for a way around it.
 
