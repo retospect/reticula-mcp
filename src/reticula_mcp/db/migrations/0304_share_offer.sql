@@ -7,8 +7,9 @@
 --
 -- Both tables are views of the record log, like hub_grant: a grant record
 -- with "pending": true makes an offer; the grantee's own grant record that
--- "accepts" it turns it into a hub_grant row, one that "refuses" it removes
--- it, and one that also "blocks" adds a share_block row (materialize.py).
+-- "answers" it turns it into a hub_grant row (read, add) or marks it
+-- refused (none), and one that also "blocks" adds a share_block row, also
+-- after the refusal (materialize.py).
 -- A rebuild empties and refills them from the log.
 --
 -- Applied on a database of 0.4.2 as a pending file after 0355; it needs only
@@ -26,6 +27,9 @@ CREATE TABLE IF NOT EXISTS share_offer (
     -- the grantee blocked the sharer: kept, so the sharer's own view is the
     -- same as for any share that waits, and never shown to the grantee
     held               boolean     NOT NULL DEFAULT false,
+    -- the grantee refused it: kept, never shown or accepted, so that a
+    -- block afterwards still knows whose share it was
+    refused            boolean     NOT NULL DEFAULT false,
     PRIMARY KEY (hub_node_id, grantee)
 );
 CREATE INDEX IF NOT EXISTS share_offer_account_idx

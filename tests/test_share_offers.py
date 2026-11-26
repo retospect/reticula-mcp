@@ -48,8 +48,15 @@ def sees_nothing_of(conn, who, hub: str, note: str, words: str) -> None:
     found = search.search(conn, who, query=words)
     assert short(note) not in found and "Secret garden" not in found
     with pytest.raises(ReticulaError) as exc:
-        search.get(conn, who, ref=hub)
+        search.get(conn, who, ref=note)
     assert exc.value.code == "NotFound"
+    # the hub's id answers with start's line while a share waits, else NotFound
+    try:
+        got = search.get(conn, who, ref=hub)
+    except ReticulaError as exc:
+        assert exc.code == "NotFound"
+    else:
+        assert got in offer_lines(conn, who) and "Secret garden" not in got
 
 
 @pytest.fixture
@@ -204,6 +211,68 @@ def test_the_record_layer_refuses_what_the_tool_never_offers(conn, pair, make_ac
     )
     api.answer_offer(conn, ben, row, "read")
     assert note not in readable(conn, ben)
+    # a refused share is not accepted afterwards either
+    conn.execute(
+        "UPDATE share_offer SET held = false, refused = true WHERE address = %s",
+        (row["address"],),
+    )
+    api.answer_offer(conn, ben, row, "read")
+    assert note not in readable(conn, ben)
+
+
+def test_block_after_refuse_still_blocks_the_sharer(conn, pair):
+    """Scenario 47: refused first, then asked to stop further shares."""
+    ada, ben, hub, _ = pair
+    offer(conn, ada, hub, ben)
+    answer(conn, ben, hub, "none")
+    out = graph.share(conn, ben, hub=f"{short(hub)}:block", person="@ben", mode="none")
+    assert out == (
+        f"stopped further shares from @ada; their share of hub id {short(hub)} was"
+        " already refused; sharing a hub with @ada lifts this"
+    )
+    second = mk_hub(conn, ada, "Second")
+    assert "once they accept" in offer(conn, ada, second, ben)
+    assert offer_lines(conn, ben) == []  # held
+    assert "waiting" in graph.share(conn, ada, hub=second)  # silent to ada
+    # a refused share is never accepted, and is not listed to anyone
+    with pytest.raises(ReticulaError):
+        answer(conn, ben, hub, "read")
+    assert "@ben" not in graph.share(conn, ada, hub=hub)
+    # a block of a block answers the same, and a rebuild keeps it
+    again = graph.share(
+        conn, ben, hub=f"{short(hub)}:block", person="@ben", mode="none"
+    )
+    assert again == out
+    materialize.rebuild(conn)
+    assert offer_lines(conn, ben) == []
+
+
+def test_a_refused_share_can_be_offered_again(conn, pair):
+    ada, ben, hub, _ = pair
+    offer(conn, ada, hub, ben)
+    answer(conn, ben, hub, "none")
+    offer(conn, ada, hub, ben)
+    assert len(offer_lines(conn, ben)) == 1
+    answer(conn, ben, hub, "read")
+    assert hub in readable(conn, ben)
+
+
+def test_get_of_a_waiting_hub_answers_with_its_start_line(conn, pair):
+    ada, ben, hub, note = pair
+    offer(conn, ada, hub, ben)
+    (line,) = offer_lines(conn, ben)
+    for ref in (short(hub), hub):
+        out = search.get(conn, ben, ref=ref)
+        assert out == line
+        assert "Secret garden" not in out
+    # a note in that hub stays unknown, and so does the hub to anyone else
+    with pytest.raises(ReticulaError) as exc:
+        search.get(conn, ben, ref=short(note))
+    assert exc.value.code == "NotFound"
+    answer(conn, ben, hub, "none")  # refused: unknown again
+    with pytest.raises(ReticulaError) as exc:
+        search.get(conn, ben, ref=short(hub))
+    assert exc.value.code == "NotFound"
 
 
 def test_block_needs_a_share_that_waits(conn, pair):

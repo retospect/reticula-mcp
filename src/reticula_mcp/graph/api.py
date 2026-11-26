@@ -761,12 +761,17 @@ def set_grant(
         (hub["id"], grantee_person_id),
     ).fetchone()
     offer = conn.execute(
-        "SELECT mode, granted_by FROM share_offer WHERE hub_node_id = %s"
+        "SELECT mode, granted_by, refused FROM share_offer WHERE hub_node_id = %s"
         " AND grantee = %s",
         (hub["id"], grantee_person_id),
     ).fetchone()
     if pending:
-        if offer and offer["mode"] == mode and offer["granted_by"] == actor.person_id:
+        if (
+            offer
+            and not offer["refused"]
+            and offer["mode"] == mode
+            and offer["granted_by"] == actor.person_id
+        ):
             return
     elif (existing and existing["mode"] == mode and offer is None) or (
         existing is None and offer is None and mode == "none"

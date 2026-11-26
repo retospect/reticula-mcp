@@ -535,11 +535,14 @@ def _is_self(viewer: Account, person: str) -> bool:
 _HEX = frozenset("0123456789abcdef-")
 
 
-def _offer_for(conn: Conn, viewer: Account, hub: str) -> Row | None:
+def offer_for(
+    conn: Conn, viewer: Account, hub: str, *, refused: bool = False
+) -> Row | None:
     """The share that waits for the viewer on the hub ``hub`` names (its
     address, or a suffix of 6 or more hex characters, as start prints it),
     with the sharer's handle; None when no single one matches. Held shares
-    (from someone the viewer blocked) are never found."""
+    (from someone the viewer blocked) are never found; ``refused``: one the
+    viewer refused is found too, for a block afterwards."""
     ref = hub.strip().lower()
     tail = ref if len(ref) >= 6 and set(ref) <= _HEX else None
     if not ref.startswith("ret:") and tail is None:
@@ -548,12 +551,13 @@ def _offer_for(conn: Conn, viewer: Account, hub: str) -> Row | None:
         "SELECT o.*, h.address AS hub_address, a.handle AS sharer_handle"
         " FROM share_offer o JOIN node h ON h.id = o.hub_node_id"
         " LEFT JOIN account a ON a.person_id = o.granted_by"
-        " WHERE o.grantee = %(me)s AND NOT o.held AND h.tombstoned_at IS NULL"
+        " WHERE o.grantee = %(me)s AND h.tombstoned_at IS NULL"
+        " AND (o.refused AND %(refused)s OR NOT o.refused AND NOT o.held)"
         " AND (lower(h.address) = %(ref)s"
         "      OR (%(tail)s::text IS NOT NULL AND right(lower(h.address),"
         "          length(%(tail)s::text)) = %(tail)s::text))"
         " LIMIT 2",
-        {"me": viewer.person_id, "ref": ref, "tail": tail},
+        {"me": viewer.person_id, "ref": ref, "tail": tail, "refused": refused},
     ).fetchall()
     return rows[0] if len(rows) == 1 else None
 
@@ -573,6 +577,12 @@ def _answer_offer(
     short = render.short_ref(offer["hub_address"])
     api.answer_offer(conn, viewer, offer, mode, block=block)
     if mode == "none":
+        if block and offer["refused"]:
+            return (
+                f"stopped further shares from {sharer}; their share of hub id"
+                f" {short} was already refused; sharing a hub with {sharer}"
+                " lifts this"
+            )
         if block:
             return (
                 f"refused {sharer}'s share of hub id {short} and stopped further"
@@ -618,7 +628,7 @@ def _list_access(conn: Conn, viewer: Account, hub: Row) -> str:
         # shares that wait, held ones too: a block is not shown to the sharer
         for r in conn.execute(
             "SELECT grantee, mode, granted_by FROM share_offer"
-            " WHERE hub_node_id = %s ORDER BY created_at, grantee",
+            " WHERE hub_node_id = %s AND NOT refused ORDER BY created_at, grantee",
             (hub["id"],),
         ).fetchall():
             lines.append(
@@ -719,7 +729,7 @@ def share(
     if person is not None and _is_self(viewer, person):
         # the answer to a share that waits: its hub is not readable yet, so it
         # is looked up among the viewer's offers, never among readable nodes
-        offer = _offer_for(conn, viewer, hub)
+        offer = offer_for(conn, viewer, hub, refused=block)
         if offer is not None:
             return _answer_offer(conn, viewer, offer, mode, block=block)
     if block:

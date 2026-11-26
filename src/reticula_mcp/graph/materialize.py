@@ -373,7 +373,7 @@ def _offer(conn: Conn, rec: records.Record, hub: Row, grantee: str, mode: str) -
         " ON CONFLICT (hub_node_id, grantee) DO UPDATE SET mode = EXCLUDED.mode,"
         " granted_by = EXCLUDED.granted_by, address = EXCLUDED.address,"
         " record_id = EXCLUDED.record_id, created_at = EXCLUDED.created_at,"
-        " held = EXCLUDED.held",
+        " held = EXCLUDED.held, refused = false",
         {
             "hub": hub["id"],
             "grantee": grantee,
@@ -391,34 +391,38 @@ def _answer_offer(conn: Conn, rec: records.Record, payload: Row, hub: Row) -> No
     names the address of that share's record, so an answer never applies to a
     later share. ``read``/``add`` accept it at the lower of the offered and
     the asked mode, checked again against what the sharer may grant now;
-    ``none`` refuses it, and with ``blocks`` also stops later shares from the
-    sharer."""
+    ``none`` refuses it (the row stays, ``refused``), and with ``blocks``
+    also stops later shares from the sharer. A share already refused takes
+    only a block; a held one takes nothing."""
     offer = conn.execute(
         "SELECT * FROM share_offer WHERE hub_node_id = %s AND grantee = %s"
-        " AND address = %s AND NOT held",
+        " AND address = %s",
         (hub["id"], rec.author, _text(payload.get("answers"))),
     ).fetchone()
     if offer is None or _text(payload.get("to")) != rec.author:
         log.info("answer %s not applied: no such share waits", rec.address)
         return
+    asked = _text(payload.get("mode"))
+    blocks = payload.get("blocks") is True and asked not in ("read", "add")
+    if offer["refused"] or offer["held"]:
+        if offer["refused"] and blocks:
+            _block(conn, rec, offer["granted_by"])
+        else:
+            log.info("answer %s not applied: the share was answered", rec.address)
+        return
+    if asked not in ("read", "add"):
+        conn.execute(
+            "UPDATE share_offer SET refused = true WHERE hub_node_id = %s"
+            " AND grantee = %s",
+            (hub["id"], rec.author),
+        )
+        if blocks:
+            _block(conn, rec, offer["granted_by"])
+        return
     conn.execute(
         "DELETE FROM share_offer WHERE hub_node_id = %s AND grantee = %s",
         (hub["id"], rec.author),
     )
-    asked = _text(payload.get("mode"))
-    if asked not in ("read", "add"):
-        if payload.get("blocks") is True:
-            conn.execute(
-                "INSERT INTO share_block (person, blocked, record_id, created_at)"
-                " VALUES (%s, %s, %s, %s) ON CONFLICT (person, blocked) DO NOTHING",
-                (rec.author, offer["granted_by"], rec.id, rec.created_at),
-            )
-            conn.execute(
-                "UPDATE share_offer SET held = true"
-                " WHERE grantee = %s AND granted_by = %s",
-                (rec.author, offer["granted_by"]),
-            )
-        return
     mode = "add" if asked == "add" and offer["mode"] == "add" else "read"
     try:
         access.authorize_grant(
@@ -446,6 +450,20 @@ def _answer_offer(conn: Conn, rec: records.Record, payload: Row, hub: Row) -> No
             "record_id": rec.id,
             "at": rec.created_at,
         },
+    )
+
+
+def _block(conn: Conn, rec: records.Record, sharer: str) -> None:
+    """The author of ``rec`` blocks ``sharer``: every share of theirs to the
+    author is held, those that wait now and those to come."""
+    conn.execute(
+        "INSERT INTO share_block (person, blocked, record_id, created_at)"
+        " VALUES (%s, %s, %s, %s) ON CONFLICT (person, blocked) DO NOTHING",
+        (rec.author, sharer, rec.id, rec.created_at),
+    )
+    conn.execute(
+        "UPDATE share_offer SET held = true WHERE grantee = %s AND granted_by = %s",
+        (rec.author, sharer),
     )
 
 

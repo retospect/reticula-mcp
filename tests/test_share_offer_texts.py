@@ -9,6 +9,7 @@ import pytest
 from reticula_mcp.content import bootstrap
 from reticula_mcp.content import handlers as content
 from reticula_mcp.graph import handlers as graph
+from reticula_mcp.search import handlers as search
 from tests.graph_support import mk_hub
 from tests.search_support import use_hash_embedder
 
@@ -88,6 +89,27 @@ def test_refuse_and_block_replies(conn, make_account):
     ) == (
         f"refused @ada's share of hub id {two[-8:]} and stopped further shares"
         " from @ada; sharing a hub with @ada lifts this"
+    )
+
+
+def test_block_after_refuse_and_get_of_a_waiting_hub(conn, make_account):
+    ada, ben = make_account(handle="ada"), make_account(handle="ben")
+    one, two = mk_hub(conn, ada, "One"), mk_hub(conn, ada, "Two")
+    graph.share(conn, ada, hub=one, person="@ben", mode="read")
+    graph.share(conn, ada, hub=two, person="@ben", mode="read")
+    ref = two[-8:]
+    assert search.get(conn, ben, ref=ref) == (
+        f"- @ada shared a hub with you, not yet accepted: id {ref}, to read. Ask"
+        f' the person; accept: share(hub="{ref}", person="@ben", mode="read");'
+        ' refuse: the same with mode="none"; refuse and stop shares from @ada:'
+        f' share(hub="{ref}:block", person="@ben", mode="none")'
+    )
+    graph.share(conn, ben, hub=one[-8:], person="@ben", mode="none")
+    assert graph.share(
+        conn, ben, hub=f"{one[-8:]}:block", person="@ben", mode="none"
+    ) == (
+        f"stopped further shares from @ada; their share of hub id {one[-8:]} was"
+        " already refused; sharing a hub with @ada lifts this"
     )
 
 
