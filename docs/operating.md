@@ -610,6 +610,9 @@ The upgrade takes these steps in place of steps 3 and 4 above, after the backup 
    `key encrypt` prints how many keys it encrypted and may be run again: it changes only keys that are still unencrypted.
 
 Keep the dump of step 1 until the upgrade is checked. The way back is that dump: move the clone back, and restore it with the steps under [Restore](#restore) of the old release.
+
+0.4.2 also changes these:
+
 - `reticula-mcp serve` does not start when `RETICULA_PUBLIC_URL` is an `https` address or names a host other than this machine, and `RETICULA_TRUSTED_PROXIES` is empty. Set it to the proxy's address, as under [A tunnel or proxy on the same host](#a-tunnel-or-proxy-on-the-same-host). `RETICULA_TRUSTED_PROXIES=none` starts the server as before, with every client in one rate-limit bucket. The refusal names the URL and what to set:
 
   ```
@@ -629,6 +632,40 @@ The steps with the key file were rehearsed on a copy of a running 0.4.1 instance
 The steps above were rehearsed on another copy of a running 0.4.1 instance, again with connections and a token made under 0.4.1. Step 1's dump took 0.3 seconds, removing the volume 1 second, the new database with its roles 6 seconds, the restore 0.2 seconds, `key encrypt` 1 second, and the last `up` 6 seconds. The server was away for 17 seconds in all. Every table had its rows from before, and the ledger one migration more. The minted token, a connection's access token and its refresh token from 0.4.1 worked without a new sign-in. `reticula` then had no superuser rights, owned the database and every table, and was refused `pg_read_file` and `CREATE ROLE`. The server container had neither database password of the superuser in its environment. A dump, a reindex and a write worked as before. The way back, the dump of step 1 restored into 0.4.1, was healthy after 14 seconds.
 
 Tried and refused: taking the superuser rights from `reticula` in place, with `ALTER ROLE reticula NOSUPERUSER`, ends with `permission denied to alter role` and `The bootstrap superuser must have the SUPERUSER attribute`.
+
+0.5.0 adds four migrations. From 0.4.3, move the clone and run steps 3 and 4 above; the first start applies them. From 0.4.1 or older, take the steps of 0.4.2 above with the files of 0.5.0; the first start then also applies `0355_private_key_form`. There is no need to stop at 0.4.3 on the way.
+
+```
+applied 0304_share_offer.sql
+applied 0356_web_session.sql
+applied 0357_activity.sql
+applied 0358_listed_kept.sql
+```
+
+- `0304_share_offer` adds the tables `share_offer`, the shares that wait for a yes, and `share_block`, the people a person stopped shares from. Both are built from the signed record log, like `hub_grant`. Grants made before stay as they are.
+- `0356_web_session` adds the table `web_session`, the sign-ins of the account page. It stores a digest of each session cookie, never the cookie.
+- `0357_activity` adds the table `activity`, one table per day, with the days ahead made at the start: [The activity log](#the-activity-log).
+- `0358_listed_kept` writes the setting `listed: yes` for every account that never set `listed`, so the directory of people lists the same accounts as before. The system account gets the row too; the directory never lists it. An account that set either value keeps it. No other row changes.
+
+What changes for the people who use the server:
+
+- `delete` takes two calls. The first deletes nothing: it names the note, the hubs it is filed in, and the call that deletes it, which the assistant makes once the person said yes.
+- A share between two people who share no hub yet waits until the person it is for accepts it. Until then nothing of the hub reaches them. Their `start` names who shares which hub, with the calls to accept, to refuse, and to refuse and stop further shares from that person. Between two people who already give each other read or add on a hub, shares apply at once, as before.
+- A new account is not listed in the directory of people until it runs `edit(ref="settings", text="listed: yes")` or sets it on the account page. Anyone can still share with it by its exact handle.
+- Each person has an account page at `/account` of the public address, signed in with their e-mail address and password: [The account page](#the-account-page). It shows the connections and tokens, the directory setting, an export, the deletion of the account and the activity log. A proxy that forwards only `/mcp` and the sign-in pages leaves the page unreachable.
+- Among notes whose title or tag is the query, `search` lists the person's own first.
+
+One setting is new, `RETICULA_ACTIVITY_DAYS`, 30 when not set. `.env` needs no change.
+
+Both ways were rehearsed on 2026-11-26, on copies of a running 0.4.1 instance with 3 accounts. Under 0.4.1, two accounts made in each copy connected through the sign-in page, and a third, made with `reticula-mcp account create`, got a token from `reticula-mcp token`. The server of 0.5.0 was built from the release candidate.
+
+- From 0.4.1 to 0.4.3 with the steps of 0.4.2, then on to 0.5.0. The steps of 0.4.2 took the server away for 15.5 seconds, the dump included. The image of 0.5.0 was then built while 0.4.3 ran, and `docker compose up -d --wait` applied the four migrations and was healthy after 12 seconds.
+- From 0.4.1 straight to 0.5.0 with the steps of 0.4.2. The restore took 0.2 seconds, `key encrypt` 0.9 seconds, and the last `up`, with five migrations, 5.7 seconds. The server was away for 14.5 seconds in all, the dump included.
+- In both, the ledger then held 28 migrations. Without a new sign-in, the minted token and a connection's access token answered `start`, and the refresh token from 0.4.1 returned a new pair whose access token answered `start`. Each of the six accounts from before had `listed: yes`. An account made after the upgrade had no `listed` row and so is not listed. The first `delete` of a new note answered `nothing deleted yet`, and the activity log had a line for each call.
+- The account page was tried with `RETICULA_PUBLIC_URL=https://reticula.test:28443`, behind a Caddy proxy with a self-signed certificate, as in the `proxy` profile of `compose.dev.yaml`. The sign-in with the e-mail and password of the account made with `account create` answered 303 and set the cookie `__Host-reticula_session` with `HttpOnly`, `SameSite=strict` and `Secure`. `/account` with that cookie answered 200 and showed the account, with a `web sign-in` line in its activity. Without a cookie, `/account` sends the browser to the sign-in page.
+- A sign-in posted without an `Origin` or `Referer` header is refused with status 403 and `reason="account: signin_form"` in the log, as a form posted from another site would be. A browser sends one; a script with `curl` has to add `-H "Origin: <public URL>"`.
+
+Not tried: the account page through Tailscale Funnel, and the way back, which is the dump of step 1 (from 0.4.1) or the backup before the upgrade (from 0.4.3).
 
 Migrations only move forward and each file runs in its own transaction. A migration file that has already been applied is never edited; changes arrive as new files. If the server reports that an applied file has changed, you are running mismatched code and database: do not continue.
 
