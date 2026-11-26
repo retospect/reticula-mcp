@@ -59,7 +59,11 @@ def page(title: str, body: str, *, path: str) -> str:
     )
 
 
-def respond(text: str, *, cache_seconds: int = 300, status: int = 200) -> Response:
+def respond(
+    text: str, *, cache_seconds: int = 300, status: int = 200, no_cache: bool = False
+) -> Response:
     headers = dict(HEADERS)
-    headers["Cache-Control"] = f"public, max-age={cache_seconds}"
+    headers["Cache-Control"] = (
+        "no-cache" if no_cache else f"public, max-age={cache_seconds}"
+    )
     return HTMLResponse(text, status_code=status, headers=headers)

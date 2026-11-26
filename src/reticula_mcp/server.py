@@ -564,6 +564,8 @@ def build_app(settings: Settings, db: Database | None = None) -> Starlette:
     database = db or Database(settings.require_database_url())
     mcp, wiring = create_mcp(settings, database)
     app = mcp.streamable_http_app()
+    # a path is served as asked or not at all: no redirect to its other form
+    app.router.redirect_slashes = False
     app.router.routes[0:0] = [*wiring.routes, *web_pages.routes(settings, database)]
     for mw in wiring.middleware:
         app.add_middleware(mw.cls, *mw.args, **mw.kwargs)
