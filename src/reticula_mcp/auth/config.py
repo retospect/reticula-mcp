@@ -21,6 +21,8 @@ MAX_REDIRECT_URIS = 10
 MAX_URI_LENGTH = 2048
 MAX_STATE_LENGTH = 2048
 MAX_PENDING_PER_CLIENT = 500
+#: Parked requests of one client whose sign-in page was never opened.
+MAX_UNOPENED_PER_CLIENT = 5_000
 MAX_PENDING_PER_ADDRESS = 100
 CLIENT_NAME_LENGTH = 100
 
@@ -33,6 +35,13 @@ MAX_EMAIL_LENGTH = 254
 FAILURES_PER_EMAIL = 6
 FAILURES_PER_IP = 30
 FAILURE_WINDOW = timedelta(minutes=15)
+#: Failed sign-ins for one e-mail address, from all addresses together, in
+#: EMAIL_CEILING_WINDOW, above which each further attempt is answered late:
+#: 2 ** (failures over the ceiling) seconds, at most EMAIL_DELAY_MAX. Never a
+#: lockout: the right password still signs in after the wait.
+EMAIL_CEILING = 20
+EMAIL_CEILING_WINDOW = timedelta(hours=1)
+EMAIL_DELAY_MAX = 30
 
 
 def register_rate(settings: Settings) -> tuple[int, int]:
@@ -41,6 +50,16 @@ def register_rate(settings: Settings) -> tuple[int, int]:
 
 
 DEFAULT_KNOWN_CLIENTS = ("claude.ai", "claude.com")
+
+
+def host_allowed(settings: Settings, host: str) -> bool:
+    """May a connector whose redirect URI is on ``host`` (https) register and
+    sign in? With RETICULA_REGISTRATION=known (the default) only a known
+    client's host or a host below it; with open, any."""
+    if getattr(settings, "registration", "known") == "open":
+        return True
+    host = host.lower().rstrip(".")
+    return any(host == k or host.endswith("." + k) for k in known_clients(settings))
 
 
 def known_clients(settings: Settings) -> tuple[str, ...]:

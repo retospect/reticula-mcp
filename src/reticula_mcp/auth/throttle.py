@@ -25,6 +25,19 @@ def count(conn: Conn, kind: str, subject: str, window: timedelta | int) -> int:
     return int(row["n"]) if row else 0
 
 
+def email_failures(conn: Conn, email_key: str, window: timedelta | int) -> int:
+    """Failed sign-ins for one e-mail address from every address bucket: the
+    SIGNIN_EMAIL counters are kept per (e-mail, bucket) as ``<e-mail>|<bucket>``."""
+    prefix = f"{email_key}|"
+    row = conn.execute(
+        "SELECT count(*) AS n FROM auth_event WHERE kind = %s"
+        " AND left(subject, %s) = %s"
+        " AND created_at > now() - make_interval(secs => %s)",
+        (SIGNIN_EMAIL, len(prefix), prefix, _seconds(window)),
+    ).fetchone()
+    return int(row["n"]) if row else 0
+
+
 def record(conn: Conn, kind: str, subject: str) -> None:
     conn.execute(
         "INSERT INTO auth_event (kind, subject) VALUES (%s, %s)", (kind, subject)
