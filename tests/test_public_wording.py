@@ -160,6 +160,27 @@ def test_an_owners_private_sub_hub_is_only_the_words_private_hub(
     assert "public page" not in line
 
 
+def test_a_private_hub_filed_privately_leaves_no_trace(
+    conn: Conn, make_account: Callable[..., Account]
+) -> None:
+    """A private filing tells nobody anything: not even "private hub"."""
+    ana = make_account(handle="ana")
+    hub = mk_hub(conn, ana, "Lab")
+    mk_note(conn, ana, "x", hub=hub, title="Visible note")
+    secret = mk_hub(conn, ana, "SECRETHUBTITLE", parent=hub)
+    graph.edit(conn, ana, ref=secret, private=True)
+    conn.execute(
+        "UPDATE membership SET audience = 'private' WHERE node_id = %s AND hub_node_id = %s",
+        (sql_node_id(conn, secret), sql_node_id(conn, hub)),
+    )
+    out = graph.share(conn, ana, hub=hub, person="public", mode="read")
+    body = hubs.body(conn)
+    assert "Visible note" in body
+    assert "private hub" not in body and "SECRETHUBTITLE" not in body
+    assert secret[-8:] not in body
+    assert "private sub-hub" not in out
+
+
 def test_the_share_reply_says_how_much_it_opens(
     conn: Conn, make_account: Callable[..., Account]
 ) -> None:

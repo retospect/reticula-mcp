@@ -141,9 +141,8 @@ def test_public_nodes_show_only_the_owners_own_live_notes(
                 # the filing is the author's own, live, audience hub
                 filed = conn.execute(
                     "SELECT 1 FROM membership m WHERE m.node_id = %s AND m.hub_node_id = %s"
-                    " AND NOT m.withdrawn AND m.author = %s"
-                    " AND (m.audience = 'hub' OR %s)",
-                    (n["id"], p, n["author"], r["private"]),
+                    " AND NOT m.withdrawn AND m.author = %s AND m.audience = 'hub'",
+                    (n["id"], p, n["author"]),
                 ).fetchone()
                 assert filed, (seed, n, "no own filing")
             owner = accounts.get(n["author"])
@@ -208,6 +207,7 @@ def test_the_public_hubs_are_those_of_a_python_walk(world: World, seed: int) -> 
             and (c := g.nodes.get(edge.node)) is not None
             and c.kind == "hub"
             and not edge.withdrawn
+            and edge.audience == "hub"
             and edge.author == c.author
             and c.author == g.nodes[edge.hub].author
             and not c.tomb

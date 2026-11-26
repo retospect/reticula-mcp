@@ -16,7 +16,9 @@
 --   only the owner's notes, so only the owner's correction takes one off;
 --   another member's superseding note does not);
 -- - the owner's own private sub-hubs (audience not 'hub') filed by the owner
---   under one of these hubs, live, as a row with private = true: the page
+--   under one of these hubs with a filing in audience 'hub', live, as a row
+--   with private = true (a private filing tells nobody anything, here as
+--   everywhere): the page
 --   says "private hub" for it and reads neither its title nor its address.
 --   The walk does not go into them: nothing under a private hub is returned.
 --
@@ -28,8 +30,9 @@
 -- Returns the tree: (node_id, parent_hub_id, private); parent_hub_id is NULL
 -- for a public hub itself. A note filed in two shown hubs comes twice.
 --
--- A new function: no table, column, index or row changes. (Dropped first: a
--- development database may hold its first, two-column form.)
+-- A new function: no table, column, index or row changes. Its first form
+-- had two columns; a development database that applied it needs a fresh
+-- database, since the migration ledger checks each file's checksum.
 DROP FUNCTION IF EXISTS public_nodes();
 CREATE FUNCTION public_nodes()
 RETURNS TABLE (node_id bigint, parent_hub_id bigint, private boolean)
@@ -71,6 +74,7 @@ LANGUAGE sql STABLE AS $$
     FROM tree t
     JOIN membership m ON m.hub_node_id = t.hub_id
     JOIN node c ON c.id = m.node_id
-    WHERE NOT m.withdrawn AND m.author = c.author AND c.author = t.owner
+    WHERE NOT m.withdrawn AND m.audience = 'hub'
+      AND m.author = c.author AND c.author = t.owner
       AND c.kind = 'hub' AND c.tombstoned_at IS NULL AND c.audience <> 'hub'
 $$;
