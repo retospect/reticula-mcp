@@ -318,6 +318,13 @@ def _identity_payload(
     }
 
 
+def identity_payload(conn: Conn, account: Account) -> dict[str, Any]:
+    """The payload of the account's next identity version, as it is now."""
+    return _identity_payload(
+        conn, account.id, account.handle, account.verified, account.verified_at
+    )
+
+
 def _publish_identity(conn: Conn, account: Account) -> records.Record:
     """Append the next identity version (signed by the root key)."""
     previous = records.head(conn, account.identity_address)

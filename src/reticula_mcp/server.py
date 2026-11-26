@@ -31,7 +31,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from reticula_mcp import __version__, connection, keystore, permissions
-from reticula_mcp.auth import build_auth, throttle
+from reticula_mcp.auth import account_web, build_auth, throttle
 from reticula_mcp.config import Settings, parse_rate
 from reticula_mcp.content import handlers as content_handlers
 from reticula_mcp.context import access_token_from_context, viewer_for_token
@@ -649,7 +649,11 @@ def build_app(settings: Settings, db: Database | None = None) -> Starlette:
     app = mcp.streamable_http_app()
     # a path is served as asked or not at all: no redirect to its other form
     app.router.redirect_slashes = False
-    app.router.routes[0:0] = [*wiring.routes, *web_pages.routes(settings, database)]
+    app.router.routes[0:0] = [
+        *wiring.routes,
+        *web_pages.routes(settings, database),
+        *account_web.routes(settings, database),
+    ]
     for mw in wiring.middleware:
         app.add_middleware(mw.cls, *mw.args, **mw.kwargs)
     # Added last, so outermost: it also sees what the sign-in layer refuses.

@@ -107,7 +107,9 @@ def revoke_grant_key(conn: Conn, grant_id: str) -> bool:
 
 def revoke_everything(conn: Conn, account_id: int) -> tuple[int, int]:
     """Revoke every grant and every token of the account: connections and
-    operator tokens alike. Returns (grants, tokens) that were live."""
+    operator tokens alike, and end its sessions of the account pages.
+    Returns (grants, tokens) that were live."""
+    conn.execute("DELETE FROM web_session WHERE account_id = %s", (account_id,))
     grants_n = conn.execute(
         "UPDATE oauth_grant SET revoked_at = now()"
         " WHERE account_id = %s AND revoked_at IS NULL",

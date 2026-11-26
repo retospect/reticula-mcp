@@ -28,6 +28,7 @@ NAV = (
     ("/results", "How well it works"),
     ("/vision", "Vision"),
     ("/privacy", "Privacy"),
+    ("/account", "Account"),
     (REPO, "Source on GitHub"),
     (HOME, "reticula.to"),
 )
