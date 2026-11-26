@@ -1,8 +1,8 @@
 """The directory of people: ``search(kind="person")``.
 
-An account is listed unless its owner took it out with
-``edit(ref="settings", text="listed: no")`` (the setting lives in
-:mod:`reticula_mcp.settings`). A line names the handle, whether the account is
+An account is listed when its owner said ``edit(ref="settings",
+text="listed: yes")``; a new one is not (0.5.0; migration 0358 kept every older
+account listed). The setting lives in :mod:`reticula_mcp.settings`. A line names the handle, whether the account is
 verified and the day it joined. It never shows an e-mail address, a person ID
 or anything else about the account. Someone who is not listed can still be
 shared with by their exact handle.

@@ -248,6 +248,10 @@ def test_ref_is_the_short_id_of_the_callers_own_note_and_never_another_persons(
     mine = addr(app.call(a, "put", text="alpha"))
     hub = addr(app.call(a, "put", text="a hub of ana", title="Hub", kind="hub"))
     assert app.call(a, "share", hub=hub[-8:], person="@zorbulax").strip()
+    # they share no hub yet: Bo's yes (0304); it names Ana's hub, so no ref
+    assert "you can now" in app.call(
+        b, "share", hub=hub[-8:], person="@zorbulax", mode="add"
+    )
     filed = addr(app.call(a, "put", text="beta", hub=hub[-8:]))
     app.call(a, "get", ref=mine[-8:])
     app.call(a, "get", ref=mine)  # a full address
@@ -281,16 +285,20 @@ def test_ref_is_the_short_id_of_the_callers_own_note_and_never_another_persons(
     app.call(b, "get", ref=own[-8:])
     app.settle()
     bo_rows = [(r["tool"], r["ref"]) for r in app.rows() if r["account_id"] == bo.id]
-    assert bo_rows == [
-        ("get", None),
-        ("search", None),
-        ("put", None),
-        ("get", None),
-        ("put", None),
-        ("link", own[-8:]),
-        ("link", own[-8:]),
-        ("get", own[-8:]),
-    ]
+    assert (
+        bo_rows
+        == [
+            ("share", None),  # the yes to Ana's share: Ana's hub is not named
+            ("get", None),
+            ("search", None),
+            ("put", None),
+            ("get", None),
+            ("put", None),
+            ("link", own[-8:]),
+            ("link", own[-8:]),
+            ("get", own[-8:]),
+        ]
+    )
 
 
 def test_no_column_of_any_row_holds_a_query_a_text_a_title_a_reply_or_a_handle(

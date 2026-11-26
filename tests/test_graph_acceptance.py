@@ -10,6 +10,7 @@ from reticula_mcp.errors import ReticulaError
 from reticula_mcp.graph import api, handlers
 from reticula_mcp.resolve import resolve_ref
 from tests.graph_support import (
+    WAITING,
     addr,
     can_read,
     current,
@@ -217,7 +218,9 @@ def test_10_invites_by_members_default_yes_admins_only_no(conn, make_account):
     note = mk_note(conn, alice, "n", hub=open_hub)
     # default hub: an ordinary member admits a newcomer, who then reads
     out = share(conn, bob, open_hub, newcomer)
-    assert "can now" in out
+    # a stranger to bob: it waited for the newcomer's yes (0304), which the
+    # helper gave
+    assert WAITING in out
     assert can_read(conn, newcomer, note)
     # moderated hub: the same invite is rejected, the admin's works
     assert code_of(share, conn, bob, closed_hub, newcomer2) == "Forbidden"

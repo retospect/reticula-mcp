@@ -240,6 +240,9 @@ def test_through_the_server_a_share_taken_away_holds_at_the_next_call(fresh_db_u
         assert "1222" not in call(live, his, "get", ref=note)
         assert "[error:NotFound]" in call(live, his, "get", ref=note)
         call(live, hers, "share", hub=hub, person="@ben", mode="read")
+        # ada and ben share no hub yet: it waits for ben's yes (0304)
+        assert "[error:NotFound]" in call(live, his, "get", ref=note)
+        call(live, his, "share", hub=hub[-8:], person="@ben", mode="read")
         seen = call(live, his, "get", ref=note)
         assert "1222" in seen and '"Kiln" / "Glazes"' in seen
         assert "1222" in call(live, his, "search", query="glaze", hub=hub)

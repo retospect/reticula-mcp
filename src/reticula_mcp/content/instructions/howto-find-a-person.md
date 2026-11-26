@@ -9,4 +9,4 @@ Use this when the person wants to share a hub with someone and does not know the
 
 Someone who is not listed cannot be found by search. They can still be shared with by their exact handle. The person has to ask them for it.
 
-To leave the list, the person runs `edit(ref="settings", text="listed: no")`. To come back, `edit(ref="settings", text="listed: yes")`. Change this only when the person asks for it.
+A new account is not listed. To be listed, the person runs `edit(ref="settings", text="listed: yes")`; to leave the list, `edit(ref="settings", text="listed: no")`. Change this only when the person asks for it.

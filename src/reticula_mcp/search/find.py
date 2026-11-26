@@ -312,7 +312,8 @@ def _exact(
 ) -> list[tuple[int, float]]:
     """Notes whose title is the query (case and surrounding space ignored),
     then notes that carry the query as a tag (case and a leading ``#``
-    ignored), newest first."""
+    ignored). Within each, the viewer's own notes come first, then newest
+    first: a title is often reused, and the note one wrote is the one meant."""
     key = query.strip().lower()
     tag = key.lstrip("#").strip()
     ws = " \t\r\n"
@@ -327,7 +328,9 @@ def _exact(
                OR (%(tag)s <> '' AND EXISTS (
                     SELECT 1 FROM unnest(n.tags) t
                     WHERE lower(ltrim(btrim(t, %(ws)s), '#')) = %(tag)s)))
-        ORDER BY score DESC, n.created_at DESC, n.id DESC LIMIT %(pool)s
+        ORDER BY score DESC, (n.author = %(person)s) DESC, n.created_at DESC,
+                 n.id DESC
+        LIMIT %(pool)s
         """,
         {**params, "key": key, "tag": tag, "ws": ws, "pool": pool},
     ).fetchall()

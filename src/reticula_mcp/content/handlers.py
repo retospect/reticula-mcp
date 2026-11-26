@@ -31,6 +31,8 @@ PROFILE_HUB_LIMIT = 8
 HUB_TITLE_LIMIT = 80
 #: Other instructions named by ``start``.
 START_INSTRUCTION_LIMIT = 6
+#: Shares that wait for the viewer, named by ``start`` before "and N more".
+START_OFFER_LIMIT = 5
 
 
 def short_id(address: str) -> str:
@@ -245,6 +247,76 @@ def _news_lines(conn: Conn, viewer: Account, hubs: list[dict[str, Any]]) -> list
     return lines
 
 
+def offer_line(
+    viewer: Account, handle: str | None, granted_by: str, address: str, mode: str
+) -> str:
+    """One share that waits, as start and get name it: the sharer and the
+    hub's id with the calls that answer it, never the hub's title."""
+    who = f"@{handle}" if handle else str(granted_by)[:12]
+    ref = short_id(address)
+    me = f"@{viewer.handle}"
+    return (
+        f"- {who} shared a hub with you, not yet accepted: id {ref}, to"
+        f' {mode}. Ask the person; accept: share(hub="{ref}",'
+        f' person="{me}", mode="{mode}"); refuse: the same with'
+        f' mode="none"; refuse and stop shares from {who}:'
+        f' share(hub="{ref}:block", person="{me}", mode="none")'
+    )
+
+
+def waiting_line(conn: Conn, viewer: Account, ref: str) -> str | None:
+    """For get of a ref that names no readable note: the start line of the
+    share that waits for the viewer on the hub ``ref`` names, else None. It
+    shows nothing start does not."""
+    from reticula_mcp.graph.handlers import offer_for  # graph imports search
+
+    offer = offer_for(conn, viewer, ref)
+    if offer is None:
+        return None
+    return offer_line(
+        viewer,
+        offer["sharer_handle"],
+        offer["granted_by"],
+        offer["hub_address"],
+        offer["mode"],
+    )
+
+
+def _offer_lines(conn: Conn, viewer: Account) -> list[str]:
+    """The shares that wait for the viewer's yes (migration 0304), newest
+    first, at most START_OFFER_LIMIT, then how many more. A line names the
+    sharer and the hub's id, never its title: that is the sharer's text, and
+    nothing of the hub is shown before the person accepts. Held shares (from
+    someone the viewer blocked) are never named or counted."""
+    waiting = (
+        " FROM share_offer o JOIN node h ON h.id = o.hub_node_id"
+        " LEFT JOIN account a ON a.person_id = o.granted_by"
+        " WHERE o.grantee_account_id = %(viewer)s AND NOT o.held AND NOT o.refused"
+        " AND h.tombstoned_at IS NULL"
+    )
+    rows = conn.execute(
+        f"SELECT o.mode, h.address, a.handle, o.granted_by {waiting}"
+        " ORDER BY o.created_at DESC, o.hub_node_id DESC LIMIT %(limit)s",
+        {"viewer": viewer.id, "limit": START_OFFER_LIMIT},
+    ).fetchall()
+    if not rows:
+        return []
+    lines = [
+        offer_line(viewer, r["handle"], r["granted_by"], r["address"], r["mode"])
+        for r in rows
+    ]
+    counted = conn.execute(
+        f"SELECT count(*) AS n {waiting}", {"viewer": viewer.id}
+    ).fetchone()
+    total = int(counted["n"]) if counted else 0
+    if total > len(rows):
+        lines.append(
+            f"- and {total - len(rows)} more shares waiting; the next ones show"
+            " here once these are answered"
+        )
+    return lines
+
+
 def _own_note_count(conn: Conn, viewer: Account) -> int:
     row = conn.execute(
         "SELECT count(*) AS n FROM node WHERE author = %s AND tombstoned_at IS NULL",
@@ -288,6 +360,7 @@ def start(conn: Conn, viewer: Account) -> str:
     out.append(f"Your hubs ({own}):" if own else "Your hubs: none yet.")
     out += _hub_lines(conn, viewer, hubs, START_HUB_LIMIT)
     out += _news_lines(conn, viewer, hubs)
+    out += _offer_lines(conn, viewer)
     others = _other_instructions(conn, viewer)
     if others:
         out.append("More instructions (get one by id):")

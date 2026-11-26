@@ -12,7 +12,7 @@ from reticula_mcp.content import handlers as content
 from reticula_mcp.errors import ReticulaError
 from reticula_mcp.graph import handlers
 from reticula_mcp.search import handlers as search
-from tests.graph_support import mk_hub
+from tests.graph_support import mk_hub, share_to
 
 NEXT = (
     'next: share(hub=<hub>, person="@handle", mode="add" or "read")'
@@ -42,6 +42,20 @@ def unlist(conn, who, value: str = "no") -> None:
     """What the person does: edit(ref="settings", text="listed: no")."""
     with connection.during({"connection": "grant:people"}):
         handlers.edit(conn, who, ref="settings", text=f"listed: {value}")
+
+
+@pytest.fixture
+def make_account(make_account, conn):
+    """Accounts that said "listed: yes", which a new one is not (0358,
+    settings.py); ``listed=False`` makes one as it is when new."""
+
+    def make(*args, listed: bool = True, **kwargs):
+        account = make_account(*args, **kwargs)
+        if listed:
+            unlist(conn, account, "yes")
+        return account
+
+    return make
 
 
 def group(make_account, *names, **kwargs):
@@ -260,10 +274,13 @@ def test_other_kinds_are_not_affected(conn, make_account):
 # --- the setting (reticula_mcp.settings) ---------------------------------------
 
 
-def test_a_new_account_is_listed_until_it_says_no(conn, make_account):
-    z = make_account(handle="fresh-one")
-    assert settings.listed(conn, z)
-    assert handles(find(conn, z, "fresh-one")) == ["fresh-one"]
+def test_a_new_account_is_unlisted_until_it_says_yes(conn, make_account):
+    z = make_account(handle="fresh-one", listed=False)
+    other = make_account(handle="fresh-other")
+    assert not settings.listed(conn, z)
+    assert handles(find(conn, other, "fresh-")) == ["fresh-other"]
+    unlist(conn, z, "yes")
+    assert handles(find(conn, other, "fresh-")) == ["fresh-one", "fresh-other"]
 
 
 def test_listed_yes_puts_an_account_back(conn, make_account):
@@ -340,7 +357,7 @@ def test_share_with_a_malformed_person_keeps_its_bad_input(conn, make_account):
 def test_a_viewer_who_may_not_grant_is_refused_before_the_lookup(conn, make_account):
     owner, outsider, reader = group(make_account, "pc-o", "pc-x", "pc-r")
     hub = mk_hub(conn, owner, "Team")
-    handlers.share(conn, owner, hub=hub, person="@pc-r", mode="read")
+    share_to(conn, owner, hub, "@pc-r", "read")
     for viewer in (outsider, reader):
         for mode in ("none", "read", "add"):
             known = err(

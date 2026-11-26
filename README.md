@@ -247,7 +247,7 @@ Five tool calls, no errors. [docs/trials.md](https://github.com/retospect/reticu
 | `edit` | Makes a new version of one of your own notes. The address stays. |
 | `link` | Files a note under a hub, withdraws it again, or adds another relation. |
 | `delete` | Deletes one of your own notes. The address stays; reading it says the note was withdrawn and returns no content. |
-| `share` | Gives an account access to a hub, changes it, revokes it, or lists who has it. |
+| `share` | Gives an account access to a hub, changes it, revokes it, or lists who has it. Between two people who have no hub between them yet, a share waits until the other person accepts it; `start` lists the shares that wait for you, with the calls that accept, refuse, or refuse and block. |
 
 A note is addressed as `ret:<person id>/<uuid>`. Wherever a tool takes a `ref`, the last six or more characters of the note's id also work if they are unique among the notes you can read.
 
@@ -274,7 +274,7 @@ The reason is federation. Because each record already carries its author, addres
 - Passwords are stored as argon2id hashes. Bearer tokens are stored as SHA-256 hashes.
 - The server writes one line per request to its log: the time, the path without its query string, the status, the caller's IP address, the name the calling program gives itself, and for a refused request the server's own error text. It does not log request bodies, tokens, notes, or what a tool was asked and answered.
 - Sign-ups are open by default and rate-limited per IP address. Set `RETICULA_SIGNUP=closed` to close them.
-- Every account is listed in a directory of people: `search(kind="person")` shows its handle, whether it is verified and the day it joined, never its e-mail address. With open sign-ups, anyone who creates an account can see every listed handle. `edit(ref="settings", text="listed: no")` takes an account out of the list; it can still be shared with by its exact handle.
+- An account can be listed in a directory of people: `search(kind="person")` shows its handle, whether it is verified and the day it joined, never its e-mail address. A new account is not listed until it runs `edit(ref="settings", text="listed: yes")`; an account made before 0.5.0 stays listed until it runs `listed: no`. With open sign-ups, anyone who creates an account can see every listed handle. An account that is not listed can still be shared with by its exact handle.
 - The sign-in page names the host that will receive access to your notes, taken from the address the connector returns to. It shows a warning when that host is not listed in `RETICULA_KNOWN_CLIENTS`. A connector on the same computer does not warn. Read the host before you continue.
 - Serve the MCP endpoint over HTTPS when it leaves your machine or tailnet. A bearer token sent over plain HTTP can be read on the way.
 - Text found in the graph is treated as data written by people and other assistants, never as instructions to follow. The only exception is an instruction note written by the instance's own system account, which is where the shipped instructions come from.

@@ -33,7 +33,7 @@ def test_profile_lists_the_settings_and_the_call(conn: Conn, ana: Account) -> No
     lines = out.splitlines()
     at = lines.index("settings:")
     assert lines[at + 1].startswith("- word handles: off (this connection): ")
-    assert lines[at + 2].startswith("- listed: yes (this account): ")
+    assert lines[at + 2].startswith("- listed: no (this account): ")  # new: unlisted
     assert (
         lines[at + 3] == 'change one with edit(ref="settings", text="word handles: on")'
     )
@@ -55,11 +55,12 @@ def test_word_handles_per_connection_and_listed_per_account(
     assert settings.listed(conn, ana) is True
 
 
-def test_listed_is_yes_until_set(conn: Conn, ana: Account) -> None:
-    assert settings.listed(conn, ana) is True
+def test_listed_is_no_until_set(conn: Conn, ana: Account) -> None:
+    """A new account is unlisted (0.5.0); 0358 kept older accounts listed."""
+    assert settings.listed(conn, ana) is False
 
 
-def test_the_sql_condition_leaves_out_who_set_listed_no(
+def test_the_sql_condition_leaves_out_who_is_not_listed(
     conn: Conn, make_account: Callable[..., Account]
 ) -> None:
     """For a query that lists accounts: its count and limit then agree."""
@@ -71,7 +72,7 @@ def test_the_sql_condition_leaves_out_who_set_listed_no(
         f" AND NOT ({settings.unlisted_sql('a.id')}) ORDER BY a.handle",
         ([ana.id, bea.id, cid.id],),
     ).fetchall()
-    assert [r["handle"] for r in rows] == ["ana", "cid"]
+    assert [r["handle"] for r in rows] == ["cid"]  # ana never set it: unlisted
 
 
 def test_profile_says_what_each_value_does(conn: Conn, ana: Account) -> None:

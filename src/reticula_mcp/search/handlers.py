@@ -13,7 +13,7 @@ from reticula_mcp import handle_words
 from reticula_mcp.accounts import Account
 from reticula_mcp.content import people
 from reticula_mcp.db.pool import Conn
-from reticula_mcp.errors import BAD_INPUT, ReticulaError
+from reticula_mcp.errors import BAD_INPUT, NOT_FOUND, ReticulaError
 from reticula_mcp.format.text import refuse_unstorable
 from reticula_mcp.permissions import readable_among_sql
 from reticula_mcp.resolve import resolve_ref
@@ -379,7 +379,7 @@ def get(
     refuse_unstorable(ref=ref)
     refs = split_refs(ref)
     if len(refs) <= 1:
-        return read_ref(conn, viewer, ref, history=history, depth=depth)
+        return _read_one(conn, viewer, ref, history=history, depth=depth)
     if len(refs) > MAX_REFS:
         raise ReticulaError(
             BAD_INPUT,
@@ -389,11 +389,30 @@ def get(
     answers = []
     for n, one in enumerate(refs, 1):
         try:
-            text = read_ref(conn, viewer, one, history=history, depth=depth)
+            text = _read_one(conn, viewer, one, history=history, depth=depth)
         except ReticulaError as exc:  # this ref fails; the others still answer
             text = exc.render()
         answers.append(f"--- {n} of {len(refs)}: {one} ---\n{text}")
     return "\n".join(answers)
+
+
+def _read_one(
+    conn: Conn, viewer: Account, ref: str, *, history: bool, depth: int
+) -> str:
+    """read_ref; where it finds no readable note, the hub of a share that
+    waits for the viewer answers with its start line (content.handlers
+    .waiting_line): the id was printed by start, and nothing more is shown."""
+    try:
+        return read_ref(conn, viewer, ref, history=history, depth=depth)
+    except ReticulaError as exc:
+        if exc.code != NOT_FOUND:
+            raise
+        from reticula_mcp.content.handlers import waiting_line  # imports search
+
+        line = waiting_line(conn, viewer, ref)
+        if line is None:
+            raise
+        return line
 
 
 #: Refs one ``get`` reads.
