@@ -298,6 +298,8 @@ def _apply_grant(conn: Conn, rec: records.Record, payload: Row) -> None:
     elif not fmt.is_person_id(grantee):
         return
     else:
+        if mode == "none" and _withdraw_own(conn, rec, hub, grantee):
+            return
         try:
             access.authorize_grant(
                 conn, granter=rec.author, hub=hub, grantee=grantee, mode=mode
@@ -305,25 +307,21 @@ def _apply_grant(conn: Conn, rec: records.Record, payload: Row) -> None:
         except ReticulaError as exc:
             log.info("grant %s not applied: %s", rec.address, exc.message)
             return
-        if mode in ("read", "add"):
-            # a share the grantee of a block makes to its blocker lifts it
-            lifted = conn.execute(
-                "DELETE FROM share_block WHERE person = %s AND blocked = %s"
-                " RETURNING 1",
-                (rec.author, grantee),
-            ).fetchone()
-            if lifted:
-                conn.execute(
-                    "UPDATE share_offer SET held = false"
-                    " WHERE grantee = %s AND granted_by = %s",
-                    (rec.author, grantee),
-                )
-        if payload.get("pending") is True and mode in ("read", "add"):
+        if mode in ("read", "add") and access.share_waits(
+            conn,
+            rec.id,
+            hub["id"],
+            rec.author,
+            grantee,
+            payload.get("pending") is True,
+        ):
             _offer(conn, rec, hub, grantee, mode)
             return
-        # a grant of any mode replaces a share that waits; none takes it back
+        # a grant replaces a share that waits; none takes it back, but leaves a
+        # refused one: a share again must not bring it back
         conn.execute(
-            "DELETE FROM share_offer WHERE hub_node_id = %s AND grantee = %s",
+            "DELETE FROM share_offer WHERE hub_node_id = %s AND grantee = %s"
+            + (" AND NOT refused" if mode == "none" else ""),
             (hub["id"], grantee),
         )
         if (
@@ -354,6 +352,37 @@ def _apply_grant(conn: Conn, rec: records.Record, payload: Row) -> None:
             "at": rec.created_at,
         },
     )
+    if mode in ("read", "add") and fmt.is_person_id(grantee):
+        _lift(conn, rec.author, grantee)
+
+
+def _withdraw_own(conn: Conn, rec: records.Record, hub: Row, grantee: str) -> bool:
+    """A sharer who is not the hub's admin takes back their own share that
+    waits (``none``): removed, and nothing else happens. A refused share
+    stays."""
+    if rec.author in (hub["author"], grantee):
+        return False
+    gone = conn.execute(
+        "DELETE FROM share_offer WHERE hub_node_id = %s AND grantee = %s"
+        " AND granted_by = %s AND NOT refused RETURNING 1",
+        (hub["id"], grantee, rec.author),
+    ).fetchone()
+    return gone is not None
+
+
+def _lift(conn: Conn, granter: str, grantee: str) -> None:
+    """A grant from ``granter`` to ``grantee`` that applied (at once, or
+    accepted) lifts the block ``granter`` put on ``grantee``: their held
+    shares show again."""
+    lifted = conn.execute(
+        "DELETE FROM share_block WHERE person = %s AND blocked = %s RETURNING 1",
+        (granter, grantee),
+    ).fetchone()
+    if lifted:
+        conn.execute(
+            "UPDATE share_offer SET held = false WHERE grantee = %s AND granted_by = %s",
+            (granter, grantee),
+        )
 
 
 def _offer(conn: Conn, rec: records.Record, hub: Row, grantee: str, mode: str) -> None:
@@ -361,7 +390,26 @@ def _offer(conn: Conn, rec: records.Record, hub: Row, grantee: str, mode: str) -
     never a hub_grant row, so nothing of the hub reaches the grantee until a
     record of theirs accepts it. Nothing at all when the grantee blocked the
     sharer. A share from someone the grantee blocked is kept ``held``: the
-    sharer sees it wait like any other, the grantee never sees it."""
+    sharer sees it wait like any other, the grantee never sees it.
+
+    A share again keeps its place (created_at) and never brings back one the
+    grantee refused. Only the hub's admin replaces a share of someone else's
+    that waits."""
+    existing = conn.execute(
+        "SELECT granted_by, refused FROM share_offer WHERE hub_node_id = %s"
+        " AND grantee = %s FOR UPDATE",
+        (hub["id"], grantee),
+    ).fetchone()
+    if existing is not None and existing["refused"]:
+        log.info("grant %s not applied: refused before", rec.address)
+        return
+    if (
+        existing is not None
+        and existing["granted_by"] != rec.author
+        and rec.author != hub["author"]
+    ):
+        log.info("grant %s not applied: someone else's share waits", rec.address)
+        return
     conn.execute(
         "INSERT INTO share_offer (hub_node_id, grantee, grantee_account_id, mode,"
         " granted_by, address, record_id, created_at, held)"
@@ -372,8 +420,7 @@ def _offer(conn: Conn, rec: records.Record, hub: Row, grantee: str, mode: str) -
         "  AND blocked = %(by)s))"
         " ON CONFLICT (hub_node_id, grantee) DO UPDATE SET mode = EXCLUDED.mode,"
         " granted_by = EXCLUDED.granted_by, address = EXCLUDED.address,"
-        " record_id = EXCLUDED.record_id, created_at = EXCLUDED.created_at,"
-        " held = EXCLUDED.held, refused = false",
+        " record_id = EXCLUDED.record_id, held = EXCLUDED.held",
         {
             "hub": hub["id"],
             "grantee": grantee,
@@ -451,6 +498,7 @@ def _answer_offer(conn: Conn, rec: records.Record, payload: Row, hub: Row) -> No
             "at": rec.created_at,
         },
     )
+    _lift(conn, offer["granted_by"], rec.author)
 
 
 def _block(conn: Conn, rec: records.Record, sharer: str) -> None:

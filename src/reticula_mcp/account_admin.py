@@ -102,7 +102,8 @@ def delete_everything(conn: Conn, account: Account) -> dict[str, int]:
 def _erase_residue(conn: Conn, account: Account, email: str) -> None:
     """What else names the account: its settings, the connections it was
     pointed to onboarding on, shares of other people's hubs with it and of
-    its own hubs with anyone, unused sign-in codes, and the counters and
+    its own hubs with anyone, shares that wait for it or from it and its
+    blocks (migration 0304), unused sign-in codes, and the counters and
     sign-up attempts that hold its e-mail address."""
     for table in ("account_setting", "connection_setting", "onboarding_shown"):
         conn.execute(f"DELETE FROM {table} WHERE account_id = %s", (account.id,))
@@ -111,6 +112,17 @@ def _erase_residue(conn: Conn, account: Account, email: str) -> None:
         "DELETE FROM hub_grant WHERE grantee = %s OR hub_node_id IN"
         " (SELECT id FROM node WHERE author = %s AND kind = 'hub')",
         (account.person_id, account.person_id),
+    )
+    # shares that wait for it or from it, of its hubs, and its blocks either way
+    conn.execute(
+        "DELETE FROM share_offer WHERE grantee = %(p)s OR granted_by = %(p)s"
+        " OR hub_node_id IN (SELECT id FROM node WHERE author = %(p)s"
+        " AND kind = 'hub')",
+        {"p": account.person_id},
+    )
+    conn.execute(
+        "DELETE FROM share_block WHERE person = %(p)s OR blocked = %(p)s",
+        {"p": account.person_id},
     )
     prefix = f"{email.lower()}|"
     conn.execute(

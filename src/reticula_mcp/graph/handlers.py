@@ -794,16 +794,10 @@ def share(
         if mode == "none"
         else 0
     )
-    # Between two people who have no hub between them yet, a share waits until
-    # its grantee accepts it (migration 0304): until then nothing of the hub
-    # reaches them. Someone who can read the hub already gains nothing hidden.
-    pending = (
-        mode in ("read", "add")
-        and grantee.person_id != viewer.person_id
-        and access.hub_access(conn, grantee.person_id, hub_row["id"]) is None
-        and not access.have_shared(conn, viewer.person_id, grantee.person_id)
-    )
-    api.set_grant(conn, viewer, hub_row["id"], grantee.person_id, mode, pending=pending)
+    # A share waits until its grantee says yes, unless they said yes to the
+    # viewer before (access.have_shared; migrations 0304, 0305): until then
+    # nothing of the hub reaches them. set_grant decides it under the hub lock.
+    pending = api.set_grant(conn, viewer, hub_row["id"], grantee.person_id, mode)
     who = f"@{grantee.handle}"
     where = _name(hub_row)
     if mode == "none":
