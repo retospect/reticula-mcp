@@ -152,6 +152,13 @@ SEMANTIC_ON = "on"  # the vector leg ran
 SEMANTIC_LOADING = "loading"  # the model is still loading: keywords only
 SEMANTIC_OFF = "off"  # no model, or it failed: keywords only
 
+# When the vector leg has nothing at the model's cut, this many of the notes
+# nearest in meaning are returned apart from the results (``Found.weak``): the
+# cut keeps nonsense out, and also real paraphrases a little below it
+# (debug note baada5c5). Only with a real model: the hash embedder compares
+# words, so a weak match by it says nothing about meaning.
+WEAK_SHOWN = 3
+
 # A search inside given ids: the ids that passed the check of ``scope``.
 ONLY_IDS_SQL = "n.id = ANY(%(only_ids)s::bigint[])"
 
@@ -213,6 +220,9 @@ class Found:
     semantic: str  # SEMANTIC_ON | SEMANTIC_LOADING | SEMANTIC_OFF
     partial: list[Partial] = field(default_factory=list)
     more: int = 0  # notes near the viewer like those in ``partial``, not in it
+    # when the vector leg found nothing at the cut: the nearest notes by
+    # meaning, best first, none of them among hits or partial (WEAK_SHOWN)
+    weak: list[int] = field(default_factory=list)
 
 
 def scope(
@@ -666,10 +676,29 @@ def _semantic(
     keyword_ids: list[int] | None = None,
     qvec: list[float] | None = None,
 ) -> list[tuple[int, float]]:
+    """The vector leg: (id, similarity), best first, cut at the model's
+    ``max_distance``."""
+    cut = 1.0 - float(getattr(embedder, "max_distance", 1.0))
+    rows = _semantic_rows(conn, embedder, query, where, params, pool, keyword_ids, qvec)
+    return [(i, s) for i, s in rows if s >= cut]
+
+
+def _semantic_rows(
+    conn: Conn,
+    embedder: Embedder,
+    query: str,
+    where: str,
+    params: dict[str, Any],
+    pool: int,
+    keyword_ids: list[int] | None = None,
+    qvec: list[float] | None = None,
+) -> list[tuple[int, float]]:
+    """The ``pool`` nearest notes in scope, (id, similarity), best first, not
+    cut: :func:`_semantic` cuts them, and the nearest few are the weak
+    matches. One statement either way."""
     if qvec is None:
         qvec = embed_query(embedder, query)
     dim = len(qvec)
-    max_distance = float(getattr(embedder, "max_distance", 1.0))
     # Instructions come back through meaning for almost any question about
     # the product itself, so they join this leg only when asked for by kind
     # or when a keyword leg matched them.
@@ -686,7 +715,8 @@ def _semantic(
     args: dict[str, Any] = {
         **params,
         "vec": Vector(qvec),
-        "max": max_distance,
+        # no cut here: the caller cuts (cosine distance is at most 2)
+        "max": 2.0,
         "pool": pool,
     }
     if indexed:
@@ -958,6 +988,7 @@ def hybrid_search(
     ]
     semantic = SEMANTIC_OFF
     model: tuple[str, list[float]] | None = None
+    nearest: list[int] = []  # weak matches, when the vector leg is empty
     try:
         embedder = get_embedder(settings or Settings.from_env())
         if not is_ready(embedder):
@@ -981,9 +1012,13 @@ def hybrid_search(
                     index.CATCH_UP_CHEAP if cheap else index.CATCH_UP_COSTLY,
                     seconds=None if cheap else index.CATCH_UP_SECONDS,
                 )
-                hits = _semantic(
+                near = _semantic_rows(
                     conn, embedder, query, where, params, pool, keyword_ids, qvec
                 )
+            cut = 1.0 - float(getattr(embedder, "max_distance", 1.0))
+            hits = [(i, s) for i, s in near if s >= cut]
+            if not hits and not cheap:
+                nearest = [i for i, _ in near[: WEAK_SHOWN * 4]]
             legs.append(("semantic", hits))
             semantic = SEMANTIC_ON
             model = (embedder.model, qvec)
@@ -1029,6 +1064,12 @@ def hybrid_search(
             # the vectors gave trouble: order by the words alone
             log.warning("partial matches without distances", exc_info=True)
             partial, more = partial_matches(None)
+    shown = set(ranked) | {p.node_id for p in partial}
+    weak = [i for i in nearest if i not in shown][:WEAK_SHOWN]
     return Found(
-        [Hit(i, scores[i], provenance[i]) for i in ranked], semantic, partial, more
+        [Hit(i, scores[i], provenance[i]) for i in ranked],
+        semantic,
+        partial,
+        more,
+        weak,
     )

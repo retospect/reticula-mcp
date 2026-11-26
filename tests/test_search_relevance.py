@@ -616,14 +616,36 @@ def _reset_embedder_cache():
     emb._build.cache_clear()
 
 
+def _split(out: str) -> tuple[list[str], list[str]]:
+    """The rows of a search answer, and apart from them the rows under the
+    line of the notes nearest in meaning that are no match (handlers.WEAK)."""
+    rows: list[str] = []
+    weak: list[str] = []
+    into = rows
+    for ln in out.splitlines():
+        if ln == handlers.WEAK:
+            into = weak
+        elif ln.startswith("- "):
+            into.append(ln)
+    return rows, weak
+
+
 def search_keys(conn: Conn, world: World, query: str) -> list[str] | None:
-    """Keys in the order ``handlers.search`` lists them; None for 'no results'."""
+    """Keys of the results in the order ``handlers.search`` lists them; None
+    for 'no results'. The weak rows are no results (weak_keys)."""
     out = handlers.search(conn, world.account, query=query, limit=10)
-    lines = [ln for ln in out.splitlines() if ln.startswith("- ")]
+    lines, _weak = _split(out)
     if not lines:
         assert ": no results." in out, out
         return None
     return [world.key_of_short[ln[2:10]] for ln in lines]
+
+
+def weak_keys(conn: Conn, world: World, query: str) -> list[str]:
+    """Keys of the rows under handlers.WEAK, in their order."""
+    out = handlers.search(conn, world.account, query=query, limit=10)
+    _rows, weak = _split(out)
+    return [world.key_of_short[ln[2:10]] for ln in weak]
 
 
 def lexemes(conn: Conn, text: str) -> set[str]:
@@ -752,6 +774,36 @@ def test_real_model_keyword_target_in_top_three(conn, real_world):
 def test_real_model_nonsense_returns_nothing(conn, real_world):
     bad = failures_for(conn, real_world, NONSENSE, is_empty)
     assert not bad, "\n".join(bad)
+
+
+def test_real_model_nonsense_gets_only_weak_rows_under_their_line(conn, real_world):
+    """No result, and what is nearest in meaning stands under the line that
+    says it may be unrelated: at most find.WEAK_SHOWN rows."""
+    for q in of_class(NONSENSE):
+        out = handlers.search(conn, real_world.account, query=q.text, limit=10)
+        rows, weak = _split(out)
+        assert rows == [] and ": no results." in out, out
+        assert 0 < len(weak) <= find.WEAK_SHOWN, out
+        assert out.index(handlers.WEAK) < out.index(weak[0])
+
+
+# Of the paraphrases the results miss, the weak rows bring these targets
+# (debug note baada5c5): "who rehearses getting our data back after a
+# disaster" (pg-backup) and "who gets woken up when something breaks"
+# (oncall). cert-renew stays out: it is not among the three nearest. The test
+# fails when one is lost, and when one is found.
+WEAK_FINDS = 2
+
+
+def test_real_model_weak_rows_bring_a_missed_paraphrase(conn, real_world):
+    found = []
+    for q in of_class(PARAPHRASE):
+        keys = search_keys(conn, real_world, q.text)
+        if keys is not None and any(k in keys[:3] for k in q.expect):
+            continue
+        if any(k in weak_keys(conn, real_world, q.text) for k in q.expect):
+            found.append(q.text)
+    assert len(found) == WEAK_FINDS, found
 
 
 def test_hash_exact_title_ranks_first(conn, hash_world):
