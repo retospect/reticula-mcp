@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased
+
 ## 0.4.2 (2026-11-26)
 
 - Limits on the tools that only read, per account: at most 300 may start per minute (`RETICULA_READ_RATE`), 4 run at once (`RETICULA_READ_CONCURRENCY`; a further one waits up to 10 seconds, holding no database connection, then is refused), and one may take 20 seconds (`RETICULA_READ_SECONDS`). Over a limit the tool answers in the form of the write limit, for example `read limit reached (300/minute); try again in 12 s`. They are kept in the server's memory, per process.
