@@ -154,8 +154,10 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
 
         def work() -> str:
             try:
-                # which connection the call came through (connection.py)
+                # which connection the call came through (connection.py);
+                # what a write wrote is embedded after its commit (hooks.py)
                 with (
+                    search_hooks.after_commit(db, enabled=write),
                     connection.during(token.claims if token else None),
                     db.connection() as conn,
                 ):

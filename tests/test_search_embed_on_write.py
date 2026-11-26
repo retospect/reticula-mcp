@@ -231,3 +231,10 @@ def test_the_worker_records_the_model_when_nothing_is_left(server):
     with connect(db.url) as c:
         assert index.is_complete(c, slow)
         assert pending(c) == set()
+
+
+def test_what_the_model_reads_is_said_in_characters():
+    """For the warning of put and edit about a note longer than that."""
+    reads = index.model_reads_chars()
+    assert reads == 2200
+    assert reads <= index.TEXT_LIMIT

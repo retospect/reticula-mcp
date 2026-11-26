@@ -35,6 +35,21 @@ from reticula_mcp.search.embedder import Embedder
 log = logging.getLogger("reticula_mcp.search")
 
 TEXT_LIMIT = 4000  # characters embedded per node (models truncate anyway)
+# Characters of a note (title line and text, as node_text builds them) that the
+# embedding model reads. bge-small-en-v1.5, bge-base-en-v1.5 and
+# mxbai-embed-large-v1 all stop at 512 tokens of the same vocabulary: 2,265 to
+# 2,527 characters of the English of the 6,000-note test corpus. 2,200 so that a
+# warning about a longer note errs early. The rest is not searched by meaning.
+MODEL_READS_CHARS = 2200
+
+
+def model_reads_chars() -> int:
+    """How much of a note the configured embedding model reads, in characters
+    (never more than TEXT_LIMIT). For the warning of put and edit about a
+    note longer than that. Loads no model and reads no table."""
+    return min(MODEL_READS_CHARS, TEXT_LIMIT)
+
+
 BATCH = 32  # nodes per embed call with a cheap embedder
 BATCH_COSTLY = 4  # ... with a real model (one 4000-character text takes ~0.2 s)
 CATCH_UP_CHEAP = 500  # nodes embedded per search with a cheap embedder
