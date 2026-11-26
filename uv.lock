@@ -1700,7 +1700,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "argon2-cffi", specifier = ">=23.1" },
-    { name = "cryptography", specifier = ">=45" },
+    { name = "cryptography", specifier = ">=46.0.7" },
     { name = "fastembed", marker = "extra == 'fastembed'", specifier = ">=0.4" },
     { name = "mcp", specifier = ">=1.30,<2" },
     { name = "numpy", specifier = ">=2" },
