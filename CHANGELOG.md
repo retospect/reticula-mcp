@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Limits on the tools that only read, per account: at most 300 may start per minute (`RETICULA_READ_RATE`), 4 run at once (`RETICULA_READ_CONCURRENCY`; a further one waits up to 10 seconds, holding no database connection, then is refused), and one may take 20 seconds (`RETICULA_READ_SECONDS`). Over a limit the tool answers in the form of the write limit, for example `read limit reached (300/minute); try again in 12 s`. They are kept in the server's memory, per process.
 - `search(query="", since=...)` and `get` of a deleted address tell of a note deleted or taken out of a hub only when it happened while you could read that hub: a share given afterwards does not tell what was taken away before. `get(ref=<note>, depth=2)` counts only notes you may read in its "and N more" line.
 
 ## 0.4.1 (2026-11-26)

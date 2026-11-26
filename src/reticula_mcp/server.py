@@ -13,6 +13,7 @@ and render ``[error:<Code>] ...`` on :class:`ReticulaError`.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -37,6 +38,7 @@ from reticula_mcp.db.pool import Conn, Database
 from reticula_mcp.errors import INTERNAL, RATE_LIMITED, UNAVAILABLE, ReticulaError
 from reticula_mcp.format.text import refuse_unstorable
 from reticula_mcp.graph import handlers as graph_handlers
+from reticula_mcp.readlimit import Deadline, ReadLimits, ReadRefused, deadline
 from reticula_mcp.requestlog import RequestLog
 from reticula_mcp.seams import AuthWiring
 from reticula_mcp.search import handlers as search_handlers
@@ -86,6 +88,10 @@ def _transport_security(settings: Settings) -> TransportSecuritySettings:
     )
 
 
+#: How long a read waits for a place among the reads of its account.
+READ_WAIT_SECONDS = 10.0
+
+
 def _wait_text(seconds: int) -> str:
     if seconds < 90:
         return f"{seconds} s"
@@ -126,6 +132,24 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
     # text. Otherwise FastMCP derives an output schema from `-> str` and clients
     # hand the model a JSON-escaped {"result": "..."} instead of the lines.
     write_limit, write_window = parse_rate(settings.write_rate)
+    # the tools that only read, per account, in this process (readlimit.py)
+    read_limits = ReadLimits(
+        settings.read_rate, settings.read_concurrency, wait=READ_WAIT_SECONDS
+    )
+
+    def read_refused(refused: ReadRefused) -> ReticulaError:
+        """The same form as the write limit's line."""
+        if refused.wait is None:
+            return ReticulaError(
+                RATE_LIMITED,
+                f"read limit reached ({settings.read_concurrency} at once);"
+                " try again in a moment",
+            )
+        return ReticulaError(
+            RATE_LIMITED,
+            f"read limit reached ({settings.read_rate});"
+            f" try again in {_wait_text(refused.wait)}",
+        )
 
     def limit_writes(conn: Conn, account_id: int) -> None:
         """Count one write for the account, or refuse with the time to wait.
@@ -155,6 +179,7 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
         token = access_token_from_context(ctx)
 
         def work() -> str:
+            stopped: Deadline | None = None
             try:
                 # NUL and lone surrogates cannot be stored: refused here for
                 # every tool. The query of search cleans them out itself.
@@ -170,9 +195,18 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
                     # still counts
                     with db.connection() as tconn:
                         limit_writes(tconn, viewer_for_token(tconn, token).id)
+                # A read waits for its place before it takes a connection
+                # from the pool, and is bounded in time (readlimit.py).
+                subject = token.subject if token is not None else None
+                limited = (
+                    read_limits.read(subject)
+                    if not write and subject
+                    else contextlib.nullcontext()
+                )
                 # which connection the call came through (connection.py);
                 # what a write wrote is embedded after its commit (hooks.py)
                 with (
+                    limited,
                     search_hooks.after_commit(db, enabled=write),
                     connection.during(token.claims if token else None),
                     db.connection() as conn,
@@ -185,11 +219,22 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
                         # A tool that only reads asks once who reads which
                         # hubs. A tool that writes never does: see
                         # permissions.read_call.
-                        with permissions.read_call():
+                        with (
+                            deadline(conn, settings.read_seconds) as stopped,
+                            permissions.read_call(),
+                        ):
                             return handler(conn, viewer, **params)
+            except ReadRefused as refused:
+                return read_refused(refused).render()
             except ReticulaError as exc:
                 return exc.render()
             except psycopg.errors.QueryCanceled:
+                if stopped is not None and stopped.fired:
+                    return ReticulaError(
+                        UNAVAILABLE,
+                        f"the request took longer than {stopped.seconds:g} s"
+                        " and was stopped",
+                    ).render()
                 return _timeout_error(db).render()
             except Exception:
                 log.exception("tool %s failed", getattr(handler, "__name__", "?"))
