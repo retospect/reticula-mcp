@@ -125,42 +125,36 @@ def read_ref(
 
 def _withdrawn(conn: Conn, viewer: Account, ref: str) -> Row | None:
     """A tombstoned node matching ``ref``, if the viewer is allowed to learn that
-    it was withdrawn: its author, or someone who could have read it, which is
-    the ``readable_nodes`` rule minus the tombstone (audience ``hub``, filed by
-    its OWN author in a hub the viewer reads). A filing by anyone else only
-    organises and tells nobody anything. Everything else stays
-    indistinguishable from a missing address."""
+    it was withdrawn: someone who could have read it before, which is
+    ``readable_if_live`` (migration 0353): the ``readable_nodes`` rule minus
+    the tombstone (its author; or audience ``hub``, filed by its OWN author in
+    a hub the viewer reads). A filing by anyone else only organises and tells
+    nobody anything. Everything else stays indistinguishable from a missing
+    address."""
     ref = ref.strip()
     person, slash, _ = ref.partition("/")
     if slash and fmt.is_person_id(person):
         ref = "ret:" + ref  # an address written without its scheme
     tail: dict[str, Any] = {}
     if ref.startswith("ret:"):
-        cond, arg = "n.address = %(ref)s", ref
+        cond, arg = "t.address = %(ref)s", ref
     else:
         suffix = ref.lower()
         if not _SUFFIX_RE.match(suffix) or len(suffix.replace("-", "")) < 6:
             return None
-        cond, arg = ends_with_sql("n.address"), suffix
+        cond, arg = ends_with_sql("t.address"), suffix
         tail = ends_with_params(suffix)
     rows = conn.execute(
         f"""
         SELECT n.id, n.address FROM node n
-        WHERE n.tombstoned_at IS NOT NULL AND {cond}
-          AND (n.author = %(person)s
-               OR (n.audience = 'hub' AND EXISTS (
-                    SELECT 1 FROM membership m
-                    WHERE m.node_id = n.id AND NOT m.withdrawn
-                      AND m.audience = 'hub' AND m.author = n.author
-                      AND {readable_hub_sql("m.hub_node_id")})))
+        WHERE n.id IN (
+            SELECT node_id FROM readable_if_live(%(viewer)s, ARRAY(
+                SELECT t.id FROM node t
+                WHERE t.tombstoned_at IS NOT NULL AND {cond})))
+        ORDER BY n.id
         LIMIT 2
         """,
-        {
-            **tail,
-            "ref": arg,
-            "person": viewer.person_id,
-            "hubs": readable_hub_ids(conn, viewer),
-        },
+        {**tail, "ref": arg, "viewer": viewer.id},
     ).fetchall()
     return rows[0] if len(rows) == 1 else None
 
