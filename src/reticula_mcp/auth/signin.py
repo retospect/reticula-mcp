@@ -20,6 +20,7 @@ from __future__ import annotations
 import hmac
 import logging
 import secrets
+import threading
 from typing import Any
 from urllib.parse import parse_qs
 
@@ -41,6 +42,10 @@ from reticula_mcp.errors import CONFLICT, ReticulaError
 log = logging.getLogger("reticula_mcp.auth")
 
 COOKIE_PATH = "/signin"
+#: Sign-in and sign-up POSTs that may check or make a password hash at once.
+#: Taken before a database connection, so that requests waiting for one
+#: hold no connection: the pool keeps room for every other call.
+HASH_SLOTS = 4
 COOKIE_MAX_AGE = int(config.PENDING_TTL.total_seconds())
 
 
@@ -104,13 +109,22 @@ def routes(settings: Settings, db: Database, provider: ReticulaProvider) -> list
 
     # --- GET -----------------------------------------------------------------
 
-    def get_sync(handle: str, mode: str) -> Response:
+    def get_sync(handle: str, mode: str, cookie: str | None) -> Response:
+        # The token is set once per parked request: a later GET reuses it when
+        # it brings the cookie that holds it, and never replaces it.
         with db.connection() as conn:
             pending = provider.find_pending(conn, handle)
             if pending is None:
                 return page.gone_page()
-            nonce = secrets.token_urlsafe(24)
-            provider.set_csrf(conn, handle, nonce)
+            stored = pending["csrf_hash"]
+            if stored is not None:
+                if not (cookie and _valid(sha256_hex(cookie), stored)):
+                    return page.opened_elsewhere_page()
+                nonce = cookie
+            else:
+                nonce = secrets.token_urlsafe(24)
+                if not provider.set_csrf(conn, handle, nonce):
+                    return page.opened_elsewhere_page()
         response = _render(pending, handle, nonce, mode)
         response.set_cookie(
             cookie_name(handle),
@@ -125,7 +139,13 @@ def routes(settings: Settings, db: Database, provider: ReticulaProvider) -> list
 
     # --- POST ----------------------------------------------------------------
 
+    hash_slots = threading.BoundedSemaphore(HASH_SLOTS)
+
     def post_sync(form: dict[str, str], cookie: str | None, bucket: str) -> Response:
+        with hash_slots:
+            return _post(form, cookie, bucket)
+
+    def _post(form: dict[str, str], cookie: str | None, bucket: str) -> Response:
         handle = form.get("req", "")
         csrf = form.get("csrf", "")
         with db.connection() as conn:
@@ -176,6 +196,7 @@ def routes(settings: Settings, db: Database, provider: ReticulaProvider) -> list
         # requests through a limit of 6). A success takes its own record back.
         # The pooled connection is held during the argon2 check exactly as
         # accounts.authenticate needs it; the locks are not (transaction ends here).
+        # At most HASH_SLOTS requests are here at once (post_sync).
         email_key = f"{email.lower()[: config.MAX_EMAIL_LENGTH]}|{bucket}"
         provisional = throttle.acquire_many(
             conn,
@@ -285,7 +306,8 @@ def routes(settings: Settings, db: Database, provider: ReticulaProvider) -> list
             mode = (
                 "signup" if request.query_params.get("mode") == "signup" else "signin"
             )
-            return await anyio.to_thread.run_sync(get_sync, handle, mode)
+            cookie = request.cookies.get(cookie_name(handle))
+            return await anyio.to_thread.run_sync(get_sync, handle, mode, cookie)
         raw = await read_limited(request, config.MAX_FORM_BODY)
         if raw is None:
             refusal.note("signin: too_large")

@@ -190,7 +190,7 @@ def test_every_page_over_http(fresh_db_url: str) -> None:
             assert "@ana" not in r.text and ana.person_id not in r.text, path
             assert 'href="/static/site.css"' in r.text
         assert "Furnace log" in client.get("/hubs").text
-        assert client.get("/hubs").headers["cache-control"] == "public, max-age=60"
+        assert client.get("/hubs").headers["cache-control"] == "no-cache"
         connect_page = client.get("/connect").text
         assert (
             f"claude mcp add --transport http reticula {live.url}/mcp" in connect_page

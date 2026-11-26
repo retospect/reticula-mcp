@@ -2,11 +2,14 @@
 
 They read nothing from the request but its path: no query string, header or
 cookie is used, so no input can reach a page. /hubs is the only page with data
-from the database; it is rendered at most once a minute per process.
+from the database; it is rendered at most once every HUBS_SECONDS per
+process and sent with no-cache, so a hub taken off the page is gone within that
+time. A render that fails answers 503, and that answer is kept FAILED_SECONDS.
 """
 
 from __future__ import annotations
 
+import logging
 import time
 from importlib import resources
 from threading import Lock
@@ -21,7 +24,13 @@ from reticula_mcp.db.pool import Database
 from reticula_mcp.web import hubs, results, slides, texts
 from reticula_mcp.web.html import HEADERS, page, respond
 
-HUBS_SECONDS = 60
+HUBS_SECONDS = 10
+FAILED_SECONDS = 60
+FAILED = (
+    "<h1>Public hubs</h1><p>The list of public hubs is not available right now."
+    " Try again in a minute.</p>"
+)
+log = logging.getLogger(__name__)
 ROBOTS = "User-agent: *\nAllow: /$\nAllow: /hubs\nDisallow: /\n"
 
 
@@ -32,6 +41,7 @@ class _HubCache:
         self.lock = Lock()
         self.made = 0.0
         self.text = ""
+        self.status = 200
 
 
 def routes(settings: Settings, db: Database) -> list[Route]:
@@ -46,19 +56,25 @@ def routes(settings: Settings, db: Database) -> list[Route]:
 
         return Route(path, endpoint=endpoint, methods=["GET", "HEAD"])
 
-    def render_hubs() -> str:
+    def render_hubs() -> tuple[str, int]:
         with cache.lock:
-            if time.monotonic() - cache.made < HUBS_SECONDS and cache.text:
-                return cache.text
-            with db.connection() as conn:
-                body = hubs.body(conn)
+            keep = HUBS_SECONDS if cache.status == 200 else FAILED_SECONDS
+            if time.monotonic() - cache.made < keep and cache.text:
+                return cache.text, cache.status
+            try:
+                with db.connection() as conn:
+                    body, status = hubs.body(conn), 200
+            except Exception:
+                log.exception("rendering /hubs failed")
+                body, status = FAILED, 503
             cache.text = page("Public hubs · Reticula", body, path="/hubs")
+            cache.status = status
             cache.made = time.monotonic()
-            return cache.text
+            return cache.text, cache.status
 
     async def hub_page(request: Request) -> Response:
-        text = await anyio.to_thread.run_sync(render_hubs)
-        return respond(text, cache_seconds=HUBS_SECONDS)
+        text, status = await anyio.to_thread.run_sync(render_hubs)
+        return respond(text, no_cache=True, status=status)
 
     async def connect_page(request: Request) -> Response:
         # the address is the server's own setting, read now: never stored in a file

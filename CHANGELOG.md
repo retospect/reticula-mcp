@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Hardening of the web pages and the sign-in page: `/hubs` renders any nesting without recursion, shows at most 8 levels below a public hub and at most 2,000 entries, is kept on the server for 10 seconds instead of 60 and sent with `Cache-Control: no-cache`, and answers 503 for a minute when it cannot be rendered; no path is redirected to its form with or without a trailing slash; opening a sign-in page again reuses its form token instead of replacing it, and a page open in another browser says so; at most 4 sign-ins check or set a password at once, and those waiting hold no database connection.
+
 ## 0.4.0 (2026-11-26)
 
 - When no note is close enough in meaning to count as a match, `search` adds the up to 3 notes nearest in meaning under the line `closest in meaning, below the match threshold, may be unrelated:`, apart from the results and also beside a keyword match on something else. Your own notes come first with their text; somebody else's are shown without it. A paraphrase whose note scores a little below the cut is found this way: on the test set it brings 2 of the 3 paraphrases the results miss. A query of nonsense gets such rows too, and no result. It adds about 16 ms to a search that shows them, at 30,000 notes, and nothing to one that does not. Only with an embedding model: `RETICULA_EMBEDDER=hash` compares words and shows none.
