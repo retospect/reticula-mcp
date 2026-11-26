@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Limits on what the tools take, checked before anything is looked up: the `ref` of `get` is at most 2,000 characters and one reference at most 200; a `put` replaces at most 20 notes and takes at most 20 tags. A text with a character the database cannot store (NUL, or a lone surrogate) is refused with a clear error instead of failing inside the server. Titles and tags refuse invisible characters (direction overrides, zero-width spaces, private-use characters); the joiners that emoji and several scripts need are kept. Identifiers no longer match with a line break after them. A deleted address answers as deleted only to someone who could have read the note.
+
 ## 0.4.0 (2026-11-26)
 
 - When no note is close enough in meaning to count as a match, `search` adds the up to 3 notes nearest in meaning under the line `closest in meaning, below the match threshold, may be unrelated:`, apart from the results and also beside a keyword match on something else. Your own notes come first with their text; somebody else's are shown without it. A paraphrase whose note scores a little below the cut is found this way: on the test set it brings 2 of the 3 paraphrases the results miss. A query of nonsense gets such rows too, and no result. It adds about 16 ms to a search that shows them, at 30,000 notes, and nothing to one that does not. Only with an embedding model: `RETICULA_EMBEDDER=hash` compares words and shows none.

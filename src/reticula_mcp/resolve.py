@@ -15,11 +15,27 @@ from reticula_mcp.accounts import (
 from reticula_mcp.db.pool import Conn
 from reticula_mcp.errors import BAD_INPUT, CONFLICT, NOT_FOUND, ReticulaError
 from reticula_mcp.format.address import ADDRESS_SCHEME
+from reticula_mcp.format.text import refuse_unstorable
 from reticula_mcp.permissions import readable_among_sql
 
 MIN_SUFFIX = 6
-_SUFFIX_RE = re.compile(r"^[0-9a-f-]+$")
+#: Characters of one reference: an address has 68, a word handle fewer. A
+#: longer one is refused before anything is looked up or echoed back.
+MAX_REF = 200
+_SUFFIX_RE = re.compile(r"[0-9a-f-]+")
 Row = dict[str, Any]
+
+
+def _check_ref(what: str, ref: str) -> None:
+    """A reference no longer than MAX_REF, with nothing in it the database
+    cannot store."""
+    if len(ref) > MAX_REF:
+        raise ReticulaError(
+            BAD_INPUT,
+            f"a {what} is at most {MAX_REF} characters; this one has {len(ref)}",
+            hint="use a short id, an address, or @handle",
+        )
+    refuse_unstorable(**{what: ref})
 
 
 def ends_with_sql(column: str) -> str:
@@ -57,8 +73,10 @@ def resolve_ref(
     ``BadInput`` for malformed refs, ``NotFound`` when nothing readable
     matches, ``Conflict`` (listing candidates) when a suffix is ambiguous.
     ``allow_tombstoned``: a FULL address may also resolve to a tombstoned
-    node (so ``get`` can answer "deleted" instead of "not found").
+    node (so ``get`` can answer "deleted" instead of "not found"), only for a
+    viewer who could have read it (``readable_if_live``, migration 0353).
     """
+    _check_ref("reference", ref)
     ref = ref.strip()
     person, slash, _ = ref.partition("/")
     if slash and fmt.is_person_id(person):
@@ -75,8 +93,11 @@ def resolve_ref(
         ).fetchone()
         if row is None and allow_tombstoned:
             row = conn.execute(
-                "SELECT n.* FROM node n WHERE n.address = %s AND n.tombstoned_at IS NOT NULL",
-                (ref,),
+                "SELECT n.* FROM node n WHERE n.address = %(ref)s"
+                " AND n.tombstoned_at IS NOT NULL AND n.id IN ("
+                " SELECT node_id FROM readable_if_live(%(viewer)s, ARRAY("
+                "  SELECT a.id FROM node a WHERE a.address = %(ref)s)))",
+                {"ref": ref, "viewer": viewer.id},
             ).fetchone()
         if row is None:
             raise ReticulaError(NOT_FOUND, f"no readable note at {ref}")
@@ -85,7 +106,7 @@ def resolve_ref(
     if spoken is not None:
         return _resolve_words(conn, viewer, ref, *spoken)
     suffix = ref.lower()
-    if not _SUFFIX_RE.match(suffix) or len(suffix.replace("-", "")) < MIN_SUFFIX:
+    if not _SUFFIX_RE.fullmatch(suffix) or len(suffix.replace("-", "")) < MIN_SUFFIX:
         raise ReticulaError(
             BAD_INPUT,
             f"cannot read {ref!r} as a reference",
@@ -158,6 +179,7 @@ def _resolve_words(
 
 def resolve_person(conn: Conn, ref: str) -> Account:
     """Resolve ``@handle`` or a person ID to an :class:`Account`."""
+    _check_ref("person", ref)
     ref = ref.strip()
     account: Account | None
     if ref.startswith("@"):
