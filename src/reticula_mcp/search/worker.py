@@ -120,7 +120,12 @@ class Worker:
             ).fetchone()
             if not row or not row["ok"]:
                 return 0
-            return index.catch_up(conn, self._embedder, None, limit=WORKER_BATCH)
+            done = index.catch_up(conn, self._embedder, None, limit=WORKER_BATCH)
+            if not done:
+                # nothing lacks a vector of this model: from now on the
+                # backlog holds whatever does, and a search reads only that
+                index.mark_complete(conn, self._embedder)
+            return done
 
     def _run(self) -> None:
         self.state = "loading"

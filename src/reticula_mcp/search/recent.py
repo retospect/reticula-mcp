@@ -32,7 +32,13 @@ e. shared: ``hub_grant.updated_at`` of the viewer's own grant, the time of the
    log says since when the person has held access without a break
    (``_granted_since``): a change from read to add is no new share.
 
-Not events: a deletion, a note taken out of a hub, a share taken away.
+Removals (``removals``), one bare line each among the events of the listing:
+a note deleted (its tombstone record), told only to whom could have read it
+(``readable_if_live``) and never with what it said; a note taken out of a hub
+the viewer reads (the withdrawing member record), told to whom that filing
+gave the note (``filings_that_told``) or who can still read it, with its
+title only to the latter. Not in the news lines of ``start``. A share taken
+away is nothing at all.
 
 What the viewer may read
 ------------------------
@@ -74,7 +80,11 @@ from reticula_mcp import records
 from reticula_mcp.accounts import Account
 from reticula_mcp.db.pool import Conn
 from reticula_mcp.errors import BAD_INPUT, ReticulaError
-from reticula_mcp.permissions import readable_hub_ids, readable_nodes_sql
+from reticula_mcp.permissions import (
+    readable_hub_ids,
+    readable_hub_sql,
+    readable_nodes_sql,
+)
 from reticula_mcp.search import find, render
 from reticula_mcp.search.read import member_counts
 from reticula_mcp.search.rows import fetch_rows, visible_subset
@@ -778,6 +788,149 @@ def _others(shown: list[Event]) -> str:
     return f"{sum(1 for e in shown if e.other)} of the {len(shown)} by other people"
 
 
+@dataclass(frozen=True)
+class Removal:
+    """A note deleted, or taken out of a hub, since the moment (item 9)."""
+
+    node_id: int
+    address: str
+    kind: str
+    at: datetime
+    what: str  # deleted | taken out
+    by: str  # the person who signed it
+    hub_id: int | None  # taken out: of which hub
+    titled: bool = False  # taken out: the reader can still read the note
+
+
+def removals(
+    conn: Conn,
+    viewer: Account,
+    *,
+    since: datetime,
+    hub_node_id: int | None = None,
+    kind: str | None = None,
+    limit: int,
+) -> tuple[list[Removal], int]:
+    """Deletions and take-outs since ``since``, newest first: the first
+    ``limit`` and how many there are.
+
+    Deleted: told only where the viewer could have read the note before
+    (``readable_if_live``, migration 0353), and never with what it said.
+    Taken out of a hub the viewer reads: told while the viewer can still read
+    the note (``readable_nodes``), with its title then. With ``hub``, both
+    inside the hub and its sub-hubs. Not told unless asked by kind: debug
+    notes and what the system account did."""
+    params: dict[str, Any] = {
+        "viewer": viewer.id,
+        "person": viewer.person_id,
+        "since": since,
+        "kind": kind,
+        "hubs": readable_hub_ids(conn, viewer),
+        "hub": hub_node_id,
+    }
+    plain = (
+        " AND (%(kind)s::text IS NULL OR n.kind = %(kind)s::text)"
+        " AND (n.kind <> 'debug' OR %(kind)s::text = 'debug')"
+        " AND (%(kind)s::text IS NOT NULL OR NOT EXISTS (SELECT 1 FROM account a"
+        "      WHERE a.person_id = r.author AND a.status = 'system'))"
+    )
+    deleted_in = f" AND n.id IN ({find.subtree_sql()})" if hub_node_id else ""
+    taken_in = (
+        f" AND (m.hub_node_id = %(hub)s OR m.hub_node_id IN ({find.subtree_sql()}))"
+        if hub_node_id
+        else ""
+    )
+    rows = conn.execute(
+        f"""
+        WITH t AS MATERIALIZED (
+            SELECT r.id FROM record r
+            WHERE r.type = 'tombstone' AND r.created_at >= %(since)s
+        )
+        SELECT n.id, n.address, n.kind, r.created_at AS at, 'deleted' AS what,
+               r.author AS by, NULL::bigint AS hub, true AS told
+        FROM record r JOIN node n ON n.address = r.address
+        WHERE r.id IN (SELECT t.id FROM t) AND n.tombstoned_at IS NOT NULL
+          AND n.id IN (SELECT f.node_id FROM readable_if_live(%(viewer)s, ARRAY(
+                SELECT x.id FROM node x JOIN record y ON y.address = x.address
+                WHERE y.id IN (SELECT t.id FROM t))) f){plain}{deleted_in}
+        UNION ALL
+        SELECT n.id, n.address, n.kind, r.created_at, 'taken out', r.author,
+               m.hub_node_id, m.id IN (SELECT f.membership_id
+                   FROM filings_that_told(%(viewer)s, ARRAY(
+                       SELECT w.id FROM membership w WHERE w.record_id = ANY (ARRAY(
+                           SELECT q.id FROM record q WHERE q.type = 'member'
+                             AND q.created_at >= %(since)s)) AND w.withdrawn)) f)
+        FROM membership m JOIN record r ON r.id = m.record_id
+        JOIN node n ON n.id = m.node_id
+        WHERE m.record_id = ANY (ARRAY(
+                SELECT q.id FROM record q
+                WHERE q.type = 'member' AND q.created_at >= %(since)s))
+          AND m.withdrawn AND n.tombstoned_at IS NULL
+          AND {readable_hub_sql("m.hub_node_id")}{plain}{taken_in}
+        ORDER BY at DESC, id DESC
+        """,
+        params,
+        prepare=False,
+    ).fetchall()
+    # taken out: told to whom that filing gave the note (filings_that_told)
+    # or who can still read it; the title only to the latter
+    taken = [r for r in rows if r["what"] == "taken out"]
+    still = visible_subset(conn, viewer, [r["id"] for r in taken]) if taken else set()
+    found = [
+        Removal(
+            r["id"],
+            r["address"],
+            r["kind"],
+            r["at"],
+            r["what"],
+            r["by"],
+            r["hub"],
+            titled=r["id"] in still,
+        )
+        for r in rows
+        if r["what"] == "deleted" or r["told"] or r["id"] in still
+    ]
+    return found[:limit], len(found)
+
+
+def _removal_lines(
+    conn: Conn, viewer: Account, shown: list[Removal], hub: int | None
+) -> dict[int, str]:
+    """One line per removal, by position in ``shown``. A deleted note: its id,
+    kind, who and when, never its title. Taken out: its title too, since the
+    reader can still read it."""
+    people = sorted({r.by for r in shown if r.by != viewer.person_id})
+    handles = _handles(conn, people)
+    named = _named(
+        conn,
+        sorted(
+            {r.node_id for r in shown if r.what == "taken out" and r.titled}
+            | {r.hub_id for r in shown if r.hub_id is not None}
+        ),
+    )
+    out: dict[int, str] = {}
+    for n, r in enumerate(shown):
+        who = "you" if r.by == viewer.person_id else handles.get(r.by, "another person")
+        when = render.age(r.at)
+        head = f"- {render.short_ref(r.address)} {render.kind_word(r.kind)}"
+        if r.what == "deleted":
+            out[n] = f"{head} deleted by {who} · {when}"
+            continue
+        note = named.get(r.node_id) if r.titled else None
+        title = render.quote(note["title"] or note["text"], 80) if note else ""
+        if r.hub_id == hub:
+            where = "this hub"
+        else:
+            h = named.get(r.hub_id) if r.hub_id is not None else None
+            where = (
+                f"hub {render.quote(h['title'], 80)}" if h and h["title"] else "a hub"
+            )
+        out[n] = f"{head} {title} taken out of {where} by {who} · {when}".replace(
+            "  ", " "
+        )
+    return out
+
+
 def answer(
     conn: Conn,
     viewer: Account,
@@ -877,25 +1030,57 @@ def answer(
         include_superseded=include_superseded,
         limit=limit,
     )
-    if not shown:
+    gone, gone_total = removals(
+        conn, viewer, since=moment, hub_node_id=hub_node_id, kind=kind, limit=limit
+    )
+    if not shown and not gone:
         ways = ["an earlier since"]
         if kind or hub:
             ways.append("drop kind or hub")
         return f"new {scope}: nothing that you can read.\nnext: " + ", or ".join(ways)
-    lines = [
-        f"new {scope}: {len(shown)} of {total}, newest first, {_others(shown)} {data}"
-    ]
-    lines.extend(
-        _lines(
-            conn,
-            viewer,
-            shown,
-            moment,
-            handlers.TEXT_FETCHED,
-            history=include_superseded,
-        )
+    # the page: the newest of both, newest first
+    page = sorted(
+        [(e.at, e.node_id, e) for e in shown] + [(r.at, r.node_id, r) for r in gone],
+        key=lambda x: (x[0], x[1]),
+        reverse=True,
+    )[:limit]
+    kept_events = [x[2] for x in page if isinstance(x[2], Event)]
+    kept_gone = [x[2] for x in page if isinstance(x[2], Removal)]
+    total += gone_total
+    others = sum(1 for e in kept_events if e.other) + sum(
+        1 for r in kept_gone if r.by != viewer.person_id
     )
-    if total > len(shown):
+    lines = [
+        f"new {scope}: {len(page)} of {total}, newest first, {others} of the"
+        f" {len(page)} by other people {data}"
+    ]
+    gone_lines = _removal_lines(conn, viewer, kept_gone, hub_node_id)
+    run: list[Event] = []
+    n_gone = 0
+
+    def flush() -> None:
+        if run:
+            lines.extend(
+                _lines(
+                    conn,
+                    viewer,
+                    list(run),
+                    moment,
+                    handlers.TEXT_FETCHED,
+                    history=include_superseded,
+                )
+            )
+            run.clear()
+
+    for _, _, item in page:
+        if isinstance(item, Event):
+            run.append(item)
+        else:
+            flush()
+            lines.append(gone_lines[n_gone])
+            n_gone += 1
+    flush()
+    if total > len(page):
         ways = ["add words to the query"]
         if limit < handlers.MAX_LIMIT:
             ways.insert(0, f"raise limit (at most {handlers.MAX_LIMIT})")
@@ -903,6 +1088,6 @@ def answer(
             ways.append(
                 f"list one hub with search(query='', since='{given}', hub=<hub>)"
             )
-        lines.append(f"... {total - len(shown)} more: " + ", or ".join(ways))
+        lines.append(f"... {total - len(page)} more: " + ", or ".join(ways))
     lines.append(handlers.NEXT_GET)
     return "\n".join(lines)

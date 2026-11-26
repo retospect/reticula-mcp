@@ -510,11 +510,13 @@ def test_a_hub_filed_lately_under_a_hub_the_viewer_reads_is_one_line(
     assert short(inside) not in out
 
 
-def test_deleting_and_taking_a_note_out_are_not_events(
+def test_a_deletion_and_a_take_out_are_bare_lines(
     conn: Conn, make_account: Callable[..., Account], clock: Clock
 ) -> None:
-    """Neither a deletion, nor taking a note out of a hub, nor taking a share
-    away makes a line."""
+    """A note deleted, and a note taken out of a hub the reader reads, are one
+    line each: id, kind, who and when. Neither carries what the note said: the
+    deleted note is gone, and the one taken out is no longer readable. Taking
+    a share away makes no line."""
     ana, bea = people(conn, make_account)
     hub = shared_hub(conn, clock, bea, ana)
     with clock.ago(days=10):
@@ -522,10 +524,58 @@ def test_deleting_and_taking_a_note_out_are_not_events(
         out_of_hub = mk_note(conn, bea, "TOREMOVE note", hub=hub)
     with clock.ago(days=1):
         graph.delete(conn, bea, ref=gone)
+    with clock.ago(hours=20):
         graph.link(conn, bea, ref=out_of_hub, to=hub, remove=True)
     out = recent(conn, ana)
-    assert listed(out) == [], out
-    assert "nothing that you can read" in out
+    lines = out.splitlines()
+    assert (
+        lines[1] == f'- {short(out_of_hub)} note taken out of hub "Board" by @bea · 20h'
+    )
+    assert lines[2] == f"- {short(gone)} note deleted by @bea · 1d"
+    assert shown_and_total(out) == (2, 2)
+    assert "TODELETE" not in out and "TOREMOVE" not in out
+    # in the hub's own listing: "this hub"
+    assert "taken out of this hub by @bea" in recent(conn, ana, hub=hub)
+    # bea did both: they are hers, so she is told them as her own
+    assert "deleted by you" in recent(conn, bea)
+
+
+def test_a_note_taken_out_but_still_readable_keeps_its_title(
+    conn: Conn, make_account: Callable[..., Account], clock: Clock
+) -> None:
+    ana, bea = people(conn, make_account)
+    hub = shared_hub(conn, clock, bea, ana)
+    other = shared_hub(conn, clock, bea, ana, title="Annex")
+    with clock.ago(days=10):
+        moved = mk_note(conn, bea, "MOVED note", hub=hub, title="Moved")
+        graph.link(conn, bea, ref=moved, to=other)
+    with clock.ago(days=1):
+        graph.link(conn, bea, ref=moved, to=hub, remove=True)
+    out = recent(conn, ana)
+    assert f'- {short(moved)} note "Moved" taken out of hub "Board" by @bea · 1d' in out
+
+
+def test_a_deletion_is_told_only_to_who_could_read_the_note(
+    conn: Conn, make_account: Callable[..., Account], clock: Clock
+) -> None:
+    """A private note, and a note in a hub not shared with the reader: their
+    deletion is no line for that reader."""
+    ana, bea = people(conn, make_account)
+    hub = shared_hub(conn, clock, bea, ana)
+    with clock.ago(days=20):
+        closed = mk_hub(conn, bea, "Closed")
+    with clock.ago(days=10):
+        private = mk_note(conn, bea, "PRIVATE note", hub=hub, private=True)
+        unseen = mk_note(conn, bea, "UNSEEN note", hub=closed)
+    with clock.ago(days=1):
+        graph.delete(conn, bea, ref=private)
+        graph.delete(conn, bea, ref=unseen)
+        graph.link(
+            conn, bea, ref=mk_note(conn, bea, "x", hub=closed), to=closed, remove=True
+        )
+    out = recent(conn, ana)
+    assert short(private) not in out and short(unseen) not in out
+    assert "deleted" not in out and "taken out" not in out
 
 
 # ------------------------------------------------------------ order and counts
