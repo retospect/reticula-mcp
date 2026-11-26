@@ -711,133 +711,204 @@ def remove_membership(
 # --- grants --------------------------------------------------------------------
 
 
+#: The one answer to an accept, refuse or block that cannot be done now: the
+#: share was taken back, answered, or the hub changed. It says nothing more of
+#: the hub, which the person has not seen.
+UNAVAILABLE = "that share is no longer available"
+
+
 def set_grant(
     conn: Conn,
     actor: Account,
     hub_node_id: int,
     grantee_person_id: str,
     mode: str,
-    *,
-    pending: bool = False,
-) -> None:
-    """Set a person's access to a hub: ``add``, ``read`` or ``none``.
+) -> bool:
+    """Set a person's access to a hub: ``add``, ``read`` or ``none``. True
+    when the share waits for the person's yes instead (a ``share_offer`` row,
+    migrations 0304, 0305).
 
     See :func:`access.authorize_grant` for who may do what. A grant covers the
     hub and everything filed beneath it. No record is written when the
-    person already has exactly this access.
+    person already has exactly this access, or this share already waits.
 
-    ``pending`` (``read``/``add`` only): the share waits until the grantee
-    accepts it (:func:`answer_offer`); it is a ``share_offer`` row, not a
-    ``hub_grant`` one (materialize._offer). The share tool decides it; the
-    server's own grants (the instructions hub) never wait. ``none`` also takes
-    back a share that waits.
+    Whether a share waits is decided where it is applied (materialize, by
+    access.share_waits) under the lock on the hub taken here; this function
+    asks the same question first only to refuse what would not apply: a
+    share of someone else's that waits (only the admin replaces it), and more
+    than access.OFFERS_PER_SHARER waiting from the actor to the person or
+    access.OFFERS_PER_PERSON waiting for them. ``none`` from the sharer of a
+    share that waits takes it back, also when they are not the admin.
     """
     hub = conn.execute(
         "SELECT * FROM node WHERE id = %s FOR UPDATE", (hub_node_id,)
     ).fetchone()
     if hub is None or hub["kind"] != "hub":
         raise ReticulaError(NOT_FOUND, "no such hub")
-    if grantee_person_id == PUBLIC:
+    grantee = grantee_person_id
+    offer = None
+    if grantee == PUBLIC:
         # the public page (migration 0354): the hub's author only, read or none
         if actor.person_id != hub["author"] or mode not in ("read", "none"):
             raise ReticulaError(
                 FORBIDDEN, "only the hub's owner makes it public, and only to read"
             )
     else:
-        if not fmt.is_person_id(grantee_person_id):
+        if not fmt.is_person_id(grantee):
             raise ReticulaError(BAD_INPUT, "grantee must be a person ID")
-        if get_account_by_person_id(conn, grantee_person_id) is None:
+        if get_account_by_person_id(conn, grantee) is None:
             raise ReticulaError(NOT_FOUND, "no such person on this instance")
-        access.authorize_grant(
-            conn,
-            granter=actor.person_id,
-            hub=hub,
-            grantee=grantee_person_id,
-            mode=mode,
-        )
-    pending = pending and mode in ("read", "add")
+        offer = conn.execute(
+            "SELECT mode, granted_by FROM share_offer WHERE hub_node_id = %s"
+            " AND grantee = %s FOR UPDATE",
+            (hub["id"], grantee),
+        ).fetchone()
+        own_offer = offer is not None and offer["granted_by"] == actor.person_id
+        withdraw = mode == "none" and own_offer and actor.person_id != hub["author"]
+        if not withdraw:
+            access.authorize_grant(
+                conn, granter=actor.person_id, hub=hub, grantee=grantee, mode=mode
+            )
+        if mode in ("read", "add") and access.would_wait(
+            conn, hub["id"], actor.person_id, grantee
+        ):
+            return _offer_checked(conn, actor, hub, grantee, mode, offer)
     existing = conn.execute(
         "SELECT mode FROM hub_grant WHERE hub_node_id = %s AND grantee = %s",
-        (hub["id"], grantee_person_id),
+        (hub["id"], grantee),
     ).fetchone()
-    offer = conn.execute(
-        "SELECT mode, granted_by, refused FROM share_offer WHERE hub_node_id = %s"
-        " AND grantee = %s",
-        (hub["id"], grantee_person_id),
-    ).fetchone()
-    if pending:
-        if (
-            offer
-            and not offer["refused"]
-            and offer["mode"] == mode
-            and offer["granted_by"] == actor.person_id
-        ):
-            return
-    elif (existing and existing["mode"] == mode and offer is None) or (
-        existing is None and offer is None and mode == "none"
+    waiting = offer is not None
+    if (existing and existing["mode"] == mode and not waiting) or (
+        existing is None and not waiting and mode == "none"
     ):
-        return
-    payload: dict[str, Any] = {
-        "hub": hub["address"],
-        "to": grantee_person_id,
-        "mode": mode,
-        "wrapped_key": None,
-    }
-    if pending:
-        payload["pending"] = True
+        return False
+    _write_grant(conn, actor, hub, grantee, mode)
+    if (
+        mode == "none"
+        and actor.person_id == hub["author"]
+        and grantee != actor.person_id
+    ):
+        _detach_owned_hubs(conn, actor, hub, grantee)
+    return False
+
+
+def _offer_checked(
+    conn: Conn, actor: Account, hub: Row, grantee: str, mode: str, offer: Row | None
+) -> bool:
+    """A share that will wait: refused when it would replace another
+    sharer's (unless the actor is the hub's admin) or go over
+    access.OFFERS_PER_SHARER from the actor to the person; nothing written
+    when it already waits as asked, or the person refused this hub from the
+    actor (the sharer is told it waits either way). Past
+    access.OFFERS_PER_PERSON for the person it is held (materialize._offer),
+    which the sharer is not told: that is the person's, not theirs."""
+    if access.refused(conn, hub["id"], grantee, actor.person_id):
+        return True
+    if offer is not None and offer["granted_by"] != actor.person_id:
+        if actor.person_id != hub["author"]:
+            raise ReticulaError(
+                FORBIDDEN,
+                "a share of this hub from someone else already waits for that"
+                " person; only the hub's admin can change it",
+            )
+    elif offer is not None and offer["mode"] == mode:
+        return True
+    if offer is None:
+        mine = conn.execute(
+            "SELECT count(*) AS n FROM share_offer WHERE grantee = %s"
+            " AND granted_by = %s",
+            (grantee, actor.person_id),
+        ).fetchone()
+        if mine and mine["n"] >= access.OFFERS_PER_SHARER:
+            raise ReticulaError(
+                FORBIDDEN,
+                f"{access.OFFERS_PER_SHARER} of your shares already wait for that"
+                " person; they need an answer before you share more",
+            )
+    _write_grant(conn, actor, hub, grantee, mode)
+    return True
+
+
+def _write_grant(conn: Conn, actor: Account, hub: Row, grantee: str, mode: str) -> None:
     rec = _append(
         conn,
         actor,
         type="grant",
         address=fmt.new_address(actor.person_id),
-        payload=payload,
+        payload={
+            "hub": hub["address"],
+            "to": grantee,
+            "mode": mode,
+            "wrapped_key": None,
+        },
         hub_id=_hub_id(hub),
         audience="hub",
     )
     apply_record(conn, rec)
-    if (
-        mode == "none"
-        and actor.person_id == hub["author"]
-        and grantee_person_id != actor.person_id
-    ):
-        _detach_owned_hubs(conn, actor, hub, grantee_person_id)
 
 
 def answer_offer(
     conn: Conn, actor: Account, offer: Row, mode: str, *, block: bool = False
 ) -> None:
     """The grantee's answer to a share that waits for them (``offer``: its
-    share_offer row): ``read`` or ``add`` accepts it, at most at the offered
-    mode; ``none`` refuses it, and ``block`` also holds every share from its
-    sharer until the grantee shares a hub with them (materialize._answer_offer).
-    The record names the share it answers, so it never applies to a later one.
+    share_offer row as they found it): ``read`` or ``add`` accepts it, at
+    most at the offered mode; ``none`` refuses it, and ``block`` also holds
+    every share from its sharer until a share of the grantee's to them
+    applies (materialize._answer_offer). ``block`` also acts on a share the
+    grantee refused before. The record names the share it answers, so it never
+    applies to a later one.
+
+    The share is read again under the lock on the hub; anything that keeps
+    the answer from doing what it says (taken back, answered, the sharer may
+    no longer grant it, the hub went private) is ReticulaError(NOT_FOUND,
+    UNAVAILABLE), and so is an accept that left no grant.
     """
+    if mode not in ("read", "add", "none"):
+        raise ReticulaError(BAD_INPUT, "mode must be add, read or none")
+    gone = ReticulaError(NOT_FOUND, UNAVAILABLE)
     if offer["grantee"] != actor.person_id:
-        raise ReticulaError(NOT_FOUND, "no such share waits for you")
+        raise gone
     hub = conn.execute(
         "SELECT * FROM node WHERE id = %s FOR UPDATE", (offer["hub_node_id"],)
     ).fetchone()
     if hub is None:
-        raise ReticulaError(NOT_FOUND, "no such hub")
+        raise gone
+    now = conn.execute(
+        "SELECT * FROM share_offer WHERE hub_node_id = %s AND grantee = %s"
+        " AND address = %s FOR UPDATE",
+        (hub["id"], actor.person_id, offer["address"]),
+    ).fetchone()
+    if now is None:
+        # a block may still act on a share refused before
+        if not (block and mode == "none"):
+            raise gone
+        now = conn.execute(
+            "SELECT address, sharer AS granted_by FROM share_refusal"
+            " WHERE hub_node_id = %s AND grantee = %s AND address = %s FOR UPDATE",
+            (hub["id"], actor.person_id, offer["address"]),
+        ).fetchone()
+        if now is None:
+            raise gone
+    elif now["held"]:
+        raise gone
     if mode in ("read", "add"):
-        # what the record will do, checked now: the sharer may have lost the
-        # right to share since, or the hub may be private or deleted
-        given = "add" if mode == "add" and offer["mode"] == "add" else "read"
-        access.authorize_grant(
-            conn,
-            granter=offer["granted_by"],
-            hub=hub,
-            grantee=actor.person_id,
-            mode=given,
-        )
-    elif mode != "none":
-        raise ReticulaError(BAD_INPUT, "mode must be add, read or none")
+        given = "add" if mode == "add" and now["mode"] == "add" else "read"
+        try:
+            access.authorize_grant(
+                conn,
+                granter=now["granted_by"],
+                hub=hub,
+                grantee=actor.person_id,
+                mode=given,
+            )
+        except ReticulaError:
+            raise gone from None
     payload: dict[str, Any] = {
         "hub": hub["address"],
         "to": actor.person_id,
         "mode": mode,
         "wrapped_key": None,
-        "answers": offer["address"],
+        "answers": now["address"],
     }
     if block:
         payload["blocks"] = True
@@ -851,6 +922,14 @@ def answer_offer(
         audience="hub",
     )
     apply_record(conn, rec)
+    if mode in ("read", "add"):
+        granted = conn.execute(
+            "SELECT 1 FROM hub_grant WHERE hub_node_id = %s AND grantee = %s"
+            " AND record_id = %s AND mode IN ('read', 'add')",
+            (hub["id"], actor.person_id, rec.id),
+        ).fetchone()
+        if granted is None:
+            raise gone
 
 
 def _detach_owned_hubs(conn: Conn, admin: Account, hub: Row, person_id: str) -> None:

@@ -15,7 +15,7 @@ from tests.conftest import PASSWORD
 
 #: the last migration 0.4.2 shipped; 0304 and the files after 0355 are new
 LAST_OF_042 = 355
-NEW_SINCE_042 = {304}
+NEW_SINCE_042 = {304, 305}
 
 
 def test_an_upgrade_keeps_older_accounts_listed_and_new_ones_are_not(

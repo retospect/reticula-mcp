@@ -219,19 +219,85 @@ def hubs_to_detach(conn: Conn, hub_node_id: int, person_id: str) -> list[Row]:
     ).fetchall()
 
 
-def have_shared(conn: Conn, a: str, b: str) -> bool:
-    """Has either person given the other read or add on a hub, and is it so
-    now? A grant they made, or one on a hub they own, counts; a hub of a third
-    person that both read does not. A share between two people for whom this
-    is false waits for its grantee (graph.handlers.share, migration 0304)."""
+#: A share from someone the grantee has said yes to before applies at once;
+#: else it waits (migrations 0304, 0305).
+OFFERS_PER_SHARER = 20  # waiting from one sharer to one person
+OFFERS_PER_PERSON = 100  # waiting for one person, from everyone
+
+
+def have_shared(conn: Conn, sharer: str, grantee: str) -> bool:
+    """Has ``grantee`` said yes to ``sharer``, and does the access that yes
+    gave still hold? A yes is carried by the grant it made (hub_grant.yes_by,
+    yes_to; migration 0305): the grantee's accepting answer to a share of the
+    sharer's, or the grantee's own share with the sharer that applied at once.
+    A change between read and add keeps it; mode none on that grant ends it.
+    Reading the hub already, through a hub above, a share of the sharer's hub
+    by a third person, or a change of mode by the sharer, is no yes."""
     row = conn.execute(
         "SELECT 1 FROM hub_grant g JOIN node h ON h.id = g.hub_node_id"
-        " WHERE g.mode IN ('read', 'add') AND h.kind = 'hub'"
-        " AND h.tombstoned_at IS NULL"
-        " AND ((g.grantee = %(b)s AND (g.granted_by = %(a)s OR h.author = %(a)s))"
-        "   OR (g.grantee = %(a)s AND (g.granted_by = %(b)s OR h.author = %(b)s)))"
-        " LIMIT 1",
-        {"a": a, "b": b},
+        " WHERE g.yes_by = %(grantee)s AND g.yes_to = %(sharer)s"
+        " AND g.mode IN ('read', 'add') AND h.kind = 'hub'"
+        " AND h.tombstoned_at IS NULL LIMIT 1",
+        {"sharer": sharer, "grantee": grantee},
+    ).fetchone()
+    return row is not None
+
+
+def would_wait(conn: Conn, hub_node_id: int, sharer: str, grantee: str) -> bool:
+    """Would a share (read or add) of this hub from ``sharer`` wait for
+    ``grantee`` now? Not for the server's own grants (the instructions hub),
+    not for a person who reads or adds on this hub by a grant of their own
+    there already (a change of mode shows nothing new), else unless
+    have_shared."""
+    if sharer == grantee:
+        return False
+    system = conn.execute(
+        "SELECT 1 FROM account WHERE person_id = %s AND status = 'system'",
+        (sharer,),
+    ).fetchone()
+    if system is not None:
+        return False
+    has = conn.execute(
+        "SELECT 1 FROM hub_grant WHERE hub_node_id = %s AND grantee = %s"
+        " AND mode IN ('read', 'add')",
+        (hub_node_id, grantee),
+    ).fetchone()
+    return has is None and not have_shared(conn, sharer, grantee)
+
+
+def share_waits(
+    conn: Conn, rec_id: int, hub_node_id: int, sharer: str, grantee: str, said: bool
+) -> bool:
+    """Does the share made by record ``rec_id`` wait? Decided from the tables
+    when the record is applied (would_wait), whatever the record says; a
+    record written before 0305 (share_rule_start) keeps the meaning it was
+    written with (``said``: it said "pending"). Without that row the share
+    waits: a lost cut-off never lets a share through."""
+    start = conn.execute("SELECT record_id FROM share_rule_start").fetchone()
+    if start is None:
+        return True
+    if rec_id <= int(start["record_id"]):
+        return said
+    return would_wait(conn, hub_node_id, sharer, grantee)
+
+
+def refused(conn: Conn, hub_node_id: int, grantee: str, sharer: str) -> bool:
+    """Did ``grantee`` refuse a share of this hub from ``sharer``? It holds
+    against that sharer only (share_refusal, migration 0305)."""
+    row = conn.execute(
+        "SELECT 1 FROM share_refusal WHERE hub_node_id = %s AND grantee = %s"
+        " AND sharer = %s",
+        (hub_node_id, grantee, sharer),
+    ).fetchone()
+    return row is not None
+
+
+def own_waiting_offer(conn: Conn, sharer: str, hub_node_id: int) -> bool:
+    """Has ``sharer`` a share of this hub that waits for anyone?
+    They may take it back (mode none) though only the admin revokes."""
+    row = conn.execute(
+        "SELECT 1 FROM share_offer WHERE hub_node_id = %s AND granted_by = %s LIMIT 1",
+        (hub_node_id, sharer),
     ).fetchone()
     return row is not None
 
@@ -328,6 +394,8 @@ def precheck_grant(
         raise ReticulaError(BAD_INPUT, f"mode must be one of {', '.join(MODES)}")
     if granter == hub["author"] or targets_self:
         return
+    if mode == "none" and own_waiting_offer(conn, granter, hub["id"]):
+        return  # their own share that waits: they may take it back
     if mode == "none":
         raise ReticulaError(
             FORBIDDEN,

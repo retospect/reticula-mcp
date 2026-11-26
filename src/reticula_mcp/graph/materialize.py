@@ -298,6 +298,8 @@ def _apply_grant(conn: Conn, rec: records.Record, payload: Row) -> None:
     elif not fmt.is_person_id(grantee):
         return
     else:
+        if mode == "none" and _withdraw_own(conn, rec, hub, grantee):
+            return
         try:
             access.authorize_grant(
                 conn, granter=rec.author, hub=hub, grantee=grantee, mode=mode
@@ -305,23 +307,18 @@ def _apply_grant(conn: Conn, rec: records.Record, payload: Row) -> None:
         except ReticulaError as exc:
             log.info("grant %s not applied: %s", rec.address, exc.message)
             return
-        if mode in ("read", "add"):
-            # a share the grantee of a block makes to its blocker lifts it
-            lifted = conn.execute(
-                "DELETE FROM share_block WHERE person = %s AND blocked = %s"
-                " RETURNING 1",
-                (rec.author, grantee),
-            ).fetchone()
-            if lifted:
-                conn.execute(
-                    "UPDATE share_offer SET held = false"
-                    " WHERE grantee = %s AND granted_by = %s",
-                    (rec.author, grantee),
-                )
-        if payload.get("pending") is True and mode in ("read", "add"):
+        if mode in ("read", "add") and access.share_waits(
+            conn,
+            rec.id,
+            hub["id"],
+            rec.author,
+            grantee,
+            payload.get("pending") is True,
+        ):
             _offer(conn, rec, hub, grantee, mode)
             return
-        # a grant of any mode replaces a share that waits; none takes it back
+        # a grant replaces a share that waits; none takes it back (a refusal,
+        # in share_refusal, stays)
         conn.execute(
             "DELETE FROM share_offer WHERE hub_node_id = %s AND grantee = %s",
             (hub["id"], grantee),
@@ -335,15 +332,7 @@ def _apply_grant(conn: Conn, rec: records.Record, payload: Row) -> None:
         ):
             return  # it only took back a share that waited: no revoked row
     conn.execute(
-        "INSERT INTO hub_grant (hub_node_id, grantee, grantee_account_id, mode,"
-        " granted_by, address, record_id, created_at, updated_at)"
-        " VALUES (%(hub)s, %(grantee)s,"
-        " (SELECT id FROM account WHERE person_id = %(grantee)s), %(mode)s,"
-        " %(by)s, %(address)s, %(record_id)s, %(at)s, %(at)s)"
-        " ON CONFLICT (hub_node_id, grantee) DO UPDATE SET mode = EXCLUDED.mode,"
-        " granted_by = EXCLUDED.granted_by, address = EXCLUDED.address,"
-        " record_id = EXCLUDED.record_id, updated_at = EXCLUDED.updated_at,"
-        " grantee_account_id = EXCLUDED.grantee_account_id",
+        _GRANT_UPSERT,
         {
             "hub": hub["id"],
             "grantee": grantee,
@@ -352,8 +341,77 @@ def _apply_grant(conn: Conn, rec: records.Record, payload: Row) -> None:
             "address": rec.address,
             "record_id": rec.id,
             "at": rec.created_at,
+            # a share that applied at once is its author's yes to the grantee
+            "yes_by": rec.author if _gives_yes(conn, rec, grantee, mode) else None,
+            "yes_to": grantee if _gives_yes(conn, rec, grantee, mode) else None,
+            "renew": False,
         },
     )
+    if mode in ("read", "add") and fmt.is_person_id(grantee):
+        _lift(conn, rec.author, grantee)
+
+
+#: The one write of a hub_grant row. The yes it carries (yes_by said yes to
+#: yes_to, migration 0305) stays through a change between read and add by
+#: anyone; an accept (``renew``) or a grant after none gives the row a new one.
+_GRANT_UPSERT = (
+    "INSERT INTO hub_grant (hub_node_id, grantee, grantee_account_id, mode,"
+    " granted_by, address, record_id, created_at, updated_at, yes_by, yes_to)"
+    " VALUES (%(hub)s, %(grantee)s,"
+    " (SELECT id FROM account WHERE person_id = %(grantee)s), %(mode)s,"
+    " %(by)s, %(address)s, %(record_id)s, %(at)s, %(at)s, %(yes_by)s, %(yes_to)s)"
+    " ON CONFLICT (hub_node_id, grantee) DO UPDATE SET mode = EXCLUDED.mode,"
+    " granted_by = EXCLUDED.granted_by, address = EXCLUDED.address,"
+    " record_id = EXCLUDED.record_id, updated_at = EXCLUDED.updated_at,"
+    " grantee_account_id = EXCLUDED.grantee_account_id,"
+    " yes_by = CASE WHEN NOT %(renew)s AND hub_grant.yes_by IS NOT NULL"
+    "  AND hub_grant.mode IN ('read', 'add') AND EXCLUDED.mode IN ('read', 'add')"
+    "  THEN hub_grant.yes_by ELSE EXCLUDED.yes_by END,"
+    " yes_to = CASE WHEN NOT %(renew)s AND hub_grant.yes_by IS NOT NULL"
+    "  AND hub_grant.mode IN ('read', 'add') AND EXCLUDED.mode IN ('read', 'add')"
+    "  THEN hub_grant.yes_to ELSE EXCLUDED.yes_to END"
+)
+
+
+def _gives_yes(conn: Conn, rec: records.Record, grantee: str, mode: str) -> bool:
+    """A grant that applies at once is a yes of its author to the grantee,
+    unless it is the server's own (the instructions hub) or the public page."""
+    if mode not in ("read", "add") or not fmt.is_person_id(grantee):
+        return False
+    system = conn.execute(
+        "SELECT 1 FROM account WHERE person_id = %s AND status = 'system'",
+        (rec.author,),
+    ).fetchone()
+    return system is None
+
+
+def _withdraw_own(conn: Conn, rec: records.Record, hub: Row, grantee: str) -> bool:
+    """A sharer who is not the hub's admin takes back their own share that
+    waits (``none``): removed, and nothing else happens. A refusal
+    stays."""
+    if rec.author in (hub["author"], grantee):
+        return False
+    gone = conn.execute(
+        "DELETE FROM share_offer WHERE hub_node_id = %s AND grantee = %s"
+        " AND granted_by = %s RETURNING 1",
+        (hub["id"], grantee, rec.author),
+    ).fetchone()
+    return gone is not None
+
+
+def _lift(conn: Conn, granter: str, grantee: str) -> None:
+    """A grant from ``granter`` to ``grantee`` that applied (at once, or
+    accepted) lifts the block ``granter`` put on ``grantee``: their held
+    shares show again."""
+    lifted = conn.execute(
+        "DELETE FROM share_block WHERE person = %s AND blocked = %s RETURNING 1",
+        (granter, grantee),
+    ).fetchone()
+    if lifted:
+        conn.execute(
+            "UPDATE share_offer SET held = false WHERE grantee = %s AND granted_by = %s",
+            (granter, grantee),
+        )
 
 
 def _offer(conn: Conn, rec: records.Record, hub: Row, grantee: str, mode: str) -> None:
@@ -361,7 +419,28 @@ def _offer(conn: Conn, rec: records.Record, hub: Row, grantee: str, mode: str) -
     never a hub_grant row, so nothing of the hub reaches the grantee until a
     record of theirs accepts it. Nothing at all when the grantee blocked the
     sharer. A share from someone the grantee blocked is kept ``held``: the
-    sharer sees it wait like any other, the grantee never sees it."""
+    sharer sees it wait like any other, the grantee never sees it.
+
+    A share again keeps its place (created_at). A share of this hub the
+    grantee refused from this sharer makes nothing (share_refusal); from
+    another sharer it waits as any other. Only the hub's admin replaces a
+    share of someone else's that waits. Past access.OFFERS_PER_PERSON shares
+    shown to the grantee, a new one is held too: the sharer sees it wait."""
+    if access.refused(conn, hub["id"], grantee, rec.author):
+        log.info("grant %s not applied: refused before", rec.address)
+        return
+    existing = conn.execute(
+        "SELECT granted_by, held FROM share_offer WHERE hub_node_id = %s"
+        " AND grantee = %s FOR UPDATE",
+        (hub["id"], grantee),
+    ).fetchone()
+    if (
+        existing is not None
+        and existing["granted_by"] != rec.author
+        and rec.author != hub["author"]
+    ):
+        log.info("grant %s not applied: someone else's share waits", rec.address)
+        return
     conn.execute(
         "INSERT INTO share_offer (hub_node_id, grantee, grantee_account_id, mode,"
         " granted_by, address, record_id, created_at, held)"
@@ -369,11 +448,10 @@ def _offer(conn: Conn, rec: records.Record, hub: Row, grantee: str, mode: str) -
         " (SELECT id FROM account WHERE person_id = %(grantee)s), %(mode)s,"
         " %(by)s, %(address)s, %(record_id)s, %(at)s,"
         " EXISTS (SELECT 1 FROM share_block WHERE person = %(grantee)s"
-        "  AND blocked = %(by)s))"
+        "  AND blocked = %(by)s) OR %(full)s)"
         " ON CONFLICT (hub_node_id, grantee) DO UPDATE SET mode = EXCLUDED.mode,"
         " granted_by = EXCLUDED.granted_by, address = EXCLUDED.address,"
-        " record_id = EXCLUDED.record_id, created_at = EXCLUDED.created_at,"
-        " held = EXCLUDED.held, refused = false",
+        " record_id = EXCLUDED.record_id, held = EXCLUDED.held",
         {
             "hub": hub["id"],
             "grantee": grantee,
@@ -382,8 +460,19 @@ def _offer(conn: Conn, rec: records.Record, hub: Row, grantee: str, mode: str) -
             "address": rec.address,
             "record_id": rec.id,
             "at": rec.created_at,
+            # a share again keeps being held for a full inbox, or shown
+            "full": bool(existing["held"]) if existing else _full(conn, grantee),
         },
     )
+
+
+def _full(conn: Conn, grantee: str) -> bool:
+    """Does ``grantee`` have access.OFFERS_PER_PERSON shares shown already?"""
+    row = conn.execute(
+        "SELECT count(*) AS n FROM share_offer WHERE grantee = %s AND NOT held",
+        (grantee,),
+    ).fetchone()
+    return row is not None and int(row["n"]) >= access.OFFERS_PER_PERSON
 
 
 def _answer_offer(conn: Conn, rec: records.Record, payload: Row, hub: Row) -> None:
@@ -391,30 +480,52 @@ def _answer_offer(conn: Conn, rec: records.Record, payload: Row, hub: Row) -> No
     names the address of that share's record, so an answer never applies to a
     later share. ``read``/``add`` accept it at the lower of the offered and
     the asked mode, checked again against what the sharer may grant now;
-    ``none`` refuses it (the row stays, ``refused``), and with ``blocks``
-    also stops later shares from the sharer. A share already refused takes
-    only a block; a held one takes nothing."""
+    ``none`` refuses it (the share goes, a share_refusal row against its
+    sharer stays), and with ``blocks`` also stops later shares from the
+    sharer. A share already refused takes only a block; a held one takes
+    nothing."""
+    answers = _text(payload.get("answers"))
+    asked = _text(payload.get("mode"))
+    blocks = payload.get("blocks") is True and asked not in ("read", "add")
+    if _text(payload.get("to")) != rec.author:
+        return
     offer = conn.execute(
         "SELECT * FROM share_offer WHERE hub_node_id = %s AND grantee = %s"
         " AND address = %s",
-        (hub["id"], rec.author, _text(payload.get("answers"))),
+        (hub["id"], rec.author, answers),
     ).fetchone()
-    if offer is None or _text(payload.get("to")) != rec.author:
-        log.info("answer %s not applied: no such share waits", rec.address)
-        return
-    asked = _text(payload.get("mode"))
-    blocks = payload.get("blocks") is True and asked not in ("read", "add")
-    if offer["refused"] or offer["held"]:
-        if offer["refused"] and blocks:
-            _block(conn, rec, offer["granted_by"])
+    if offer is None:
+        refusal = conn.execute(
+            "SELECT sharer FROM share_refusal WHERE hub_node_id = %s"
+            " AND grantee = %s AND address = %s",
+            (hub["id"], rec.author, answers),
+        ).fetchone()
+        if refusal is not None and blocks:
+            _block(conn, rec, refusal["sharer"])
         else:
-            log.info("answer %s not applied: the share was answered", rec.address)
+            log.info("answer %s not applied: no such share waits", rec.address)
+        return
+    if offer["held"]:
+        log.info("answer %s not applied: the share is held", rec.address)
         return
     if asked not in ("read", "add"):
         conn.execute(
-            "UPDATE share_offer SET refused = true WHERE hub_node_id = %s"
-            " AND grantee = %s",
+            "DELETE FROM share_offer WHERE hub_node_id = %s AND grantee = %s",
             (hub["id"], rec.author),
+        )
+        conn.execute(
+            "INSERT INTO share_refusal (hub_node_id, grantee, sharer, address,"
+            " record_id, created_at) VALUES (%s, %s, %s, %s, %s, %s)"
+            " ON CONFLICT (hub_node_id, grantee, sharer) DO UPDATE SET"
+            " address = EXCLUDED.address, record_id = EXCLUDED.record_id",
+            (
+                hub["id"],
+                rec.author,
+                offer["granted_by"],
+                offer["address"],
+                rec.id,
+                rec.created_at,
+            ),
         )
         if blocks:
             _block(conn, rec, offer["granted_by"])
@@ -432,15 +543,7 @@ def _answer_offer(conn: Conn, rec: records.Record, payload: Row, hub: Row) -> No
         log.info("answer %s not applied: %s", rec.address, exc.message)
         return
     conn.execute(
-        "INSERT INTO hub_grant (hub_node_id, grantee, grantee_account_id, mode,"
-        " granted_by, address, record_id, created_at, updated_at)"
-        " VALUES (%(hub)s, %(grantee)s,"
-        " (SELECT id FROM account WHERE person_id = %(grantee)s), %(mode)s,"
-        " %(by)s, %(address)s, %(record_id)s, %(at)s, %(at)s)"
-        " ON CONFLICT (hub_node_id, grantee) DO UPDATE SET mode = EXCLUDED.mode,"
-        " granted_by = EXCLUDED.granted_by, address = EXCLUDED.address,"
-        " record_id = EXCLUDED.record_id, updated_at = EXCLUDED.updated_at,"
-        " grantee_account_id = EXCLUDED.grantee_account_id",
+        _GRANT_UPSERT,
         {
             "hub": hub["id"],
             "grantee": rec.author,
@@ -449,8 +552,13 @@ def _answer_offer(conn: Conn, rec: records.Record, payload: Row, hub: Row) -> No
             "address": rec.address,
             "record_id": rec.id,
             "at": rec.created_at,
+            # the accept is the grantee's yes to the sharer
+            "yes_by": rec.author,
+            "yes_to": offer["granted_by"],
+            "renew": True,
         },
     )
+    _lift(conn, offer["granted_by"], rec.author)
 
 
 def _block(conn: Conn, rec: records.Record, sharer: str) -> None:
@@ -527,6 +635,7 @@ def rebuild(conn: Conn) -> dict[str, int]:
     conn.execute("DELETE FROM hub_grant")
     conn.execute("DELETE FROM share_offer")
     conn.execute("DELETE FROM share_block")
+    conn.execute("DELETE FROM share_refusal")
     conn.execute(
         "UPDATE node SET kind = 'unreplayed', title = NULL, text = '', tags = '{}',"
         " payload = '{}'::jsonb, ext_key = NULL, audience = 'private',"

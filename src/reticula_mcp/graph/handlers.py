@@ -547,19 +547,47 @@ def offer_for(
     tail = ref if len(ref) >= 6 and set(ref) <= _HEX else None
     if not ref.startswith("ret:") and tail is None:
         return None
+    params = {"me": viewer.person_id, "ref": ref, "tail": tail}
+    match = (
+        " AND (lower(h.address) = %(ref)s"
+        "      OR (%(tail)s::text IS NOT NULL AND right(lower(h.address),"
+        "          length(%(tail)s::text)) = %(tail)s::text))"
+    )
+    if refused:
+        # a share already refused (share_refusal), the newest, if none waits
+        found = conn.execute(
+            "SELECT o.*, h.address AS hub_address, a.handle AS sharer_handle"
+            " FROM share_offer o JOIN node h ON h.id = o.hub_node_id"
+            " LEFT JOIN account a ON a.person_id = o.granted_by"
+            " WHERE o.grantee = %(me)s AND NOT o.held AND h.tombstoned_at IS NULL"
+            f"{match} LIMIT 2",
+            params,
+        ).fetchall()
+        if found:
+            return {**found[0], "refused": False} if len(found) == 1 else None
+        row = conn.execute(
+            "SELECT r.hub_node_id, r.grantee, r.sharer AS granted_by, r.address,"
+            " NULL AS mode, h.address AS hub_address, a.handle AS sharer_handle"
+            " FROM share_refusal r JOIN node h ON h.id = r.hub_node_id"
+            " LEFT JOIN account a ON a.person_id = r.sharer"
+            " WHERE r.grantee = %(me)s AND h.tombstoned_at IS NULL"
+            f"{match} ORDER BY r.created_at DESC LIMIT 1",
+            params,
+        ).fetchone()
+        return {**row, "refused": True, "held": False} if row else None
     rows = conn.execute(
         "SELECT o.*, h.address AS hub_address, a.handle AS sharer_handle"
         " FROM share_offer o JOIN node h ON h.id = o.hub_node_id"
         " LEFT JOIN account a ON a.person_id = o.granted_by"
         " WHERE o.grantee = %(me)s AND h.tombstoned_at IS NULL"
-        " AND (o.refused AND %(refused)s OR NOT o.refused AND NOT o.held)"
+        " AND NOT o.held"
         " AND (lower(h.address) = %(ref)s"
         "      OR (%(tail)s::text IS NOT NULL AND right(lower(h.address),"
         "          length(%(tail)s::text)) = %(tail)s::text))"
         " LIMIT 2",
-        {"me": viewer.person_id, "ref": ref, "tail": tail, "refused": refused},
+        params,
     ).fetchall()
-    return rows[0] if len(rows) == 1 else None
+    return {**rows[0], "refused": False} if len(rows) == 1 else None
 
 
 def _answer_offer(
@@ -580,13 +608,14 @@ def _answer_offer(
         if block and offer["refused"]:
             return (
                 f"stopped further shares from {sharer}; their share of hub id"
-                f" {short} was already refused; sharing a hub with {sharer}"
-                " lifts this"
+                f" {short} was already refused; a hub you share with {sharer}"
+                " lifts this once they can read it"
             )
         if block:
             return (
                 f"refused {sharer}'s share of hub id {short} and stopped further"
-                f" shares from {sharer}; sharing a hub with {sharer} lifts this"
+                f" shares from {sharer}; a hub you share with {sharer} lifts this"
+                " once they can read it"
             )
         return (
             f"refused {sharer}'s share of hub id {short}; nothing of it was shown"
@@ -628,7 +657,7 @@ def _list_access(conn: Conn, viewer: Account, hub: Row) -> str:
         # shares that wait, held ones too: a block is not shown to the sharer
         for r in conn.execute(
             "SELECT grantee, mode, granted_by FROM share_offer"
-            " WHERE hub_node_id = %s AND NOT refused ORDER BY created_at, grantee",
+            " WHERE hub_node_id = %s ORDER BY created_at, grantee",
             (hub["id"],),
         ).fetchall():
             lines.append(
@@ -794,16 +823,10 @@ def share(
         if mode == "none"
         else 0
     )
-    # Between two people who have no hub between them yet, a share waits until
-    # its grantee accepts it (migration 0304): until then nothing of the hub
-    # reaches them. Someone who can read the hub already gains nothing hidden.
-    pending = (
-        mode in ("read", "add")
-        and grantee.person_id != viewer.person_id
-        and access.hub_access(conn, grantee.person_id, hub_row["id"]) is None
-        and not access.have_shared(conn, viewer.person_id, grantee.person_id)
-    )
-    api.set_grant(conn, viewer, hub_row["id"], grantee.person_id, mode, pending=pending)
+    # A share waits until its grantee says yes, unless they said yes to the
+    # viewer before (access.have_shared; migrations 0304, 0305): until then
+    # nothing of the hub reaches them. set_grant decides it under the hub lock.
+    pending = api.set_grant(conn, viewer, hub_row["id"], grantee.person_id, mode)
     who = f"@{grantee.handle}"
     where = _name(hub_row)
     if mode == "none":

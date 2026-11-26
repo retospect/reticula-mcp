@@ -283,35 +283,45 @@ def waiting_line(conn: Conn, viewer: Account, ref: str) -> str | None:
 
 
 def _offer_lines(conn: Conn, viewer: Account) -> list[str]:
-    """The shares that wait for the viewer's yes (migration 0304), newest
-    first, at most START_OFFER_LIMIT, then how many more. A line names the
-    sharer and the hub's id, never its title: that is the sharer's text, and
-    nothing of the hub is shown before the person accepts. Held shares (from
-    someone the viewer blocked) are never named or counted."""
+    """The shares that wait for the viewer's yes (migration 0304): one line
+    per sharer, for their newest share, with how many more of theirs wait;
+    sharers by their newest share, at most START_OFFER_LIMIT, then how many
+    shares more. A line names the sharer and the hub's id, never its title:
+    that is the sharer's text, and nothing of the hub is shown before the
+    person accepts. Held shares (from someone the viewer blocked) are never
+    named or counted. One sharer cannot fill the lines of everyone else."""
     waiting = (
         " FROM share_offer o JOIN node h ON h.id = o.hub_node_id"
-        " LEFT JOIN account a ON a.person_id = o.granted_by"
-        " WHERE o.grantee_account_id = %(viewer)s AND NOT o.held AND NOT o.refused"
+        " WHERE o.grantee_account_id = %(viewer)s AND NOT o.held"
         " AND h.tombstoned_at IS NULL"
     )
     rows = conn.execute(
-        f"SELECT o.mode, h.address, a.handle, o.granted_by {waiting}"
-        " ORDER BY o.created_at DESC, o.hub_node_id DESC LIMIT %(limit)s",
+        "SELECT w.mode, w.address, a.handle, w.granted_by, w.n FROM ("
+        " SELECT DISTINCT ON (o.granted_by) o.mode, h.address, o.granted_by,"
+        "  o.created_at, o.hub_node_id,"
+        "  count(*) OVER (PARTITION BY o.granted_by) AS n"
+        f" {waiting}"
+        " ORDER BY o.granted_by, o.created_at DESC, o.hub_node_id DESC) w"
+        " LEFT JOIN account a ON a.person_id = w.granted_by"
+        " ORDER BY w.created_at DESC, w.hub_node_id DESC LIMIT %(limit)s",
         {"viewer": viewer.id, "limit": START_OFFER_LIMIT},
     ).fetchall()
     if not rows:
         return []
-    lines = [
-        offer_line(viewer, r["handle"], r["granted_by"], r["address"], r["mode"])
-        for r in rows
-    ]
+    lines = []
+    for r in rows:
+        line = offer_line(viewer, r["handle"], r["granted_by"], r["address"], r["mode"])
+        if r["n"] > 1:
+            who = f"@{r['handle']}" if r["handle"] else str(r["granted_by"])[:12]
+            line += f"; and {r['n'] - 1} more from {who}"
+        lines.append(line)
     counted = conn.execute(
         f"SELECT count(*) AS n {waiting}", {"viewer": viewer.id}
     ).fetchone()
-    total = int(counted["n"]) if counted else 0
-    if total > len(rows):
+    rest = (int(counted["n"]) if counted else 0) - sum(int(r["n"]) for r in rows)
+    if rest > 0:
         lines.append(
-            f"- and {total - len(rows)} more shares waiting; the next ones show"
+            f"- and {rest} more shares waiting; the next ones show"
             " here once these are answered"
         )
     return lines

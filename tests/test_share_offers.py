@@ -104,7 +104,9 @@ def test_refusing_removes_it_and_a_new_share_waits_again(conn, pair):
     sees_nothing_of(conn, ben, hub, note, "tomatoes greenhouse")
     assert offer_lines(conn, ben) == []
     assert "@ben" not in graph.share(conn, ada, hub=hub)
-    offer(conn, ada, hub, ben)  # refusing does not block
+    offer(conn, ada, hub, ben)  # the same hub again: still refused
+    assert offer_lines(conn, ben) == []
+    offer(conn, ada, mk_hub(conn, ada, "Another"), ben)  # refusing does not block
     assert len(offer_lines(conn, ben)) == 1
 
 
@@ -123,9 +125,12 @@ def test_block_holds_later_shares_silently_until_the_blocker_shares(
     assert second not in readable(conn, ben)
     with pytest.raises(ReticulaError):  # a held share cannot be accepted
         answer(conn, ben, second, "read")
-    # ben shares a hub with ada: the block is lifted, the held share shows
+    # ben shares a hub with ada; once ada accepts it, the block is lifted and
+    # the held share shows
     own = mk_hub(conn, ben, "Ben's")
     offer(conn, ben, own, ada)
+    assert offer_lines(conn, ben) == []
+    answer(conn, ada, own, "read")
     assert [short(second) in ln for ln in offer_lines(conn, ben)] == [True]
 
 
@@ -209,14 +214,17 @@ def test_the_record_layer_refuses_what_the_tool_never_offers(conn, pair, make_ac
     conn.execute(
         "UPDATE share_offer SET held = true WHERE address = %s", (row["address"],)
     )
-    api.answer_offer(conn, ben, row, "read")
+    with pytest.raises(ReticulaError) as exc:
+        api.answer_offer(conn, ben, row, "read")
+    assert exc.value.message == "that share is no longer available"
     assert note not in readable(conn, ben)
     # a refused share is not accepted afterwards either
     conn.execute(
-        "UPDATE share_offer SET held = false, refused = true WHERE address = %s",
-        (row["address"],),
+        "UPDATE share_offer SET held = false WHERE address = %s", (row["address"],)
     )
-    api.answer_offer(conn, ben, row, "read")
+    answer(conn, ben, hub, "none")
+    with pytest.raises(ReticulaError):
+        api.answer_offer(conn, ben, row, "read")
     assert note not in readable(conn, ben)
 
 
@@ -228,7 +236,7 @@ def test_block_after_refuse_still_blocks_the_sharer(conn, pair):
     out = graph.share(conn, ben, hub=f"{short(hub)}:block", person="@ben", mode="none")
     assert out == (
         f"stopped further shares from @ada; their share of hub id {short(hub)} was"
-        " already refused; sharing a hub with @ada lifts this"
+        " already refused; a hub you share with @ada lifts this once they can read it"
     )
     second = mk_hub(conn, ada, "Second")
     assert "once they accept" in offer(conn, ada, second, ben)
@@ -247,14 +255,18 @@ def test_block_after_refuse_still_blocks_the_sharer(conn, pair):
     assert offer_lines(conn, ben) == []
 
 
-def test_a_refused_share_can_be_offered_again(conn, pair):
+def test_a_refused_share_is_not_offered_again_but_another_hub_is(conn, pair):
     ada, ben, hub, _ = pair
     offer(conn, ada, hub, ben)
     answer(conn, ben, hub, "none")
-    offer(conn, ada, hub, ben)
-    assert len(offer_lines(conn, ben)) == 1
-    answer(conn, ben, hub, "read")
-    assert hub in readable(conn, ben)
+    offer(conn, ada, hub, ben, "add")
+    assert offer_lines(conn, ben) == []
+    with pytest.raises(ReticulaError):
+        answer(conn, ben, hub, "read")
+    other = mk_hub(conn, ada, "Other")
+    offer(conn, ada, other, ben)
+    answer(conn, ben, other, "read")
+    assert other in readable(conn, ben) and hub not in readable(conn, ben)
 
 
 def test_get_of_a_waiting_hub_answers_with_its_start_line(conn, pair):
