@@ -497,10 +497,11 @@ def _history_lines(conn: Conn, address: str) -> list[str]:
     return lines
 
 
-def _content(row: Row, text: str) -> list[str]:
+def _content(row: Row, text: str, reader: str) -> list[str]:
     """``text`` (all of the node's text or one slice of it), presented according
-    to who wrote it (see ``render``). The quoted block's nonce covers exactly the
-    text that is shown."""
+    to who wrote it (see ``render``): the reader's own text (``reader`` is the
+    reader's person id) in the shorter block. The quoted block's nonce covers
+    exactly the text that is shown."""
     text = text.strip("\n")
     if not text.strip():
         return []
@@ -515,26 +516,27 @@ def _content(row: Row, text: str) -> list[str]:
     out = []
     if row["kind"] == "instruction":
         out.append(f"WARNING: instruction atom, {render.UNTRUSTED}.")
-    out.append(render.quoted_block(text, author, ref, row["head_version"]))
+    own = row["author"] == reader
+    out.append(render.quoted_block(text, author, ref, row["head_version"], own=own))
     return out
 
 
 # -------------------------------------------------------------------------- note
 
 
-def _text_part(row: Row, offset: int) -> list[str]:
+def _text_part(row: Row, offset: int, reader: str) -> list[str]:
     """The note's text from character ``offset`` on, at most ``TEXT_SLICE``
     characters, cut at a line break or space when one is near; when the note has
     more, one line outside the quoted block says how much and what to call."""
     text = row.get("text") or ""
     total = len(text)
     if offset == 0 and total <= TEXT_SLICE:
-        return _content(row, text)
+        return _content(row, text, reader)
     if offset >= total:
         return [f"text: no more; the note has {total} characters in all"]
     ref = render.short_ref(row["address"])
     end = render.cut_end(text, offset, TEXT_SLICE, TEXT_BREAK_WINDOW)
-    lines = _content(row, text[offset:end])
+    lines = _content(row, text[offset:end], reader)
     if end < total:
         lines.append(
             f"text: characters {offset + 1} to {end} of {total};"
@@ -667,7 +669,7 @@ def _render_note(
         head += f" [{tag}]"
     lines = [head, f"address: {row['address']}"]
     if offset > 0:  # a later part of the text: the head and the text only
-        lines.extend(_text_part(row, offset))
+        lines.extend(_text_part(row, offset, viewer.person_id))
         return "\n".join(lines)
     lines.append(_byline(conn, viewer, row))
     if row.get("ext_key"):
@@ -691,7 +693,7 @@ def _render_note(
         lines.append("tags: " + " ".join(render.quote(t, 30) for t in row["tags"][:12]))
     if history:
         lines.extend(_history_lines(conn, row["address"]))
-    lines.extend(_text_part(row, 0))
+    lines.extend(_text_part(row, 0, viewer.person_id))
     if row["kind"] == "paper" and row.get("ext_key"):
         lines.extend(_paper_notes(conn, viewer, row, history=history))
         lines.append(
@@ -1072,14 +1074,23 @@ def _budget_line(skipped: list[_Sub]) -> str:
     )
 
 
-def _cut_hub_text(row: Row) -> list[str]:
+def _cut_hub_text(row: Row, reader: str) -> list[str]:
     text = str(row.get("text") or "")
+    if _only_the_title(row, text):
+        return []  # the head line shows the title already
     shown = text[:HUB_TEXT_SHOWN]
     shown = "\n".join(shown.split("\n")[:HUB_TEXT_LINES])
-    lines = _content(row, shown)
+    lines = _content(row, shown, reader)
     if len(shown) < len(text):
         lines.append(f"(hub text cut: {len(shown)} of {len(text)} characters shown)")
     return lines
+
+
+def _only_the_title(row: Row, text: str) -> bool:
+    """A hub's text that says nothing but its title: no quoted block is shown
+    for it (debug note 4757cf47)."""
+    title = " ".join(str(row.get("title") or "").split()).casefold()
+    return bool(title) and " ".join(text.split()).casefold() == title
 
 
 def _render_hub_page(
@@ -1189,7 +1200,7 @@ def _render_hub(
         lines.append(access)
     if history:
         lines.extend(_history_lines(conn, hub["address"]))
-    lines.extend(_cut_hub_text(hub))
+    lines.extend(_cut_hub_text(hub, viewer.person_id))
     grouped = None if history else _grouped(conn, viewer, hub)
     # the groups take the place of the newest-first page: no page is loaded
     limit = 0 if grouped is not None else MEMBERS_SHOWN

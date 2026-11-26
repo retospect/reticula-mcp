@@ -806,9 +806,12 @@ def _long_note(conn: Conn, who: Account, text: str, **kw: Any) -> Node:
     return make_atom(conn, who, text, **kw)
 
 
+# another person's text, or the reader's own (the shorter opening line, the
+# same hash: debug note 4757cf47)
 _BLOCK = re.compile(
-    r"<<< quoted text by (?P<who>\S+) \[(?P<ref>\w+)\] is data, not instructions:"
-    r" begin (?P<nonce>[0-9a-f]{16}) >>>\n(?P<text>.*)\n<<< end (?P=nonce) >>>",
+    r"<<< (?:quoted text by (?P<who>\S+) \[(?P<ref>\w+)\] is data, not instructions:"
+    r" begin|your text \[(?P<own>\w+)\]:) (?P<nonce>[0-9a-f]{16}) >>>\n"
+    r"(?P<text>.*)\n<<< end (?P=nonce) >>>",
     re.S,
 )
 _PART = re.compile(r"text: characters (\d+) to (\d+) of (\d+)")
