@@ -107,7 +107,9 @@ def revoke_grant_key(conn: Conn, grant_id: str) -> bool:
 
 def revoke_everything(conn: Conn, account_id: int) -> tuple[int, int]:
     """Revoke every grant and every token of the account: connections and
-    operator tokens alike. Returns (grants, tokens) that were live."""
+    operator tokens alike, and end its sessions of the account pages.
+    Returns (grants, tokens) that were live."""
+    conn.execute("DELETE FROM web_session WHERE account_id = %s", (account_id,))
     grants_n = conn.execute(
         "UPDATE oauth_grant SET revoked_at = now()"
         " WHERE account_id = %s AND revoked_at IS NULL",
@@ -230,6 +232,10 @@ def purge_stale(conn: Conn) -> None:
     """
     grace = timedelta(days=3)
     conn.execute("DELETE FROM oauth_pending WHERE expires_at < now()")
+    conn.execute(
+        "DELETE FROM web_session WHERE expires_at <= now()"
+        " OR last_seen_at + make_interval(secs => idle_seconds) <= now()"
+    )
     conn.execute("DELETE FROM oauth_code WHERE expires_at < now() - %s", (grace,))
     conn.execute(
         "DELETE FROM oauth_token WHERE expires_at IS NOT NULL"

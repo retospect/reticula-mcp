@@ -573,7 +573,7 @@ This upgrade was rehearsed the same way, on a copy of a running 0.3.0 instance: 
 
 Measured on a copy of a running instance with 80 notes and the default model: a start with an empty model volume stayed under 0.7 GB and 52 processes. `docker compose exec app reticula-mcp reindex --drop` loads the model a second time in the same container and took the container to 1.3 GB, file cache included, and 78 processes. With `RETICULA_APP_MEMORY=1g` the start and that reindex still ran. With `512m` the server started, but the reindex ended after 1 second with status 137 and took the server container down with it, and Docker started it again. Give a larger model more: [Choose a model](#choose-a-model) lists the memory each model needs once loaded, and a reindex needs that twice.
 
-0.4.2 adds one migration, `0355_private_key_form`, a check on the stored form of a private key. It needs a key file, and its server connects to the database as a role without superuser rights. Read before you upgrade to it:
+0.4.2 was tagged but not published; 0.4.3 is the same release with a fix to the release workflow, so upgrade to 0.4.3. 0.4.2 adds one migration, `0355_private_key_form`, a check on the stored form of a private key. It needs a key file, and its server connects to the database as a role without superuser rights. Read before you upgrade to it:
 
 - The private keys of the accounts are encrypted with the key file, and the server does not start while one is stored unencrypted.
 - The database gets a superuser of its own, `reticula_admin`, and `reticula` becomes the owner of the database without superuser rights. On an install from before, `reticula` is the role the database was created with, and PostgreSQL does not let that role lose its rights. So the database is moved into a new volume by a dump and a restore.
@@ -926,6 +926,28 @@ Step 4 after a failed step 3 gives a new, empty instance and no error. The serve
 
 Without `--single-transaction` a damaged file leaves a part of the dump behind. Up to 0.2.0 this guide gave the command with `--exit-on-error` in its place. With that command the dump cut at 60 percent left 55 of 232 rows, and the server of step 4 did not start: its log said `0001_accounts_records.sql failed: relation "account" already exists`. The dump without its last 50 bytes left 226 of 232 rows, none of the 65 indexes, 5 of the 53 constraints and no trigger, and the server started on that and answered `ok`. A restore with the older command that ended without an error is whole.
 
+## The activity log
+
+Each account has a log of its own calls, which its owner reads on the account page. A line holds the time, the connection (the name the connector registered, or the label of a token from `reticula-mcp token`, with the short client id), the tool, whether it went through or the error code, and the short id of the note or hub the call named, but only when that note or hub is the account's own. Events on the account page itself, such as a sign-in there, an export or a revoked connection, are logged with `web` in place of the connection:
+
+```
+2026-11-26 12:03 UTC · Claude (c_4f2a9e1b) · put · ok · 542b1dbc
+2026-11-26 12:09 UTC · unknown client · get · NotFound
+2026-11-26 12:15 UTC · web · web sign-in · ok
+```
+
+The log never holds the text of a note, a query, a reply, or the id of another person's note, and nothing about who read the account's notes. The request log on stdout, under [Logs](#logs), is a separate thing and does not change.
+
+It is kept for 30 days, set with `RETICULA_ACTIVITY_DAYS` in `.env`. `RETICULA_ACTIVITY_DAYS=0` turns it off: nothing is written. Days already logged then stay in the database until you drop them. The rows of one day form one table, `activity_YYYYMMDD`, and the server drops a day's table once it is older than the setting, at start and then hourly, and makes the tables of the next days ahead. When an account is deleted, its rows are deleted with it.
+
+The server writes the lines about once a second, after the calls, in one statement. A line that cannot be written, for example while the database is away, is dropped. The call itself is not slowed down or refused for it, and the log says `activity` once a minute at most. A server that stops at once loses the last second of lines.
+
+Measured on a test database:
+- About 40 microseconds per call at the median, with the log on against off.
+- One write of 200 lines took 5 to 7 ms, about 27,000 to 40,000 lines a second.
+- 1,000 lines take about 134 KiB on disk, index included, so 30 days of 10,000 calls a day take about 40 MB.
+- Deleting an account's 1,000 lines among 31,000 in 30 daily tables took 3 ms.
+
 ## Accounts, tokens and connections
 
 The commands run inside the server container. They read the database directly. Type them in `deploy/`, like every `docker compose` command of this guide.
@@ -946,7 +968,7 @@ printf '%s\n%s\n' "$PASSWORD" "$PASSWORD" | docker compose exec -T app reticula-
 
 Without a terminal and without that input the command ends with `[error:BadInput] password must be 10-1024 characters`.
 
-Mint a token for a client that cannot do the sign-in flow. A token here is a bearer token: a secret string the client sends with every request in the header `Authorization: Bearer <token>`, and whoever holds it acts as the account. It is printed once and stored only as a hash. Omit `--ttl-days` for a token without an expiry.
+Mint a token for a client that cannot do the sign-in flow. A token here is a bearer token: a secret string the client sends with every request in the header `Authorization: Bearer <token>`, and whoever holds it acts as the account. It is printed once and stored only as a hash. It expires after 90 days; `--ttl-days N` sets another number of days, and `--no-expiry` makes one that never expires.
 
 ```
 docker compose exec app reticula-mcp token --email someone@example.com --label laptop --ttl-days 90
@@ -979,12 +1001,23 @@ docker compose exec app reticula-mcp connections revoke --email someone@example.
 
 A revoked token or connection is refused on its next call. To rotate an operator token, mint a new one with a new label, switch the client to it, then revoke the old one.
 
-To lock an account out completely, set its status. Disabled accounts cannot sign in and their tokens stop working. This is also how to retire the accounts that the smoke test leaves behind.
+To lock an account out completely, disable it. A disabled account cannot sign in, and every connection, token and web sign-in of it is revoked. This is also how to retire the accounts that the smoke test leaves behind.
 
 ```
-docker compose exec -T db psql -U reticula -d reticula -c \
-  "UPDATE account SET status = 'disabled' WHERE email = 'someone@example.com'"
+docker compose exec app reticula-mcp account disable --email someone@example.com
 ```
+
+To give an account a new password, for example after the person lost theirs, set it. The command asks for the new password twice (at least 10 characters, and not one of the 10,000 most common ones) and revokes every connection, token and web sign-in of the account, so the person signs in again everywhere.
+
+```
+docker compose exec app reticula-mcp account passwd --email someone@example.com
+```
+
+### The account page
+
+People manage their own account on the web, at `/account` of the public address, signed in with their e-mail address and password. The page lists the connected assistants and the tokens made with `reticula-mcp token`, each revoked after a confirm step, sets whether the account is listed in the directory, exports everything as one zip file, and deletes the account. A web sign-in lasts 12 hours at most and ends after 30 minutes without use; "keep me signed in" makes both 30 days. Export and revoke ask for the password again after 10 minutes, and deletion always asks for it, with the handle typed. Failed web sign-ins count against the same limits as the sign-in page of the connector.
+
+Deleting an account erases, at once and in one request, every note, hub and link of the account (also those in other people's hubs), revokes every connection, token and web sign-in, and erases the e-mail address, the password and the private keys. The handle stays taken. Each note is deleted with its own signed record: measured on 2026-11-26 at about 8 ms per note (200 and 1,000 notes, on the test database of this repository, which runs without writing to disk at every commit), so an account of 5,000 notes takes about 40 seconds, longer on a slower disk. The page answers when it is done.
 
 ## Close sign-ups
 

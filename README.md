@@ -35,7 +35,7 @@ This path runs the database and the server in Docker. You need Docker with Docke
    cd reticula-mcp/deploy
    ```
 
-   For release 0.4.2 the option is `--branch v0.4.2`.
+   For release 0.4.3 the option is `--branch v0.4.3`.
 
 2. Create the settings file:
 
@@ -59,7 +59,7 @@ This path runs the database and the server in Docker. You need Docker with Docke
    curl http://127.0.0.1:8787/healthz
    ```
 
-   The answer is `{"status":"ok","version":"0.4.2"}`, with the version you run. The server listens on `127.0.0.1:8787`. The MCP endpoint is `/mcp` and the health check is `/healthz`.
+   The answer is `{"status":"ok","version":"0.4.3"}`, with the version you run. The server listens on `127.0.0.1:8787`. The MCP endpoint is `/mcp` and the health check is `/healthz`.
 
 5. Connect an assistant, as described under "Connecting an assistant" below. The first sign-in creates your account.
 
@@ -121,6 +121,7 @@ All settings are environment variables. There are no config files. Under Docker 
 | `RETICULA_READ_RATE` | `300/minute` | Reads (`start`, `profile`, `search`, `get`) allowed per account, counted in the server's memory. `0/minute` switches it off. |
 | `RETICULA_READ_CONCURRENCY` | `4` | Reads of one account that run at once; a further one waits up to 10 seconds, then answers `RateLimited`. `0` switches it off. |
 | `RETICULA_READ_SECONDS` | `20` | Seconds one read may take; then it is stopped and answers `Unavailable`. `0` switches it off. |
+| `RETICULA_ACTIVITY_DAYS` | `30` | Days the server keeps each person's own activity log: one row per tool call with the time, the connection, the tool, `ok` or the error code, and the short id of the note or hub named when the person wrote it. Never a query, a text or another person's note. A whole number from `0` to `3650`; `0` switches the log off, and nothing is kept. The server makes one table per day and drops the old ones; it does not delete rows. |
 | `RETICULA_TRUSTED_PROXIES` | empty | Comma-separated IP addresses or CIDR ranges whose `X-Forwarded-For` header is believed. Empty trusts nobody. With an `https` `RETICULA_PUBLIC_URL`, `serve` does not start with this empty: set an address, or the word `none` (alone, any case) to trust nobody on purpose. Behind a reverse proxy or tunnel with nobody trusted, every client looks like the proxy, so all clients share one rate-limit bucket (sign-ups, failed sign-ins, connector registrations). The right value depends on the setup: `127.0.0.1` for a proxy on the same machine as a server started without Docker, the gateway of the compose network under Docker Compose. See [A tunnel or proxy on the same host](https://github.com/retospect/reticula-mcp/blob/main/docs/operating.md#a-tunnel-or-proxy-on-the-same-host). |
 | `RETICULA_KNOWN_CLIENTS` | `claude.ai,claude.com` | Comma-separated hosts that an assistant's connector returns to after sign-in. With `RETICULA_REGISTRATION=known` only connectors that return to one of these hosts (or a host below one) or to this computer can register. To connect another assistant, add its host instead of opening registration, for example `claude.ai,claude.com,chatgpt.com` for ChatGPT. Setting the variable replaces the default list, so keep the hosts you still use. |
 | `RETICULA_REGISTRATION` | `known` | `known` or `open`. With `known` an assistant's connector can register only when it returns to this computer or to a host in `RETICULA_KNOWN_CLIENTS` (or a host below one); a connector registered with any other host is also stopped at sign-in. `open` lets any https host register, and the sign-in page then warns about hosts it does not know. |

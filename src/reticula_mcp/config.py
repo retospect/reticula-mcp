@@ -13,6 +13,8 @@ from reticula_mcp.errors import BAD_INPUT, ReticulaError
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8787
 
+MAX_ACTIVITY_DAYS = 3650
+
 _UNITS = {"second": 1, "minute": 60, "hour": 3600, "day": 86400}
 
 
@@ -67,6 +69,8 @@ class Settings:
     read_rate: str = "300/minute"
     read_concurrency: int = 4
     read_seconds: float = 20.0
+    # Days the activity log keeps a person's tool calls (activity.py); 0 = no log.
+    activity_days: int = 30
     # Peers whose X-Forwarded-For is believed (IPs or CIDRs); empty = trust nobody.
     trusted_proxies: tuple[str, ...] = ()
     # RETICULA_TRUSTED_PROXIES=none: the operator says that no peer is to be
@@ -115,6 +119,7 @@ class Settings:
             read_rate=get("READ_RATE", "300/minute") or "300/minute",
             read_concurrency=_int("READ_CONCURRENCY", get("READ_CONCURRENCY", "4")),
             read_seconds=_number("READ_SECONDS", get("READ_SECONDS", "20")),
+            activity_days=_int("ACTIVITY_DAYS", get("ACTIVITY_DAYS", "30")),
             trusted_proxies=() if proxies_none else proxies,
             trusted_proxies_none=proxies_none,
             known_clients=tuple(
@@ -154,6 +159,13 @@ class Settings:
             )
         if self.read_seconds < 0:
             raise ReticulaError(BAD_INPUT, "RETICULA_READ_SECONDS must be 0 or more")
+        if not 0 <= self.activity_days <= MAX_ACTIVITY_DAYS:
+            raise ReticulaError(
+                BAD_INPUT,
+                "RETICULA_ACTIVITY_DAYS must be a whole number of days from 0 to"
+                f" {MAX_ACTIVITY_DAYS}, not {self.activity_days}",
+                hint="0 switches the activity log off",
+            )
         self._check_base_url()
         if self.trusted_proxies_none and self.trusted_proxies:
             raise ReticulaError(
