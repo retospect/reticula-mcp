@@ -9,7 +9,7 @@ import logging
 from reticula_mcp.config import Settings
 from reticula_mcp.db.pool import Conn, Database
 from reticula_mcp.search import index, worker
-from reticula_mcp.search.embedder import get_embedder
+from reticula_mcp.search.embedder import get_embedder, is_ready
 
 log = logging.getLogger("reticula_mcp.search")
 
@@ -18,12 +18,15 @@ def on_node_changed(conn: Conn, node_id: int) -> None:
     """Called by the graph lane inside the writing transaction after a node row
     is created or its head changes (including tombstoning).
 
-    Cheap and never fatal. A tombstoned node loses its vectors. With the cheap
-    deterministic embedder the vector is recomputed inline. With a real model
-    nothing is computed here and the model is not even loaded: the stale
-    ``version_hash`` marks the node, the background worker is nudged and embeds
-    it after the commit, and the next search of someone who can read it catches
-    it up as well. Does not commit.
+    Never fatal, and never waits for a model to load. A tombstoned node loses
+    its vectors. Otherwise, when the embedder can answer now (the hash
+    embedder, or a model that is loaded), the vector is computed here and
+    commits with the write: the note is findable by meaning as soon as the
+    tool returns. When it cannot, or the embedding fails (rolled back alone,
+    in a savepoint of its own), the node stays in ``embedding_backlog``,
+    where a trigger of migration 0302 put it, and the background worker is
+    nudged; the next search of someone who can read it embeds it too. Does
+    not commit.
     """
     try:
         with conn.transaction():  # savepoint: a failure here must not poison the write
@@ -36,10 +39,19 @@ def on_node_changed(conn: Conn, node_id: int) -> None:
                 index.forget_node(conn, node_id)
                 return
             embedder = get_embedder(Settings.from_env())
-            if getattr(embedder, "cheap", False):
-                index.embed_nodes(conn, embedder, [node_id])
-            else:
-                worker.nudge()
+            if is_ready(embedder):
+                try:
+                    with conn.transaction():  # its own savepoint: only the vector
+                        index.embed_nodes(conn, embedder, [node_id])
+                    return
+                except Exception:
+                    log.warning(
+                        "embedding at write failed for node %s; left to the worker",
+                        node_id,
+                        exc_info=True,
+                    )
+            # the row in embedding_backlog was made by the trigger of 0302
+            worker.nudge()
     except Exception:
         log.warning("embedding upkeep failed for node %s", node_id, exc_info=True)
 

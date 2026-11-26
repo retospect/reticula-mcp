@@ -972,10 +972,13 @@ def hybrid_search(
             cheap = bool(getattr(embedder, "cheap", False))
             qvec = embed_query(embedder, query)
             with conn.transaction():  # savepoint: trouble here must not sink a search
-                index.catch_up(
+                # the notes a write could not embed: a few of the viewer's,
+                # the rest is the worker's
+                index.catch_up_pending(
                     conn,
                     embedder,
                     viewer.id,
+                    index.CATCH_UP_CHEAP if cheap else index.CATCH_UP_COSTLY,
                     seconds=None if cheap else index.CATCH_UP_SECONDS,
                 )
                 hits = _semantic(
