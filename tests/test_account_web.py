@@ -446,3 +446,54 @@ def test_the_page_events_go_to_the_activity_log(
         ("sign out everywhere", "ok"),
     ]
     assert all(c[0] == ana.id for c in calls)
+
+
+def test_on_https_the_cookie_is_host_prefixed_and_secure(fresh_db_url: str) -> None:
+    """The https branch for real: the app in-process behind an https public
+    URL, called through a Starlette TestClient on that address."""
+    from starlette.testclient import TestClient
+
+    from reticula_mcp.config import Settings
+    from reticula_mcp.server import build_app
+
+    with connect(fresh_db_url) as conn:
+        accounts.create_account(conn, "ana@example.com", PASSWORD, "ana")
+        conn.commit()
+    base = "https://reticula.example.com"
+    settings = Settings(
+        database_url=fresh_db_url, public_url=base, trusted_proxies=("127.0.0.1",)
+    )
+    with TestClient(build_app(settings), base_url=base) as client:
+        form = client.get("/account/signin")
+        form_cookie = form.headers["set-cookie"]
+        assert "secure" in form_cookie.lower()
+        r = client.post(
+            "/account/signin",
+            data={
+                "form": _value(form.text, "form"),
+                "email": "ana@example.com",
+                "password": PASSWORD,
+            },
+            headers={"Origin": base},
+            follow_redirects=False,
+        )
+        assert r.status_code == 303, r.text[:300]
+        session = next(
+            c
+            for c in r.headers.get_list("set-cookie")
+            if c.startswith("__Host-reticula_session=")
+        )
+        flags = [f.strip().lower() for f in session.split(";")[1:]]
+        assert "secure" in flags and "httponly" in flags
+        assert "path=/" in flags and "samesite=strict" in flags
+        assert not any(f.startswith("domain=") for f in flags)  # a __Host- rule
+        page = client.get("/account")
+        assert page.status_code == 200 and "@ana" in page.text
+        # a POST from another origin is refused on https as well
+        csrf = _value(page.text, "csrf")
+        refused = client.post(
+            "/account/settings",
+            data={"csrf": csrf, "listed": "no"},
+            headers={"Origin": "http://reticula.example.com"},
+        )
+        assert refused.status_code == 403
