@@ -3,8 +3,6 @@
 
 from __future__ import annotations
 
-import importlib
-import importlib.util
 import threading
 import time
 from typing import Any
@@ -13,7 +11,7 @@ import httpx
 import pytest
 
 from reticula_mcp import account_admin, accounts
-from reticula_mcp.auth import account_web, grants, websession
+from reticula_mcp.auth import grants, websession
 from reticula_mcp.db import connect
 from reticula_mcp.errors import ReticulaError
 from reticula_mcp.graph import api
@@ -313,7 +311,7 @@ def test_delete_leaves_no_settings_grants_counters_or_codes(site: Any) -> None:
         )
 
 
-# --- W8: origins, HSTS, broken activity module ---------------------------------
+# --- W8: origins, HSTS ---------------------------------
 
 
 def _https_client(fresh_db_url: str) -> Any:
@@ -359,25 +357,3 @@ def test_plain_http_pages_send_no_hsts(site: Any) -> None:
         "strict-transport-security"
         not in httpx.get(f"{live.url}/account/signin").headers
     )
-
-
-def test_a_broken_activity_module_is_not_taken_for_a_missing_one(
-    conn: Any, make_account: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    acct = make_account(handle="ana")
-    real_find = importlib.util.find_spec
-
-    def find(name: str, *a: Any) -> Any:
-        if name == "reticula_mcp.activity":
-            return object()  # present
-        return real_find(name, *a)
-
-    def load(name: str, *a: Any) -> Any:
-        if name == "reticula_mcp.activity":
-            raise ImportError("a dependency of the module is missing")
-        return importlib.__import__(name)
-
-    monkeypatch.setattr(importlib.util, "find_spec", find)
-    monkeypatch.setattr(importlib, "import_module", load)
-    with pytest.raises(ImportError):
-        account_web.activity_lines(conn, acct)

@@ -26,7 +26,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
 from starlette.routing import Route
 
-from reticula_mcp import account_admin, accounts, refusal
+from reticula_mcp import account_admin, accounts, activity, refusal
 from reticula_mcp import settings as account_settings
 from reticula_mcp.accounts import Account
 from reticula_mcp.auth import config, grants, page, signin, throttle, websession
@@ -786,17 +786,10 @@ def record(account_id: int, event: str, outcome: str = "ok") -> None:
     """An event of these pages for RETICULA3's activity log
     (reticula_mcp.activity.record: queued, never blocks or raises); nothing
     until that module exists."""
-    activity = account_admin._activity()
-    if activity is not None:
-        activity.record(account_id, event, outcome=outcome)
+    activity.record(account_id, event, outcome=outcome)
 
 
 def activity_lines(conn: Any, account: Account) -> list[str]:
-    """The Activity section: lines from RETICULA3's activity log, plain text
-    (the page escapes them). Empty, and the section left out, until a module
-    ``reticula_mcp.activity`` with ``lines(conn, account_id) -> list[str]``
-    exists."""
-    activity = account_admin._activity()
-    if activity is None:
-        return []
+    """The Activity section: lines from the activity log, plain text (the
+    page escapes them)."""
     return list(activity.lines(conn, account.id))

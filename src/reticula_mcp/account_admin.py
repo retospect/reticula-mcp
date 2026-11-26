@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import IO, Any
 
-from reticula_mcp import accounts, records
+from reticula_mcp import accounts, activity, records
 from reticula_mcp import format as fmt
 from reticula_mcp.accounts import Account
 from reticula_mcp.auth import grants
@@ -121,28 +121,10 @@ def _erase_residue(conn: Conn, account: Account, email: str) -> None:
     conn.execute("DELETE FROM signup_attempt WHERE lower(email) = %s", (email.lower(),))
 
 
-def _activity() -> Any:
-    """RETICULA3's module, or None when it is not installed. An error inside
-    a module that is there is not hidden."""
-    import importlib
-    import importlib.util
-    import sys
-
-    name = "reticula_mcp.activity"
-    if name in sys.modules:
-        return sys.modules[name]
-    if importlib.util.find_spec(name) is None:
-        return None
-    return importlib.import_module(name)
-
-
 def _erase_activity(conn: Conn, account_id: int) -> None:
     """The account's rows of RETICULA3's activity log: the account row stays
     (the handle is held), so no cascade removes them."""
-    activity = _activity()
-    erase = getattr(activity, "erase", None) if activity is not None else None
-    if erase is not None:
-        erase(conn, account_id)
+    activity.erase(conn, account_id)
 
 
 def _publish_deleted_identity(conn: Conn, account: Account) -> None:

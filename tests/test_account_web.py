@@ -414,10 +414,9 @@ def test_delete_needs_the_handle_and_password_and_erases_everything(
 def test_the_page_events_go_to_the_activity_log(
     site: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """With RETICULA3's module present (a stand-in here), each event is
-    recorded, and its lines show on the page, escaped."""
-    import sys
-    import types
+    """Each event of the pages is recorded in the activity log, and its lines
+    show on the page, escaped (record and lines stood in for here)."""
+    from reticula_mcp import activity
 
     calls: list[tuple[int, str, str]] = []
 
@@ -427,10 +426,8 @@ def test_the_page_events_go_to_the_activity_log(
     def fake_lines(conn: Any, account_id: int) -> list[str]:
         return ["2026-11-26 12:03 UTC · <b>x</b> · put · ok"]
 
-    fake = types.ModuleType("reticula_mcp.activity")
-    fake.record = fake_record  # type: ignore[attr-defined]
-    fake.lines = fake_lines  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "reticula_mcp.activity", fake)
+    monkeypatch.setattr(activity, "record", fake_record)
+    monkeypatch.setattr(activity, "lines", fake_lines)
     live, ana = site
     b = Browser(live.url)
     b.sign_in("ana@example.com", "wrong password here")
