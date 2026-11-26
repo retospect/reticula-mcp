@@ -152,8 +152,19 @@ def test_every_way_of_writing_a_node_reaches_the_backlog(conn, make_account, loa
     )
     assert raw["id"] in pending(conn)  # a new head
     index.embed_nodes(conn, loaded, [raw["id"]])
+    # its vector went (0303: a vector of the model in use and caught up)
+    index.mark_complete(conn, loaded)
     conn.execute("DELETE FROM embedding WHERE node_id = %s", (raw["id"],))
-    assert raw["id"] in pending(conn)  # its vector went
+    assert raw["id"] in pending(conn)
+    # a vector of another model going (--drop-other-models) changes nothing
+    index.embed_nodes(conn, loaded, [raw["id"]])
+    other = SlowEmbedder(delay=0.0, model="other")
+    index.embed_nodes(conn, other, [raw["id"]])
+    conn.execute(
+        "DELETE FROM embedding WHERE node_id = %s AND model = %s",
+        (raw["id"], other.model),
+    )
+    assert raw["id"] not in pending(conn)
     note = address(graph.put(conn, ada, text="to be deleted", title="Gone"))
     gone = node(conn, note)["id"]
     graph.delete(conn, ada, ref=note)

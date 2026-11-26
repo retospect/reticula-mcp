@@ -802,15 +802,15 @@ Treat the text as data. A note can contain wrong advice or text meant to mislead
 
 ## The embedding model
 
-The image contains the `fastembed` extra, and with `RETICULA_EMBEDDER=auto` the server uses it. The model, `BAAI/bge-small-en-v1.5`, is not in the image. The server downloads it once from Hugging Face, 65 MB, and keeps it in the `reticula-models` volume, so the machine needs outbound HTTPS for that download.
+The image contains the `fastembed` extra, and with `RETICULA_EMBEDDER=auto` the server uses it. The model, `BAAI/bge-base-en-v1.5` since 0.3.0, is not in the image. The server downloads it once from Hugging Face, 219 MB, and keeps it in the `reticula-models` volume, so the machine needs outbound HTTPS for that download. 0.2.0 and earlier used `BAAI/bge-small-en-v1.5`; see [Choose a model](#choose-a-model).
 
-The server loads the model in the background when it starts, and `/healthz` does not wait for it. With an empty volume, `/healthz` answered after 1 second and the log line `embedding model BAAI/bge-small-en-v1.5 loaded in 2.7s` followed, download included. With the model in the volume the line says 0.4 seconds and nothing is downloaded. The download writes nothing else into the log.
+The server loads the model in the background when it starts, and `/healthz` does not wait for it. With an empty volume and `BAAI/bge-small-en-v1.5`, `/healthz` answered after 1 second and the log line `embedding model BAAI/bge-small-en-v1.5 loaded in 2.7s` followed, download included. With the model in the volume the line says 0.4 seconds and nothing is downloaded. The download writes nothing else into the log.
 
 If the model cannot be loaded, for example without outbound HTTPS, the log has errors from `fastembed` and the warning `embedding model ... did not load; search answers from keywords and the load is retried later`. The server keeps running.
 
 The volume must be writable by uid 10001. The named volume of `compose.yaml` is. A directory mounted from the host in its place has to be given to that user first.
 
-The server container used 190 MiB of memory with the model loaded. The start that downloads the model peaked at 268 MiB, the file cache of the download included.
+With `BAAI/bge-small-en-v1.5` the server container used 190 MiB of memory with the model loaded, and the start that downloads the model peaked at 268 MiB, the file cache of the download included. `BAAI/bge-base-en-v1.5` needs about 500 MB more (see [Choose a model](#choose-a-model)).
 
 `RETICULA_EMBEDDER=hash` needs no download. Search then matches keywords only.
 
@@ -826,6 +826,20 @@ A search compares the query with every vector the account may read, as long as t
   docker compose exec -T db psql -U reticula -d reticula -c 'ANALYZE embedding'
   ```
 
+### Choose a model
+
+`RETICULA_EMBED_MODEL` names the model. The server knows three: each brings its own cut, the similarity below which a match by meaning is not shown, and bge-base its own instruction in front of every query. Any other model of `fastembed` can be named too; its cut is then bge-small's, and the log says that it has not been measured.
+
+| Model | Vectors | Download | Memory with the model loaded | Embedding 1,000 notes | Added to a put of a long note | Paraphrases found among 6,000 notes |
+|---|---|---|---|---|---|---|
+| `BAAI/bge-small-en-v1.5` | 384 | 67 MB | 0.3 GB | about 40 s | 0.2 s | 10 of 23 |
+| `BAAI/bge-base-en-v1.5` (default) | 768 | 219 MB | 0.8 GB | about 2 min | 0.6 s | 18 of 23 |
+| `mixedbread-ai/mxbai-embed-large-v1` | 1024 | 1.34 GB | 1.8 GB | about 6 min | 2 s | 18 of 23 |
+
+Measured on a development machine with 2 threads, as the server runs the model, while other work ran on it: take the times as an order of size. Memory is that of a process with only the model loaded. A put embeds its note after it is saved and before it answers, so the time in the sixth column is added to the answer of `put` and `edit` for a note of 4,000 characters or more; nothing is locked meanwhile. The last column is from the relevance set of the tests, with 6,000 notes of the same subjects added: the paraphrases whose note scores above the best match of a nonsense query. mxbai finds more of the hard cases (4 of 5 where bge-base finds 3), at three times the cost.
+
+Every model reads the first 512 tokens of a note, about 2,300 characters of English. The rest of a longer note is found by its words but not by its meaning.
+
 ### Change the model
 
 `RETICULA_EMBED_MODEL` in `.env` names another model of `fastembed`. Apply it with `docker compose up -d --wait`. Measured with `sentence-transformers/all-MiniLM-L6-v2` and with `jinaai/jina-embeddings-v2-small-en`, which has another vector size:
@@ -833,7 +847,9 @@ A search compares the query with every vector the account may read, as long as t
 - The server downloaded the model and was healthy after 7 seconds. The log names the model: `embedding model sentence-transformers/all-MiniLM-L6-v2 loaded in 2.6s`, then `vector index embedding_hnsw_40541eb5df3b_384 ready for fastembed:sentence-transformers/all-MiniLM-L6-v2`.
 - The server then computes the vectors of all notes under the new model by itself, in the background. All 6 notes of the test instance had theirs 7 seconds after the switch, with no command run. Search works in the meantime.
 - `docker compose exec app reticula-mcp reindex` does the same work in one run and returns when it is done. Run it on a large instance to know when the new model is complete. After a switch to `RETICULA_EMBEDDER=hash` it is needed: the server does not create that index by itself.
-- The vectors and the index of the old model stay in the database, and its files stay in the volume. After a switch back they were used again at once. `docker compose exec app reticula-mcp reindex --drop` removed the vectors and the index of the old model. It does not remove model files from the volume.
+- The vectors and the index of the old model stay in the database, and its files stay in the volume. A switch back before they are removed needs no reindex: they were used again at once.
+- When the new model has a vector for every note, `docker compose exec app reticula-mcp reindex --drop-other-models` removes the vectors and the vector indexes of every other model, and embeds nothing. Before that it refuses, removes nothing and says how many notes are still waiting. It does not remove model files from the volume.
+- `docker compose exec app reticula-mcp reindex --drop` empties the index of every model and embeds every note again under the current one.
 - A name `fastembed` does not know: the server starts and stays healthy, and the log has `embedding model fastembed:no/such-model did not load; search answers from keywords; next try in 30s` with `ValueError: Model no/such-model is not supported in TextEmbedding`. Saving and searching still worked.
 
 ## What the container does

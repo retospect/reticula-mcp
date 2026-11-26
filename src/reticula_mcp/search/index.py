@@ -61,13 +61,6 @@ HNSW_MAX_DIM = 2000  # pgvector cannot index wider `vector` columns
 INDEX_PREFIX = "embedding_hnsw_"
 
 
-def model_reads_chars() -> int:
-    """Characters of a note's text (title line included, as node_text builds
-    it) that the configured embedding model reads. Stub until RETICULA2's
-    version lands: 2,000 for bge-small (512 tokens)."""
-    return 2000
-
-
 def node_text(title: str | None, text: str) -> str:
     """What gets embedded for a node."""
     return f"{title}\n{text}"[:TEXT_LIMIT] if title else text[:TEXT_LIMIT]
@@ -295,6 +288,10 @@ def reindex(
         written += embed_nodes(conn, embedder, ids)
         if checkpoint is not None:
             checkpoint()
+    # every live node has its vector now, unless one was written meanwhile:
+    # recorded only when nothing is missing (as the worker does)
+    if not missing_ids(conn, embedder, None, 1):
+        mark_complete(conn, embedder)
     return written
 
 

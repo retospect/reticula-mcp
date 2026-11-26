@@ -31,6 +31,7 @@ import re
 import struct
 import threading
 import time
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -38,12 +39,50 @@ from typing import Any, Protocol, runtime_checkable
 from reticula_mcp.config import Settings
 from reticula_mcp.errors import BAD_INPUT, ReticulaError
 
-DEFAULT_FASTEMBED_MODEL = "BAAI/bge-small-en-v1.5"
-# Output sizes of models we know, so ``dim`` never forces a model load.
-_KNOWN_DIMS = {
-    "BAAI/bge-small-en-v1.5": 384,
-    "BAAI/bge-base-en-v1.5": 768,
-    "sentence-transformers/all-MiniLM-L6-v2": 384,
+# Reto chose bge-base with its query instruction (debug note baada5c5): it
+# finds paraphrases that bge-small cuts. bge-small stays a choice
+# (RETICULA_EMBED_MODEL), for a small machine.
+DEFAULT_FASTEMBED_MODEL = "BAAI/bge-base-en-v1.5"
+
+
+@dataclass(frozen=True)
+class ModelSettings:
+    """What the search needs to know of a model besides its name.
+
+    ``dim``: its output size, so that ``dim`` never forces a model load.
+    ``max_distance``: the cosine distance beyond which a vector match is
+    noise (a cut at similarity 1 - max_distance). Measured per model on the
+    relevance set of tests/test_search_relevance.py padded with 6,000 notes:
+    the lowest cut at which no nonsense query is answered. The margin is a
+    hundredth or so, set on six nonsense queries; an account of many more
+    notes can bring nonsense higher. ``query_prefix``: put before every
+    query, never before a note."""
+
+    dim: int
+    max_distance: float
+    query_prefix: str = ""
+
+
+# bge's instruction for queries that look for passages
+_BGE_QUERY = "Represent this sentence for searching relevant passages: "
+# a model whose cut was not measured here gets the strictest measured one,
+# bge-small's, and the log says so
+UNMEASURED_MAX_DISTANCE = 0.35
+KNOWN_MODELS: dict[str, ModelSettings] = {
+    # similarity 0.65: nonsense reaches 0.63 on the relevance set (0.68
+    # among 6,000 notes); 4 of 18 paraphrases are cut there (see the class)
+    "BAAI/bge-small-en-v1.5": ModelSettings(384, 0.35),
+    # with its query instruction, similarity 0.50: nonsense reaches 0.451 on
+    # the relevance set and 0.491 among 6,000 notes; 18 of 23 paraphrases
+    # and 3 of the 5 of debug note baada5c5 are above it there
+    "BAAI/bge-base-en-v1.5": ModelSettings(768, 0.50, _BGE_QUERY),
+    # plain queries, similarity 0.59: nonsense reaches 0.582 among 6,000
+    # notes; 18 of 23 paraphrases and 4 of the 5 of baada5c5 are above it
+    "mixedbread-ai/mxbai-embed-large-v1": ModelSettings(1024, 0.41),
+    # its size is known; its cut was not measured
+    "sentence-transformers/all-MiniLM-L6-v2": ModelSettings(
+        384, UNMEASURED_MAX_DISTANCE
+    ),
 }
 _WORD = re.compile(r"\w+", re.UNICODE)
 # After a failed load, ``warm`` waits this long before it tries again; the wait
@@ -158,11 +197,12 @@ def model_cache_dir() -> str | None:
 
 
 class FastEmbedEmbedder:
-    """A small local model (default BAAI/bge-small-en-v1.5, 384 dimensions)
+    """A local model (default BAAI/bge-base-en-v1.5, 768 dimensions)
     through ``fastembed`` (ONNX runtime, CPU). Loaded once per process, by
     :meth:`load` (blocking) or :meth:`warm` (background)."""
 
     cheap = False
+    # The cut and the query prefix come with the model (KNOWN_MODELS).
     # Measured for the default model on tests/test_search_relevance.py (run it
     # with RETICULA_SEARCH_MEASURE=1). bge models compress cosine similarity
     # into about 0.4 to 1.0: the nearest note to a nonsense query is at
@@ -173,8 +213,18 @@ class FastEmbedEmbedder:
 
     def __init__(self, model_name: str | None = None) -> None:
         self._name = model_name or DEFAULT_FASTEMBED_MODEL
+        known = KNOWN_MODELS.get(self._name)
+        if known is None:
+            log.warning(
+                "embedding model %s has not been measured here; its matches by"
+                " meaning are cut at distance %.2f, the strictest cut measured",
+                self._name,
+                UNMEASURED_MAX_DISTANCE,
+            )
+        self.max_distance = known.max_distance if known else UNMEASURED_MAX_DISTANCE
+        self.query_prefix = known.query_prefix if known else ""
         self._engine: Any = None
-        self._dim: int | None = _KNOWN_DIMS.get(self._name)
+        self._dim: int | None = known.dim if known else None
         self._load_lock = threading.Lock()  # one load at a time
         self._state_lock = threading.Lock()  # guards the fields below
         self._run_lock = threading.Lock()  # one inference at a time
@@ -282,11 +332,12 @@ class FastEmbedEmbedder:
             return self._floats(engine.embed(texts))
 
     def embed_query(self, text: str) -> list[float]:
-        # No query instruction is prepended: measured on the relevance set, the
-        # model's recommended one moved a single query and made no cutoff safer.
+        # fastembed adds no instruction of its own. For bge-small none is
+        # added: on the relevance set the recommended one moved a single query
+        # and made no cutoff safer. bge-base gains from it (KNOWN_MODELS).
         engine = self._load()
         with self._run_lock:
-            return self._floats(engine.query_embed(text))[0]
+            return self._floats(engine.query_embed(self.query_prefix + text))[0]
 
 
 def fastembed_installed() -> bool:
