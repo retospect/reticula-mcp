@@ -926,6 +926,28 @@ Step 4 after a failed step 3 gives a new, empty instance and no error. The serve
 
 Without `--single-transaction` a damaged file leaves a part of the dump behind. Up to 0.2.0 this guide gave the command with `--exit-on-error` in its place. With that command the dump cut at 60 percent left 55 of 232 rows, and the server of step 4 did not start: its log said `0001_accounts_records.sql failed: relation "account" already exists`. The dump without its last 50 bytes left 226 of 232 rows, none of the 65 indexes, 5 of the 53 constraints and no trigger, and the server started on that and answered `ok`. A restore with the older command that ended without an error is whole.
 
+## The activity log
+
+Each account has a log of its own calls, which its owner reads on the account page. A line holds the time, the connection (the name the connector registered, or the label of a token from `reticula-mcp token`, with the short client id), the tool, whether it went through or the error code, and the short id of the note or hub the call named, but only when that note or hub is the account's own. Events on the account page itself, such as a sign-in there, an export or a revoked connection, are logged with `web` in place of the connection:
+
+```
+2026-11-26 12:03 UTC · Claude (c_4f2a9e1b) · put · ok · 542b1dbc
+2026-11-26 12:09 UTC · unknown client · get · NotFound
+2026-11-26 12:15 UTC · web · web sign-in · ok
+```
+
+The log never holds the text of a note, a query, a reply, or the id of another person's note, and nothing about who read the account's notes. The request log on stdout, under [Logs](#logs), is a separate thing and does not change.
+
+It is kept for 30 days, set with `RETICULA_ACTIVITY_DAYS` in `.env`. `RETICULA_ACTIVITY_DAYS=0` turns it off: nothing is written. Days already logged then stay in the database until you drop them. The rows of one day form one table, `activity_YYYYMMDD`, and the server drops a day's table once it is older than the setting, at start and then hourly, and makes the tables of the next days ahead. When an account is deleted, its rows are deleted with it.
+
+The server writes the lines about once a second, after the calls, in one statement. A line that cannot be written, for example while the database is away, is dropped. The call itself is not slowed down or refused for it, and the log says `activity` once a minute at most. A server that stops at once loses the last second of lines.
+
+Measured on a test database:
+- About 40 microseconds per call at the median, with the log on against off.
+- One write of 200 lines took 5 ms.
+- 1,000 lines take about 134 KiB on disk, index included, so 30 days of 10,000 calls a day take about 40 MB.
+- Deleting an account's 1,000 lines among 31,000 in 30 daily tables took 3 ms.
+
 ## Accounts, tokens and connections
 
 The commands run inside the server container. They read the database directly. Type them in `deploy/`, like every `docker compose` command of this guide.
