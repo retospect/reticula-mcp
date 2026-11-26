@@ -31,6 +31,24 @@ def parse_rate(text: str) -> tuple[int, int]:
     return count, seconds
 
 
+def _int(name: str, text: str | None) -> int:
+    try:
+        return int(text or "0")
+    except ValueError as exc:
+        raise ReticulaError(
+            BAD_INPUT, f"RETICULA_{name} must be a whole number, not {text!r}"
+        ) from exc
+
+
+def _number(name: str, text: str | None) -> float:
+    try:
+        return float(text or "0")
+    except ValueError as exc:
+        raise ReticulaError(
+            BAD_INPUT, f"RETICULA_{name} must be a number of seconds, not {text!r}"
+        ) from exc
+
+
 @dataclass(frozen=True)
 class Settings:
     """Everything configurable. Build with :meth:`from_env`."""
@@ -44,6 +62,11 @@ class Settings:
     signup_rate: str = "5/hour"  # per IP
     register_rate: str = "20/hour"  # OAuth client registrations per IP
     write_rate: str = "600/hour"  # put, edit, link, share and delete, per account
+    # the tools that only read, per account (readlimit.py): how many may start
+    # in a window, how many run at once, and how long one may take
+    read_rate: str = "300/minute"
+    read_concurrency: int = 4
+    read_seconds: float = 20.0
     # Peers whose X-Forwarded-For is believed (IPs or CIDRs); empty = trust nobody.
     trusted_proxies: tuple[str, ...] = ()
     # RETICULA_TRUSTED_PROXIES=none: the operator says that no peer is to be
@@ -86,6 +109,9 @@ class Settings:
             signup_rate=get("SIGNUP_RATE", "5/hour") or "5/hour",
             register_rate=get("REGISTER_RATE", "20/hour") or "20/hour",
             write_rate=get("WRITE_RATE", "600/hour") or "600/hour",
+            read_rate=get("READ_RATE", "300/minute") or "300/minute",
+            read_concurrency=_int("READ_CONCURRENCY", get("READ_CONCURRENCY", "4")),
+            read_seconds=_number("READ_SECONDS", get("READ_SECONDS", "20")),
             trusted_proxies=() if proxies_none else proxies,
             trusted_proxies_none=proxies_none,
             known_clients=tuple(
@@ -117,6 +143,13 @@ class Settings:
         parse_rate(self.signup_rate)
         parse_rate(self.register_rate)
         parse_rate(self.write_rate)
+        parse_rate(self.read_rate)
+        if self.read_concurrency < 0:
+            raise ReticulaError(
+                BAD_INPUT, "RETICULA_READ_CONCURRENCY must be 0 or more"
+            )
+        if self.read_seconds < 0:
+            raise ReticulaError(BAD_INPUT, "RETICULA_READ_SECONDS must be 0 or more")
         self._check_base_url()
         if self.trusted_proxies_none and self.trusted_proxies:
             raise ReticulaError(

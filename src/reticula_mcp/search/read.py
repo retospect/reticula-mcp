@@ -55,7 +55,7 @@ LINKS_SHOWN = 30
 MEMBERS_OF_HUBS = (
     "SELECT m2.node_id FROM membership m2 WHERE m2.hub_node_id = ANY(%(hubs)s)"
 )
-SECOND_STEP_READ = 1_000  # link rows read for depth 2 on a note, before who may read
+SECOND_STEP_READ = 1_000  # readable link rows read for depth 2 on a note, at most
 MAX_DEPTH = 2  # the hub, and its sub-hubs opened; deeper is another call
 HUB_BUDGET = 60  # hubs one call opens, the one asked for included
 TEXT_SLICE = 8_000  # characters of a note's text per answer
@@ -132,7 +132,9 @@ def _withdrawn(conn: Conn, viewer: Account, ref: str) -> Row | None:
     ``readable_if_live`` (migration 0353): the ``readable_nodes`` rule minus
     the tombstone (its author; or audience ``hub``, filed by its OWN author in
     a hub the viewer reads). A filing by anyone else only organises and tells
-    nobody anything. Everything else stays indistinguishable from a missing
+    nobody anything. And only when the note was deleted while the viewer
+    could read it (``recent.readable_since``): a share given afterwards tells
+    nothing of it. Everything else stays indistinguishable from a missing
     address."""
     ref = ref.strip()
     person, slash, _ = ref.partition("/")
@@ -149,7 +151,7 @@ def _withdrawn(conn: Conn, viewer: Account, ref: str) -> Row | None:
         tail = ends_with_params(suffix)
     rows = conn.execute(
         f"""
-        SELECT n.id, n.address FROM node n
+        SELECT n.id, n.address, n.tombstoned_at FROM node n
         WHERE n.id IN (
             SELECT node_id FROM readable_if_live(%(viewer)s, ARRAY(
                 SELECT t.id FROM node t
@@ -159,7 +161,14 @@ def _withdrawn(conn: Conn, viewer: Account, ref: str) -> Row | None:
         """,
         {**tail, "ref": arg, "viewer": viewer.id},
     ).fetchall()
-    return rows[0] if len(rows) == 1 else None
+    if len(rows) != 1:
+        return None
+    from reticula_mcp.search.recent import readable_since  # recent imports this
+
+    since = readable_since(conn, viewer, [rows[0]["id"]]).get(rows[0]["id"])
+    if since is None or rows[0]["tombstoned_at"] < since:
+        return None
+    return {"id": rows[0]["id"], "address": rows[0]["address"]}
 
 
 def _render_withdrawn(row: Row) -> str:
@@ -420,9 +429,11 @@ def _second_step_lines(
     here is left out: the step goes through notes."""
     if not linked:
         return []
+    # who may read is asked before the cap, so that the cap and the count
+    # below are of readable notes only
     found = conn.execute(
-        """
-        SELECT x.via, x.rel, x.dir, x.far FROM (
+        f"""
+        WITH x AS MATERIALIZED (
             SELECT l.src_node_id AS via, l.rel, 'out' AS dir, d.id AS far
             FROM link l JOIN node d ON d.address = l.dst_address
             WHERE l.src_node_id = ANY(%(via)s)
@@ -431,18 +442,24 @@ def _second_step_lines(
             FROM node nb
             JOIN link l ON l.dst_node_id = nb.id OR l.dst_address = nb.address
             WHERE nb.id = ANY(%(via)s) AND l.src_node_id <> nb.id
-        ) x
+        )
+        SELECT x.via, x.rel, x.dir, x.far FROM x
         WHERE x.far <> %(node)s AND x.far <> ALL(%(via)s)
+          AND x.far IN ({readable_among_sql("SELECT x2.far FROM x x2")})
         ORDER BY array_position(%(via)s, x.via), x.rel, x.dir DESC, x.far
         LIMIT %(cap)s
         """,
-        {"via": linked, "node": node["id"], "cap": SECOND_STEP_READ},
+        {
+            "via": linked,
+            "node": node["id"],
+            "cap": SECOND_STEP_READ,
+            "viewer": viewer.id,
+        },
     ).fetchall()
-    readable = visible_subset(conn, viewer, sorted({r["far"] for r in found}))
     reached: list[Row] = []
     seen: set[int] = set()
     for r in found:
-        if r["far"] in readable and r["far"] not in seen:
+        if r["far"] not in seen:
             seen.add(r["far"])
             reached.append(r)
     shown = reached[:LINKS_SHOWN]

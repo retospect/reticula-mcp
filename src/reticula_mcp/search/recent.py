@@ -220,6 +220,41 @@ def _granted_since(
     return held
 
 
+def readable_since(
+    conn: Conn,
+    viewer: Account,
+    node_ids: Sequence[int],
+    reach: _Reach | None = None,
+) -> dict[int, datetime]:
+    """Since when the viewer could read each of these nodes, deleted or not,
+    by the rule of ``readable_if_live`` (migration 0353): always for their
+    own; otherwise from the moment they could read a hub (``_reach``) the
+    node is filed in by its own author (membership audience 'hub', not
+    withdrawn, the node in audience 'hub'). The earliest such moment counts.
+    A node missing from the result the viewer could never read that way."""
+    if not node_ids:
+        return {}
+    reach = reach if reach is not None else _reach(conn, viewer)
+    rows = conn.execute(
+        "SELECT n.id, n.author, n.audience, m.hub_node_id AS hub FROM node n"
+        " LEFT JOIN membership m ON m.node_id = n.id AND NOT m.withdrawn"
+        "  AND m.audience = 'hub' AND m.author = n.author"
+        " WHERE n.id = ANY(%s)",
+        (list(node_ids),),
+    ).fetchall()
+    out: dict[int, datetime] = {}
+    for r in rows:
+        if r["author"] == viewer.person_id:
+            out[r["id"]] = ALWAYS
+            continue
+        if r["audience"] != "hub" or r["hub"] is None:
+            continue
+        at = reach.opened.get(r["hub"])
+        if at is not None and (r["id"] not in out or at < out[r["id"]]):
+            out[r["id"]] = at
+    return out
+
+
 def _reach(conn: Conn, viewer: Account, hubs: Sequence[Row] | None = None) -> _Reach:
     """Since when the viewer can read each hub they can read. ``hubs``: those
     hubs (``id``, ``author``, ``address``), when the caller has read them.
@@ -812,7 +847,10 @@ def removals(
     limit: int,
 ) -> tuple[list[Removal], int]:
     """Deletions and take-outs since ``since``, newest first: the first
-    ``limit`` and how many there are.
+    ``limit`` and how many there are. Either is told only when it happened
+    while the viewer could read the hub concerned (``readable_since``,
+    ``_reach``): who gets a share today does not learn what was taken away
+    before.
 
     Deleted: told only where the viewer could have read the note before
     (``readable_if_live``, migration 0353), and never with what it said.
@@ -872,6 +910,18 @@ def removals(
         params,
         prepare=False,
     ).fetchall()
+    # only what happened while the viewer could read the hub concerned
+    reach = _reach(conn, viewer)
+    since_of = readable_since(
+        conn, viewer, [r["id"] for r in rows if r["what"] == "deleted"], reach
+    )
+
+    def in_reach(r: Row) -> bool:
+        if r["what"] == "deleted":
+            return r["id"] in since_of and r["at"] >= since_of[r["id"]]
+        return r["hub"] in reach.opened and r["at"] >= reach.opened[r["hub"]]
+
+    rows = [r for r in rows if in_reach(r)]
     # taken out: told to whom that filing gave the note (filings_that_told)
     # or who can still read it; the title only to the latter
     taken = [r for r in rows if r["what"] == "taken out"]

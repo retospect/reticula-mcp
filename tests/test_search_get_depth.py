@@ -116,3 +116,33 @@ def test_a_depth_beyond_two_says_so(conn, chain):
     got = handlers.get(conn, ada, ref=a, depth=5)
     assert ref(c) in got
     assert "depth 5 is more than one call reads: this is depth 2" in got
+
+
+def test_the_count_beyond_the_cap_is_of_readable_notes_only(
+    conn, make_account, monkeypatch
+):
+    """The cap on the link rows read, and the 'or more' it gives, count only
+    notes the reader may read: unreadable links neither fill the cap nor
+    make the reader believe there are more."""
+    monkeypatch.setattr(read, "SECOND_STEP_READ", 5)
+    monkeypatch.setattr(read, "LINKS_SHOWN", 1)
+    ada, cleo = make_account(), make_account()
+    hub = mk_hub(conn, ada, "Studio")
+    share(conn, ada, hub, cleo, "add")
+    a = mk_note(conn, ada, "Why the kiln cracks pots.", title="A cracks")
+    b = mk_note(conn, ada, "Cooling too fast cracks glaze.", title="B cooling", hub=hub)
+    graph.link(conn, ada, ref=a, to=b, rel="explains")
+    for i in range(6):  # first by id, and not for ada to read
+        secret = mk_note(
+            conn, cleo, f"Private {i}.", title=f"Private {i}", private=True
+        )
+        graph.link(conn, cleo, ref=secret, to=b, rel="see-also")
+    readable = [
+        mk_note(conn, ada, f"Firing {i}.", title=f"Firing {i}") for i in range(3)
+    ]
+    for far in readable:
+        graph.link(conn, ada, ref=b, to=far, rel="see-also")
+    got = handlers.get(conn, ada, ref=a, depth=2)
+    assert len(steps(got)) == 1
+    assert f"and 2 more: get(ref={ref(b)!r})" in got
+    assert "or more" not in got and "Private" not in got

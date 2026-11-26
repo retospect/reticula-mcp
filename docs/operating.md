@@ -342,10 +342,13 @@ To take the public name down, run `docker compose stop tailscale`. This was not 
 | Failed sign-ins for one e-mail address from one client address | 6 in 15 minutes |
 | Failed sign-ins from one client address | 30 in 15 minutes |
 | Writes per account (`put`, `edit`, `link`, `share`, `delete`) | `RETICULA_WRITE_RATE`, default `600/hour` |
+| Reads per account (`start`, `profile`, `search`, `get`, `share` without a person) | `RETICULA_READ_RATE`, default `300/minute` |
+| Reads of one account at once | `RETICULA_READ_CONCURRENCY`, default `4` |
+| Time for one read | `RETICULA_READ_SECONDS`, default `20` seconds, then the tool answers `Unavailable` |
 | Time for one database statement of a tool call | 15 seconds, then the tool answers `Unavailable` |
 | Password length | at least 10 characters |
 
-The limits per client address depend on `RETICULA_TRUSTED_PROXIES`, as described above. Over the write limit a tool answers `RateLimited` and says when to try again. Expired tokens and authorization codes are deleted 3 days after they expire.
+The limits per client address depend on `RETICULA_TRUSTED_PROXIES`, as described above. Over the write limit a tool answers `RateLimited` and says when to try again. The read limits answer the same way: `read limit reached (300/minute); try again in 12 s`, or, when the account already has as many reads running as `RETICULA_READ_CONCURRENCY` allows and none ends within 10 seconds, `read limit reached (4 at once); try again in a moment`. A waiting read holds no database connection. The read limits are kept in the server's memory, per process, and start again empty when it restarts; `0` switches one off. Expired tokens and authorization codes are deleted 3 days after they expire.
 
 ## Logs
 
