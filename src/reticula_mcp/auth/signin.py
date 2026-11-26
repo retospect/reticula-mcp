@@ -31,7 +31,7 @@ from starlette.responses import RedirectResponse, Response
 from starlette.routing import Route
 
 from reticula_mcp import accounts, refusal
-from reticula_mcp.auth import config, page, throttle, verification
+from reticula_mcp.auth import config, page, passwords, throttle, verification
 from reticula_mcp.auth.netaddr import caller_bucket
 from reticula_mcp.auth.provider import PendingInvalid, ReticulaProvider, sha256_hex
 from reticula_mcp.auth.web import read_limited
@@ -42,6 +42,9 @@ from reticula_mcp.errors import CONFLICT, ReticulaError
 log = logging.getLogger("reticula_mcp.auth")
 
 COOKIE_PATH = "/signin"
+#: How the endpoint waits before it answers a sign-in for an e-mail address
+#: over the ceiling: asynchronously, holding no thread, slot or connection.
+_wait = anyio.sleep
 #: Sign-in and sign-up POSTs that may check or make a password hash at once.
 #: Taken before a database connection, so that requests waiting for one
 #: hold no connection: the pool keeps room for every other call.
@@ -138,6 +141,17 @@ def routes(settings: Settings, db: Database, provider: ReticulaProvider) -> list
         return response
 
     # --- POST ----------------------------------------------------------------
+
+    def delay_for(email: str) -> float:
+        """Seconds to wait before a sign-in for ``email`` is checked: 0 up to
+        the ceiling of failures from all addresses together, then doubling."""
+        key = email.strip().lower()[: config.MAX_EMAIL_LENGTH]
+        with db.connection() as conn:
+            failures = throttle.email_failures(conn, key, config.EMAIL_CEILING_WINDOW)
+        over = failures - config.EMAIL_CEILING
+        if over <= 0:
+            return 0.0
+        return float(min(2 ** min(over, 10), config.EMAIL_DELAY_MAX))
 
     hash_slots = threading.BoundedSemaphore(HASH_SLOTS)
 
@@ -270,6 +284,18 @@ def routes(settings: Settings, db: Database, provider: ReticulaProvider) -> list
                 handle_value=chosen,
                 status=400,
             )
+        if passwords.is_common(password):
+            refusal.note("signin: common_password")
+            return _render(
+                pending,
+                handle,
+                csrf,
+                "signup",
+                error=page.MESSAGES["common_password"],
+                email=email,
+                handle_value=chosen,
+                status=400,
+            )
         try:
             with conn.transaction():
                 account = accounts.create_account(conn, email, password, chosen or None)
@@ -329,6 +355,10 @@ def routes(settings: Settings, db: Database, provider: ReticulaProvider) -> list
             )
         cookie = request.cookies.get(cookie_name(form.get("req", "")))
         bucket = caller_bucket(request, settings)
+        if form.get("mode") != "signup" and form.get("email"):
+            delay = await anyio.to_thread.run_sync(delay_for, form["email"])
+            if delay:
+                await _wait(delay)
 
         return await anyio.to_thread.run_sync(post_sync, form, cookie, bucket)
 

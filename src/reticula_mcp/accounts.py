@@ -162,6 +162,28 @@ def _burn_verify(password: str) -> None:
         pass
 
 
+def set_password(conn: Conn, account: Account, password: str) -> None:
+    """A new password for the account: the length rule and the list of common
+    passwords as at sign-up. The caller revokes what the old one let in."""
+    from reticula_mcp.auth.passwords import is_common  # here: auth imports this module
+
+    if not MIN_PASSWORD_LENGTH <= len(password) <= MAX_PASSWORD_LENGTH:
+        raise ReticulaError(
+            BAD_INPUT,
+            f"a password has {MIN_PASSWORD_LENGTH} to {MAX_PASSWORD_LENGTH} characters",
+        )
+    if is_common(password):
+        raise ReticulaError(BAD_INPUT, "that password is one of the most common ones")
+    conn.execute(
+        "UPDATE account SET password_hash = %s WHERE id = %s",
+        (hash_password(password), account.id),
+    )
+
+
+def set_status(conn: Conn, account: Account, status: str) -> None:
+    conn.execute("UPDATE account SET status = %s WHERE id = %s", (status, account.id))
+
+
 def authenticate(conn: Conn, email: str, password: str) -> Account | None:
     """The account for a correct e-mail + password, else None.
 
@@ -201,9 +223,24 @@ def slugify_handle(text: str) -> str:
     )
     slug = re.sub(r"[^a-z0-9_-]+", "-", ascii_text.lower()).strip("-_")
     slug = slug[:28].strip("-_")
-    if not slug:
+    if not slug or _reserved_part(slug):
         return "user"
     return slug if len(slug) >= 3 else f"{slug}-user"
+
+
+#: A new handle may not contain these anywhere (it could pass for the
+#: instance's own account or an administrator's).
+RESERVED_PARTS = ("reticula", "admin")
+
+
+def _reserved_part(handle: str) -> bool:
+    return any(part in handle for part in RESERVED_PARTS)
+
+
+def is_reserved(handle: str) -> bool:
+    """Reserved for new handles: one of RESERVED_HANDLES, or containing one of
+    RESERVED_PARTS. Handles given before stay valid."""
+    return handle in RESERVED_HANDLES or _reserved_part(handle)
 
 
 def validate_handle(handle: str) -> str:
@@ -215,7 +252,7 @@ def validate_handle(handle: str) -> str:
             f"invalid handle {handle!r}",
             hint="3-32 characters from a-z, 0-9, _ and -",
         )
-    if handle in RESERVED_HANDLES:
+    if is_reserved(handle):
         raise ReticulaError(BAD_INPUT, f"handle {handle!r} is reserved")
     return handle
 
@@ -234,7 +271,7 @@ def _handle_taken(conn: Conn, handle: str, person_id: str | None = None) -> bool
     A released handle is refused exactly like one in use, so a refusal does not
     tell the caller which of the two it ran into.
     """
-    if handle in RESERVED_HANDLES:
+    if is_reserved(handle):
         return True
     if conn.execute("SELECT 1 FROM account WHERE handle = %s", (handle,)).fetchone():
         return True

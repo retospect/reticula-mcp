@@ -14,9 +14,11 @@ those paths do their work, leave the ``with`` block, then raise.
 from __future__ import annotations
 
 import contextvars
+import ipaddress
 import re
 import secrets
 from typing import Any
+from urllib.parse import urlsplit
 
 import anyio.to_thread
 from mcp.server.auth.provider import (
@@ -89,6 +91,16 @@ def _invalid_grant(
     return TokenError("invalid_grant", what)
 
 
+def _loopback_host(host: str) -> bool:
+    """This machine: a connector on it is never refused for its host."""
+    if host.lower() in ("localhost", "localhost."):
+        return True
+    try:
+        return ipaddress.ip_address(host.strip("[]")).is_loopback
+    except ValueError:
+        return False
+
+
 class ReticulaProvider(
     OAuthAuthorizationServerProvider[StoredCode, StoredRefresh, AccessToken]
 ):
@@ -141,6 +153,17 @@ class ReticulaProvider(
             str(params.redirect_uri) == str(u) for u in client.redirect_uris or ()
         ):
             raise AuthorizeError("invalid_request", "unregistered redirect URI")
+        # the rule of registration again: a client registered before it
+        # stops here instead of keeping its way in
+        target = urlsplit(str(params.redirect_uri))
+        if (
+            target.scheme == "https"
+            and not _loopback_host(target.hostname or "")
+            and not config.host_allowed(self.settings, target.hostname or "")
+        ):
+            raise AuthorizeError(
+                "invalid_request", "redirect URI host is not a known client"
+            )
         if params.resource is not None and not same_resource(
             params.resource, self.resource
         ):
@@ -171,11 +194,19 @@ class ReticulaProvider(
         handle = secrets.token_urlsafe(32)
         with self.db.connection() as conn:
             grants.purge_stale(conn)
+            # Requests whose sign-in page was opened count against the
+            # client's cap; those never opened have a larger cap of their own
+            # (they expire unused), so they cannot use up the first.
             row = conn.execute(
-                "SELECT count(*) AS n FROM oauth_pending WHERE client_id = %s",
+                "SELECT count(*) FILTER (WHERE csrf_hash IS NOT NULL) AS opened,"
+                " count(*) FILTER (WHERE csrf_hash IS NULL) AS unopened"
+                " FROM oauth_pending WHERE client_id = %s",
                 (client_id,),
             ).fetchone()
-            if row and row["n"] >= config.MAX_PENDING_PER_CLIENT:
+            if row and (
+                row["opened"] >= config.MAX_PENDING_PER_CLIENT
+                or row["unopened"] >= config.MAX_UNOPENED_PER_CLIENT
+            ):
                 return None
             if bucket is not None:
                 row = conn.execute(

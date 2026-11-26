@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Sign-in and accounts: a connector can register only when it returns to this computer or to a known client's host, unless `RETICULA_REGISTRATION=open`, and the same rule applies when it asks a person to sign in; many failed sign-ins for one e-mail address from many networks make further attempts for it wait, up to 30 seconds, without locking the account; sign-up refuses the 10,000 most common passwords (the SecLists list, MIT License); sign-in pages never opened no longer count against a connector's limit of open sign-ins; `reticula-mcp token` makes tokens that expire after 90 days unless `--no-expiry` is given; `reticula-mcp account disable` and `account passwd` revoke every connection and token of the account; a new handle may not contain "reticula" or "admin".
+
 ## 0.4.1 (2026-11-26)
 
 - A write that fails now counts against the write limit (`RETICULA_WRITE_RATE`, 600 an hour by default); it did not before. A NUL character or a lone surrogate in any parameter is refused with `BadInput` for every tool before the database is asked; the query of `search` still removes them itself.

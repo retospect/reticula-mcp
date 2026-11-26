@@ -61,8 +61,9 @@ def test_handles_are_derived_unique_and_reserved_refused(conn, make_account):
     third = make_account("sam@three.example")
     assert (first.handle, second.handle, third.handle) == ("sam", "sam2", "sam3")
     assert make_account("al@x.example").handle == "al-user"
-    assert make_account("admin@x.example").handle == "admin2"
-    assert make_account("日本@x.example").handle == "user"
+    # a handle may not contain "admin" or "reticula": such an address gets "user"
+    assert make_account("admin@x.example").handle == "user"
+    assert make_account("日本@x.example").handle == "user2"
     assert make_account("n@x.example", handle="Custom_Name").handle == "custom_name"
     with pytest.raises(ReticulaError) as e:
         make_account("r@x.example", handle="reticula")
@@ -118,7 +119,7 @@ def test_system_account(conn, make_account):
     assert accounts.authenticate(conn, s.email, "!") is None
     with pytest.raises(ReticulaError):
         make_account("sys2@example.com", handle="reticula")
-    assert make_account("reticula@example.com").handle == "reticula2"
+    assert "reticula" not in make_account("reticula@example.com").handle
 
 
 def test_set_handle_appends_identity_version(conn, make_account):

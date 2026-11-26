@@ -40,7 +40,7 @@ _LOOPBACK_NAMES = frozenset({"localhost"})
 _SPACE_OR_CONTROL = re.compile(r"[\x00-\x20\x7f-\x9f\\]")
 
 
-def validate_redirect_uri(uri: Any) -> str:
+def validate_redirect_uri(uri: Any, settings: Settings | None = None) -> str:
     """The URI, or ValueError saying why it is refused.
 
     https, or http on a loopback host (localhost, 127.0.0.0/8, ::1) for native
@@ -61,9 +61,11 @@ def validate_redirect_uri(uri: Any) -> str:
         parts.port  # noqa: B018  (raises ValueError on a bad port)
     except ValueError as exc:
         raise ValueError("redirect URI has an invalid port") from exc
-    if parts.scheme == "https":
+    if parts.scheme in ("https", "http") and _is_loopback(host):
         return uri
-    if parts.scheme == "http" and _is_loopback(host):
+    if parts.scheme == "https":
+        if settings is not None and not config.host_allowed(settings, host):
+            raise ValueError("redirect URI host is not a known client of this server")
         return uri
     raise ValueError("redirect URI must be https (http only for localhost)")
 
@@ -88,12 +90,14 @@ def clean_name(name: Any) -> str:
     return kept or "an assistant"
 
 
-def build_client(body: dict[str, Any]) -> OAuthClientInformationFull:
+def build_client(
+    body: dict[str, Any], settings: Settings | None = None
+) -> OAuthClientInformationFull:
     """Validate a registration document; ValueError (message) when refused."""
     uris = body.get("redirect_uris")
     if not isinstance(uris, list) or not 1 <= len(uris) <= config.MAX_REDIRECT_URIS:
         raise ValueError(f"redirect_uris must list 1-{config.MAX_REDIRECT_URIS} URIs")
-    checked = [validate_redirect_uri(u) for u in uris]
+    checked = [validate_redirect_uri(u, settings) for u in uris]
     grant_types = body.get("grant_types", ["authorization_code", "refresh_token"])
     if not isinstance(grant_types, list) or "authorization_code" not in grant_types:
         raise ValueError("grant_types must include authorization_code")
@@ -124,7 +128,7 @@ def routes(settings: Settings, db: Database, provider: ReticulaProvider) -> list
 
     def register_sync(body: dict[str, Any]) -> Response:
         try:
-            client = build_client(body)
+            client = build_client(body, settings)
         except ValueError as exc:
             text = str(exc)
             kind = (

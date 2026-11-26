@@ -48,6 +48,9 @@ class Settings:
     trusted_proxies: tuple[str, ...] = ()
     # Hosts an assistant's connector returns to that the sign-in page does not warn about.
     known_clients: tuple[str, ...] = ("claude.ai", "claude.com")
+    # Which connectors may register: known (loopback and the known clients'
+    # hosts) or open (any https host).
+    registration: str = "known"
     embed_model: str | None = None  # model name for the fastembed embedder
     # Stateless streamable HTTP: no server-side MCP sessions, so a restart or a
     # second worker never strands a connected assistant.
@@ -86,6 +89,7 @@ class Settings:
                 )
                 if part.strip()
             ),
+            registration=(get("REGISTRATION", "known") or "known").lower(),
             embed_model=get("EMBED_MODEL"),
             stateless_http=(get("STATELESS_HTTP", "true") or "true").lower()
             not in ("0", "false", "no", "off"),
@@ -100,6 +104,8 @@ class Settings:
             raise ReticulaError(
                 BAD_INPUT, "RETICULA_EMBEDDER must be auto|hash|fastembed"
             )
+        if self.registration not in ("known", "open"):
+            raise ReticulaError(BAD_INPUT, "RETICULA_REGISTRATION must be known|open")
         if self.signup not in ("open", "closed"):
             raise ReticulaError(BAD_INPUT, "RETICULA_SIGNUP must be open|closed")
         parse_rate(self.signup_rate)
