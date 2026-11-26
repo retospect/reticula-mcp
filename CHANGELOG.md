@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased
+
 ## 0.4.1 (2026-11-26)
 
 - A write that fails now counts against the write limit (`RETICULA_WRITE_RATE`, 600 an hour by default); it did not before. A NUL character or a lone surrogate in any parameter is refused with `BadInput` for every tool before the database is asked; the query of `search` still removes them itself.
