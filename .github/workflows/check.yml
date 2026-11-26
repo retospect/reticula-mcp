@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # workflow.yml runs these checks on the tagged commit before it builds
+  workflow_call:
 
 permissions:
   contents: read
@@ -30,8 +32,12 @@ jobs:
     env:
       RETICULA_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: "0.13.10"
       - run: uv sync --locked
       - name: No known vulnerability in the locked dependencies
         run: |
@@ -62,8 +68,12 @@ jobs:
       # Keyword search only, so the job does not depend on a model download.
       RETICULA_DEV_EMBEDDER: hash
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: "0.13.10"
       - name: The production compose files are valid
         run: >-
           RETICULA_DB_PASSWORD=check RETICULA_VERSION=0.0.0
