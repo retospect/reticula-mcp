@@ -3,6 +3,8 @@ value put in from outside is the server's own address on /connect, escaped."""
 
 from __future__ import annotations
 
+from urllib.parse import urlsplit
+
 from reticula_mcp.web.html import HOME, REPO, e
 
 #: The line of the onboarding how-to (content/instructions/
@@ -40,44 +42,77 @@ can run your own server.</li>
 
 def connect(base_url: str) -> str:
     mcp = e(f"{base_url}/mcp")
+    host = e(urlsplit(base_url).netloc or base_url)
     line = e(STANDING_LINE)
     return f"""
 <h1>Connect an assistant</h1>
-<p>The address of this server's connector is</p>
+<p>The connector address of this server:</p>
 <pre><code>{mcp}</code></pre>
-<p>You sign up the first time you connect: the sign-in page asks for an e-mail
-address and a password, and offers to create the account.</p>
+<p>You create your account the first time you connect, with an e-mail address
+and a password.</p>
 
-<h2>claude.ai and the Claude apps</h2>
+<h2>The Claude app on iPhone</h2>
+<p>The same steps work in the Android app and on claude.ai.</p>
 <ol>
-<li>Open "Customize", then "Connectors", click "+ Add", then "Add custom
-connector".</li>
-<li>Enter a name, such as Reticula, and the address above.</li>
-<li>Click "Connect" and sign in, or sign up, on the page that opens.</li>
+<li>Tap your user icon (your initials, bottom left).</li>
+<li>Scroll down to Connectors and tap it.</li>
+<li>Tap + (top right), then Add custom connector.</li>
+<li>Name: Reticula. MCP server URL: <code>{mcp}</code>. Tap Continue.</li>
+<li>Choose Sign in now and Register automatically, scroll down and tap Add.</li>
+<li>Claude asks to use {host} to sign in: tap Continue.</li>
+<li>Tap Create account, type your e-mail address and pick a new password.</li>
+<li>Optional: let Claude use Reticula without asking each time. By default it
+asks for every note it writes or looks up. That is your choice.</li>
 </ol>
-<p class="small">On a Team or Enterprise plan an owner adds the connector first
-under "Organization settings", "Connectors". The menus are as Anthropic's
-support article "Get started with custom connectors using remote MCP" described
-them on 2026-11-25 and may have moved since.</p>
+<p>Then, once: an assistant uses a connector only when a conversation calls for
+it. For Claude to use Reticula in every conversation, give it this standing
+line. Paste it into your personal preferences in the app's settings, or, if
+Claude's memory is on, ask Claude to remember it.</p>
+<blockquote>{line}</blockquote>
+<p class="small">The first conversation through a new connection points the
+assistant to an instruction that offers to do this with you.</p>
 
 <h2>Claude Code</h2>
 <pre><code>claude mcp add --transport http reticula {mcp}</code></pre>
-<p>Then type <code>/mcp</code> in Claude Code and sign in in the browser it
-opens.</p>
+<p>Then type <code>/mcp</code> inside Claude Code, choose reticula and sign in
+in the browser it opens. Put the standing line above in your CLAUDE.md file.</p>
+<p class="small">The command is the one in Claude Code's MCP documentation
+(code.claude.com/docs/en/mcp) and in the help of Claude Code 2.1.323, read on
+2026-11-26. The sign-in was not run for this page.</p>
+
+<h2>OpenAI Codex CLI</h2>
+<pre><code>codex mcp add reticula --url {mcp}
+codex mcp login reticula</code></pre>
+<p>The first command writes this to <code>~/.codex/config.toml</code>:</p>
+<pre><code>[mcp_servers.reticula]
+url = "{mcp}"</code></pre>
+<p class="small">From OpenAI's Codex MCP documentation, read on 2026-11-26. The
+add command was run with codex-cli 0.171.0 and wrote the lines above; the
+login was not tested.</p>
+
+<h2>Kimi Code CLI</h2>
+<p>Add the server to <code>~/.kimi-code/mcp.json</code>:</p>
+<pre><code>{{
+  "mcpServers": {{
+    "reticula": {{ "url": "{mcp}" }}
+  }}
+}}</code></pre>
+<p>Then, in Kimi Code, run <code>/mcp-config login reticula</code> and sign in
+in the browser.</p>
+<p class="small">From Moonshot AI's Kimi Code documentation (MCP page), read on
+2026-11-26. Not tested.</p>
 
 <h2>Any other MCP client</h2>
 <p>Add a remote MCP server with the address above, over streamable HTTP. The
-client signs in with OAuth; the server registers it on the spot, so there is
-no client ID or secret to enter.</p>
+client signs in with OAuth, and the server registers it on the spot: there is
+no client ID or secret to enter. Most major assistants have a setting like
+this.</p>
 
-<h2>Then, once</h2>
-<p>An assistant reads its tools only when a conversation calls for them. For
-it to use Reticula in every conversation, put this line where your client keeps
-standing instructions: in Claude Code the file CLAUDE.md, in claude.ai
-Claude's memory or Settings, preferences, or a project's instructions.</p>
-<blockquote>{line}</blockquote>
-<p class="small">On the first conversation through a new connection the
-assistant is pointed to an instruction that offers to do this for you.</p>
+<h2>How to use it</h2>
+<p>One memory across your apps and models. Talk a spec through with the Claude
+app while you walk the dog; later, at the terminal, Claude Code finds it in the
+same memory and does the work. Each assistant reads what the others saved, and
+nothing is lost when you change the model or the app.</p>
 """
 
 
