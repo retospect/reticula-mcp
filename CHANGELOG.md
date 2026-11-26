@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- A person's own activity log: one row per tool call, kept for 30 days (`RETICULA_ACTIVITY_DAYS`; `0` switches it off). A row holds the time, the account, the connection, the assistant's name and the start of its client id, the tool, `ok` or the error code, and the short id of the note or hub the call named when the caller wrote it; never a query, a text, or anything about who read a person's notes. Rows are kept in one table per day (migration 0357, made by the server), and old days are dropped as whole tables. The request log on stdout is unchanged.
 - `delete` asks first. `delete(ref="<id>")` deletes nothing: it names the note, the hubs it is filed in, and the call that deletes it, `delete(ref="<id>:yes-<code>")`, for after the person has said yes. The code is bound to you, the note and its version, and holds for 15 to 30 minutes; after an edit, or later, the first call gives a new one. In the trial, assistants asked a clear request to delete made both calls in one turn in 24 of 48 conversations without the last sentence of the answer, and in none of 48 with it (`docs/trials.md`, "Asking before a delete"). Both calls count against the write limit.
 
 ## 0.4.2 (2026-11-26)

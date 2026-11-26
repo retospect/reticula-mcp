@@ -30,7 +30,7 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from reticula_mcp import __version__, connection, keystore, permissions
+from reticula_mcp import __version__, activity, connection, keystore, permissions
 from reticula_mcp.auth import build_auth, throttle
 from reticula_mcp.config import Settings, parse_rate
 from reticula_mcp.content import handlers as content_handlers
@@ -147,6 +147,9 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
         settings.read_rate, settings.read_concurrency, wait=READ_WAIT_SECONDS
     )
 
+    # the person's own activity log (activity.py); None when switched off
+    activity_log = activity.create(db, settings.activity_days)
+
     def read_refused(refused: ReadRefused) -> ReticulaError:
         """The same form as the write limit's line."""
         if refused.wait is None:
@@ -190,6 +193,7 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
 
         def work() -> str:
             stopped: Deadline | None = None
+            outcome = INTERNAL  # what a call that ends in any other way was
             try:
                 # NUL and lone surrogates cannot be stored: refused here for
                 # every tool. The query of search cleans them out itself.
@@ -225,20 +229,26 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
                     # words after ids, when this connection has them on
                     with handles.during(conn, viewer):
                         if write:
-                            return handler(conn, viewer, **params)
-                        # A tool that only reads asks once who reads which
-                        # hubs. A tool that writes never does: see
-                        # permissions.read_call.
-                        with (
-                            deadline(conn, settings.read_seconds) as stopped,
-                            permissions.read_call(),
-                        ):
-                            return handler(conn, viewer, **params)
+                            answer = handler(conn, viewer, **params)
+                        else:
+                            # A tool that only reads asks once who reads which
+                            # hubs. A tool that writes never does: see
+                            # permissions.read_call.
+                            with (
+                                deadline(conn, settings.read_seconds) as stopped,
+                                permissions.read_call(),
+                            ):
+                                answer = handler(conn, viewer, **params)
+                    outcome = "ok"
+                    return answer
             except ReadRefused as refused:
+                outcome = RATE_LIMITED
                 return read_refused(refused).render()
             except ReticulaError as exc:
+                outcome = exc.code
                 return exc.render()
             except psycopg.errors.QueryCanceled:
+                outcome = UNAVAILABLE
                 if stopped is not None and stopped.fired:
                     return ReticulaError(
                         UNAVAILABLE,
@@ -247,12 +257,42 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
                     ).render()
                 return _timeout_error(db).render()
             except Exception:
+                outcome = INTERNAL  # also when the commit at the end failed
                 log.exception("tool %s failed", getattr(handler, "__name__", "?"))
                 return ReticulaError(
                     INTERNAL,
                     "something went wrong on the server",
                     hint="try again later",
                 ).render()
+            finally:
+                if activity_log is not None and token is not None:
+                    note_activity(token, handler, params, outcome)
+
+        def note_activity(
+            token: Any,
+            handler: Callable[..., str],
+            params: dict[str, Any],
+            outcome: str,
+        ) -> None:
+            """One row for the person's activity log: a put on a queue, nothing
+            else (activity.py). Never raises."""
+            try:
+                if not (token.subject or "").isdigit() or activity_log is None:
+                    return  # nobody signed in: nothing to log
+                activity_log.record(
+                    int(token.subject),
+                    (token.claims or {}).get(connection.CLAIM),
+                    token.client_id,
+                    getattr(handler, "__name__", "?"),
+                    outcome,
+                    tuple(
+                        v[: activity.REF_MAX]
+                        for v in (params.get(k) for k in activity.REF_PARAMS)
+                        if isinstance(v, str) and v
+                    ),
+                )
+            except Exception:
+                pass
 
         return await anyio.to_thread.run_sync(work)
 
@@ -661,10 +701,13 @@ def build_app(settings: Settings, db: Database | None = None) -> Starlette:
     async def lifespan(a: Starlette) -> AsyncIterator[Any]:
         database.open()
         search_hooks.on_server_start(settings, database)
+        await anyio.to_thread.run_sync(activity.start, database)
         try:
             async with inner(a) as state:
                 yield state
         finally:
+            # before the pool closes: what is queued is written first
+            await anyio.to_thread.run_sync(activity.stop, database)
             search_hooks.on_server_stop()
             if owned:
                 database.close()
