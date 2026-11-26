@@ -36,6 +36,7 @@ from reticula_mcp.content import handlers as content_handlers
 from reticula_mcp.context import access_token_from_context, viewer_for_token
 from reticula_mcp.db.pool import Conn, Database
 from reticula_mcp.errors import INTERNAL, RATE_LIMITED, UNAVAILABLE, ReticulaError
+from reticula_mcp.format.text import refuse_unstorable
 from reticula_mcp.graph import handlers as graph_handlers
 from reticula_mcp.requestlog import RequestLog
 from reticula_mcp.seams import AuthWiring
@@ -139,7 +140,7 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
     def limit_writes(conn: Conn, account_id: int) -> None:
         """Count one write for the account, or refuse with the time to wait.
 
-        Runs in the handler's transaction: a write that fails does not count.
+        Runs in a transaction of its own: a write that fails counts too.
         """
         subject = str(account_id)
         kind = throttle.WRITE_ACCOUNT
@@ -165,6 +166,20 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
 
         def work() -> str:
             try:
+                # NUL and lone surrogates cannot be stored: refused here for
+                # every tool. The query of search cleans them out itself.
+                refuse_unstorable(
+                    **{
+                        k: v
+                        for k, v in params.items()
+                        if k != "query" and isinstance(v, (str, list))
+                    }
+                )
+                if write:
+                    # counted in its own transaction: a write that fails
+                    # still counts
+                    with db.connection() as tconn:
+                        limit_writes(tconn, viewer_for_token(tconn, token).id)
                 # which connection the call came through (connection.py);
                 # what a write wrote is embedded after its commit (hooks.py)
                 with (
@@ -176,7 +191,6 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
                     # words after ids, when this connection has them on
                     with handles.during(conn, viewer):
                         if write:
-                            limit_writes(conn, viewer.id)
                             return handler(conn, viewer, **params)
                         # A tool that only reads asks once who reads which
                         # hubs. A tool that writes never does: see
@@ -583,6 +597,8 @@ def build_app(settings: Settings, db: Database | None = None) -> Starlette:
     database = db or Database(settings.require_database_url())
     mcp, wiring = create_mcp(settings, database)
     app = mcp.streamable_http_app()
+    # a path is served as asked or not at all: no redirect to its other form
+    app.router.redirect_slashes = False
     app.router.routes[0:0] = [*wiring.routes, *web_pages.routes(settings, database)]
     for mw in wiring.middleware:
         app.add_middleware(mw.cls, *mw.args, **mw.kwargs)

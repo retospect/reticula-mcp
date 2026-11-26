@@ -72,28 +72,57 @@ def _label(entry: Entry) -> str:
     return f'{e(title)} <span class="id">{e(entry.address[-SHORT:])}</span>'
 
 
+#: Hubs shown below a public hub, at most this many levels deep.
+MAX_DEPTH = 8
+#: Entries on the page, at most.
+MAX_ROWS = 2_000
+MORE = '<li class="small">more below, not shown here</li>'
+
+
 def _items(
-    ids: list[int],
+    roots: list[int],
     children: dict[int, list[int]],
     entries: dict[int, Entry],
-    above: frozenset[int],
-) -> list[str]:
-    out = []
-    for i in sorted(ids, key=lambda x: _key(entries[x])):
+    *,
+    max_rows: int = MAX_ROWS,
+) -> str:
+    """The nested lists, written without recursion: any depth renders, cut at
+    ``MAX_DEPTH`` levels below a public hub and at ``max_rows`` entries."""
+    out: list[str] = []
+    rows = 0
+    cut = False
+    # a stack of entries to open (id, depth, ids above it) and of closing tags
+    stack: list[tuple[int, int, frozenset[int]] | str] = [
+        (i, 0, frozenset())
+        for i in sorted(roots, key=lambda x: _key(entries[x]), reverse=True)
+    ]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, str):
+            out.append(item)
+            continue
+        if rows >= max_rows:
+            cut = True
+            continue
+        i, depth, above = item
         entry = entries[i]
-        below = [c for c in children.get(i, []) if c not in above]
-        if entry.kind == "hub" and below:
-            inner = "".join(_items(below, children, entries, above | {i}))
-            out.append(
-                f"<li><details><summary>{_label(entry)}</summary>"
-                f"<ul>{inner}</ul></details></li>"
-            )
+        rows += 1
+        below = [c for c in children.get(i, []) if c not in above and c in entries]
+        if entry.kind == "hub" and below and depth >= MAX_DEPTH:
+            out.append(f"<li>{_label(entry)}<ul>{MORE}</ul></li>")
+        elif entry.kind == "hub" and below:
+            out.append(f"<li><details><summary>{_label(entry)}</summary><ul>")
+            stack.append("</ul></details></li>")
+            for c in sorted(below, key=lambda x: _key(entries[x]), reverse=True):
+                stack.append((c, depth + 1, above | {i}))
         else:
             out.append(f"<li>{_label(entry)}</li>")
-    return out
+    if cut:
+        out.append(MORE)
+    return "".join(out)
 
 
-def body(conn: Conn) -> str:
+def body(conn: Conn, *, max_rows: int = MAX_ROWS) -> str:
     roots, children, entries = load(conn)
     intro = (
         "<h1>Public hubs</h1>\n"
@@ -107,5 +136,5 @@ def body(conn: Conn) -> str:
     )
     if not roots:
         return intro + "<p>No hub is public on this server yet.</p>"
-    items = "".join(_items(roots, children, entries, frozenset()))
+    items = _items(roots, children, entries, max_rows=max_rows)
     return intro + f'<ul class="tree">{items}</ul>'

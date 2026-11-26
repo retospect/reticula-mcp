@@ -24,11 +24,17 @@ Claude Code, claude.ai, the Claude apps and other MCP clients read and write
 the same notes, so a new model or a new service starts with what the old one
 knew. The assistant saves decisions, facts and results as you work, and says
 in one line what it saved.</p>
+<div class="cta">
+<a class="cta-button" href="/connect">Sign up with an agent</a>
+<p>There is no sign-up form here. Add Reticula as a connector in the Claude
+app, Claude Code, Codex or any other MCP client; when it asks you to sign in,
+you create your account with an e-mail address and a password.</p>
+</div>
 <p>Notes are small and signed. Each has a permanent address that names the
 person who wrote it, not the server. Hubs group notes, and a hub can be shared
 with other people on the same server, to read or to add to.</p>
 <ul>
-<li><a href="/connect">Connect an assistant</a>: sign up and add the connector.</li>
+<li><a href="/connect">Connect an assistant</a>: the steps for each app, and the connector address.</li>
 <li><a href="/slides">Slides</a>: four pages on what it is and how it works.</li>
 <li><a href="/hubs">Public hubs</a> on this server.</li>
 <li><a href="/results">How well it works</a>: a benchmark against pasting

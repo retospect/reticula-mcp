@@ -206,29 +206,6 @@ def test_every_write_tool_counts_and_listing_access_does_not(serve):
     assert all(line.startswith(f"[error:{RATE_LIMITED}]") for line in out[2:])
 
 
-def test_a_failed_write_does_not_use_up_the_allowance(serve):
-    live = serve(write_rate="2/hour")
-    _, token = live.make_token()
-
-    async def work(session, init):
-        async def put(**args):
-            return (await session.call_tool("put", args)).content[0].text
-
-        return [
-            await put(text="x", kind="Bad Kind"),
-            await put(text="x", kind="Bad Kind"),
-            await put(text="x", kind="Bad Kind"),
-            await put(text="one"),
-            await put(text="two"),
-            await put(text="three"),
-        ]
-
-    out = run_mcp(live, token, work)
-    assert all(line.startswith("[error:BadInput]") for line in out[:3])
-    assert out[3].startswith("saved") and out[4].startswith("saved")
-    assert out[5].startswith(f"[error:{RATE_LIMITED}]")
-
-
 # --- token --ttl-days -------------------------------------------------------------
 
 
@@ -252,3 +229,48 @@ def test_a_token_needs_a_positive_lifetime(fresh_db_url, monkeypatch, capsys, da
         )
     assert cli.main(["token", "--email", "t@example.com", "--ttl-days=7"]) == 0
     assert capsys.readouterr().out.startswith("ret_")
+
+
+# --- what every call is checked for before its handler (0.4.1) ---------------------
+
+
+def _texts(live: Live, token: str, calls: list[tuple[str, dict]]) -> list[str]:
+    async def work(session, init):
+        out = []
+        for tool, args in calls:
+            result = await session.call_tool(tool, args)
+            out.append(result.content[0].text)
+        return out
+
+    texts: list[str] = run_mcp(live, token, work)
+    return texts
+
+
+def test_a_write_that_fails_still_counts_against_the_write_limit(serve):
+    live = serve(write_rate="2/hour")
+    _, token = live.make_token()
+    failing = ("put", {"text": "a note", "supersedes": ["no-such-ref"]})
+    first, second, third = _texts(
+        live, token, [failing, failing, ("put", {"text": "a good note"})]
+    )
+    assert RATE_LIMITED not in first and RATE_LIMITED not in second
+    assert f"[error:{RATE_LIMITED}]" in third
+
+
+def test_a_nul_is_refused_by_every_tool_before_it_reaches_the_database(serve):
+    live = serve()
+    _, token = live.make_token()
+    calls = [
+        ("put", {"text": "a\x00b"}),
+        ("edit", {"ref": "settings", "text": "listed: no\x00"}),
+        ("get", {"ref": "abc\x00"}),
+        ("share", {"hub": "abc\x00"}),
+        ("search", {"query": "kiln", "kind": "note\x00"}),
+        ("delete", {"ref": "abc\x00"}),
+    ]
+    for (tool, _args), text in zip(calls, _texts(live, token, calls), strict=True):
+        assert "[error:BadInput]" in text, (tool, text)
+        assert "Internal" not in text, (tool, text)
+    # the query of search keeps cleaning a NUL out instead of refusing it
+    (found,) = _texts(live, token, [("search", {"query": "ki\x00ln"})])
+    assert "[error:" not in found

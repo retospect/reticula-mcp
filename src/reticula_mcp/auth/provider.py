@@ -223,11 +223,15 @@ class ReticulaProvider(
         return row
 
     @staticmethod
-    def set_csrf(conn: Conn, handle: str, nonce: str) -> None:
-        conn.execute(
-            "UPDATE oauth_pending SET csrf_hash = %s WHERE id = %s",
+    def set_csrf(conn: Conn, handle: str, nonce: str) -> bool:
+        """Store the token's digest on the parked request, once: False when
+        one is there already (it is never replaced)."""
+        row = conn.execute(
+            "UPDATE oauth_pending SET csrf_hash = %s WHERE id = %s"
+            " AND csrf_hash IS NULL RETURNING id",
             (sha256_hex(nonce), sha256_hex(handle)),
-        )
+        ).fetchone()
+        return row is not None
 
     def finish_authorization(
         self, conn: Conn, handle: str, pending: dict[str, Any], account_id: int

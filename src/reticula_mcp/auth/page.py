@@ -105,6 +105,21 @@ def gone_page() -> HTMLResponse:
     )
 
 
+def opened_elsewhere_page() -> HTMLResponse:
+    """The parked request already has its page open in another browser."""
+    refusal.note("signin: opened_elsewhere")
+    return respond(
+        _shell(
+            "Already open",
+            "<h1>Reticula</h1><p>This sign-in link is already open in another"
+            " browser or window.</p>"
+            '<p class="mut">Finish there, or go back to your assistant and connect'
+            " again.</p>",
+        ),
+        400,
+    )
+
+
 def expired_page(handle: str) -> HTMLResponse:
     """CSRF check failed: ask for a reload (a fresh GET sets a fresh token)."""
     link = f"/signin?req={quote(handle, safe='')}"
