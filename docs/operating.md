@@ -678,7 +678,7 @@ mv secrets/reticula.key.new secrets/reticula.key
 docker compose up -d --wait
 ```
 
-On Linux, `chown 10001:10001` the new file before the third line. The command ends with a line about `RETICULA_KEY_FILE`; with `compose.yaml` the two `mv` lines take its place. Measured: `key rotate` took 1 second for 24 keys, and the server was back 8 seconds after it was stopped, with the tokens from before working.
+On Linux, `chown 10001:10001` the new file before the third line. The command ends with `now start the server with the new file as RETICULA_KEY_FILE`; with `compose.yaml` that is what the two `mv` lines do, which move it to `secrets/reticula.key`. Measured: `key rotate` took 1 second for 24 keys, and the server was back 8 seconds after it was stopped, with the tokens from before working.
 
 ## Back up
 
