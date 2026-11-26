@@ -525,7 +525,9 @@ This upgrade was rehearsed on a copy of a running 0.2.0 instance, restored from 
 - The 63 bge-small vectors were still there. `docker compose exec app reticula-mcp reindex --drop-other-models` removed them in 0.5 seconds and answered `removed 63 vectors and 1 vector indexes of other models; fastembed:BAAI/bge-base-en-v1.5 is kept`. The database was 11 MB afterwards.
 - With an account and two tokens made in the copy, through MCP: the first `start` of each token pointed to the instruction on using Reticula as memory, and no later `start` through the same token did. Two notes written then were found at once by their words and by their meaning, the meaning search sharing no word with the note. `get` of a hub and `search(query="", since="7d")` answered.
 
-Not tried in the rehearsal: tokens issued before the upgrade, the smoke test, and the way back to 0.2.0.
+A second rehearsal on a fresh copy kept the connections made before the upgrade. Under 0.2.0 from PyPI, two accounts made in the copy connected through the sign-in page, and a third got a token from `reticula-mcp token`. Then 0.2.0 was stopped and 0.3.0 started on the same database, applying the eight migrations. Without a new sign-in, the minted token and the access tokens of both connections answered `start`. The refresh grant with the refresh token from 0.2.0 returned a new pair, and the new access token answered `start`. Nobody has to connect again.
+
+Not tried in the rehearsals: the smoke test, and the way back to 0.2.0, which is the restore of the dump from step 1.
 
 Migrations only move forward and each file runs in its own transaction. A migration file that has already been applied is never edited; changes arrive as new files. If the server reports that an applied file has changed, you are running mismatched code and database: do not continue.
 
