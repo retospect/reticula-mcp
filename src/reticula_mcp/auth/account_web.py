@@ -240,11 +240,17 @@ def routes(settings: Settings, db: Database) -> list[Route]:
                 found = signin.check_password(conn, email, password, bucket)
                 if isinstance(found, str):
                     conn.commit()
+                    known = (
+                        accounts.get_account_by_email(conn, email) if email else None
+                    )
+                    if known is not None:
+                        record(known.id, "web sign-in failed", "Failed")
                     return None if found == "bad_credentials" else found
                 token = websession.create(
                     conn, found.id, keep=keep, agent=agent, bucket=bucket
                 )
                 conn.commit()
+                record(found.id, "web sign-in")
                 return "token:" + token
 
         result = await anyio.to_thread.run_sync(run)
@@ -376,6 +382,7 @@ def routes(settings: Settings, db: Database) -> list[Route]:
             with db.connection() as conn:
                 websession.end(conn, session)
                 conn.commit()
+            record(account.id, "sign out")
 
         await anyio.to_thread.run_sync(run)
         response = _see("/")
@@ -393,6 +400,7 @@ def routes(settings: Settings, db: Database) -> list[Route]:
             with db.connection() as conn:
                 websession.end_all(conn, account.id)
                 conn.commit()
+            record(account.id, "sign out everywhere")
 
         await anyio.to_thread.run_sync(run)
         response = _see("/account/signin")
@@ -532,6 +540,7 @@ def routes(settings: Settings, db: Database) -> list[Route]:
                 else:
                     grants.revoke_operator_token(conn, account.id, ident)
                 conn.commit()
+            record(account.id, f"revoke {kind}")
 
         await anyio.to_thread.run_sync(run)
         return _see("/account")
@@ -575,7 +584,8 @@ def routes(settings: Settings, db: Database) -> list[Route]:
             with db.connection() as conn:
                 data = account_admin.export_zip(conn, account)
                 conn.commit()
-                return data
+            record(account.id, "export")
+            return data
 
         data = await anyio.to_thread.run_sync(run)
         return Response(
@@ -675,6 +685,17 @@ def routes(settings: Settings, db: Database) -> list[Route]:
         Route("/account/delete", endpoint=delete_get, methods=["GET", "HEAD"]),
         Route("/account/delete", endpoint=action(do_delete), methods=["POST"]),
     ]
+
+
+def record(account_id: int, event: str, outcome: str = "ok") -> None:
+    """An event of these pages for RETICULA3's activity log
+    (reticula_mcp.activity.record: queued, never blocks or raises); nothing
+    until that module exists."""
+    try:
+        from reticula_mcp import activity  # type: ignore[attr-defined]
+    except ImportError:
+        return
+    activity.record(account_id, event, outcome=outcome)
 
 
 def activity_lines(conn: Any, account: Account) -> list[str]:

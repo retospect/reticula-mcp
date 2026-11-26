@@ -68,6 +68,7 @@ def delete_everything(conn: Conn, account: Account) -> dict[str, int]:
         counts["hubs" if r["kind"] == "hub" else "notes"] += 1
     _publish_deleted_identity(conn, account)
     grants.revoke_everything(conn, account.id)
+    _erase_activity(conn, account.id)
     conn.execute(
         "UPDATE account SET email = %s, password_hash = '!', status = 'disabled',"
         " verified = false, updated_at = now() WHERE id = %s",
@@ -78,6 +79,18 @@ def delete_everything(conn: Conn, account: Account) -> dict[str, int]:
         (account.id,),
     )
     return counts
+
+
+def _erase_activity(conn: Conn, account_id: int) -> None:
+    """The account's rows of RETICULA3's activity log: the account row stays
+    (the handle is held), so no cascade removes them."""
+    try:
+        from reticula_mcp import activity  # type: ignore[attr-defined]
+    except ImportError:
+        return
+    erase = getattr(activity, "erase", None)
+    if erase is not None:
+        erase(conn, account_id)
 
 
 def _publish_deleted_identity(conn: Conn, account: Account) -> None:

@@ -409,3 +409,40 @@ def test_delete_needs_the_handle_and_password_and_erases_everything(
         )
     a.close()
     _ = graph
+
+
+def test_the_page_events_go_to_the_activity_log(
+    site: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With RETICULA3's module present (a stand-in here), each event is
+    recorded, and its lines show on the page, escaped."""
+    import sys
+    import types
+
+    calls: list[tuple[int, str, str]] = []
+
+    def fake_record(account_id: int, event: str, *, outcome: str = "ok") -> None:
+        calls.append((account_id, event, outcome))
+
+    def fake_lines(conn: Any, account_id: int) -> list[str]:
+        return ["2026-11-26 12:03 UTC · <b>x</b> · put · ok"]
+
+    fake = types.ModuleType("reticula_mcp.activity")
+    fake.record = fake_record  # type: ignore[attr-defined]
+    fake.lines = fake_lines  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "reticula_mcp.activity", fake)
+    live, ana = site
+    b = Browser(live.url)
+    b.sign_in("ana@example.com", "wrong password here")
+    b.sign_in("ana@example.com")
+    page = b.http.get("/account").text
+    assert "<h2>Activity</h2>" in page and "&lt;b&gt;x&lt;/b&gt;" in page
+    b.post("/account/export", {"csrf": b.csrf("/account/export")})
+    b.post("/account/signout-everywhere", {"csrf": b.csrf()})
+    assert [c[1:] for c in calls] == [
+        ("web sign-in failed", "Failed"),
+        ("web sign-in", "ok"),
+        ("export", "ok"),
+        ("sign out everywhere", "ok"),
+    ]
+    assert all(c[0] == ana.id for c in calls)
