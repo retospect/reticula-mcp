@@ -7,9 +7,8 @@ import re
 
 import pytest
 
-from reticula_mcp import accounts
+from reticula_mcp import accounts, connection, settings
 from reticula_mcp.content import handlers as content
-from reticula_mcp.content import people
 from reticula_mcp.errors import ReticulaError
 from reticula_mcp.graph import handlers
 from reticula_mcp.search import handlers as search
@@ -37,6 +36,12 @@ def err(call, *args, **kwargs) -> ReticulaError:
     with pytest.raises(ReticulaError) as e:
         call(*args, **kwargs)
     return e.value
+
+
+def unlist(conn, who, value: str = "no") -> None:
+    """What the person does: edit(ref="settings", text="listed: no")."""
+    with connection.during({"connection": "grant:people"}):
+        handlers.edit(conn, who, ref="settings", text=f"listed: {value}")
 
 
 def group(make_account, *names, **kwargs):
@@ -76,7 +81,8 @@ def test_an_empty_query_lists_everyone_who_is_listed(conn, make_account):
     group(make_account, "zed", "frodo", "alfred")
     viewer = make_account(handle="viewer")
     total = conn.execute(
-        "SELECT count(*) AS n FROM account WHERE listed"
+        "SELECT count(*) AS n FROM account"
+        f" WHERE NOT ({settings.unlisted_sql('account.id')})"
         " AND status IN ('active', 'provisional')"
     ).fetchone()["n"]
     out = find(conn, viewer)
@@ -111,7 +117,7 @@ def test_a_viewer_is_marked_with_you_only_on_their_own_line(conn, make_account):
 
 def test_a_viewer_who_is_not_listed_does_not_appear_and_has_no_mark(conn, make_account):
     viewer, other = group(make_account, "hid-me", "hid-other")
-    people.set_listed(conn, viewer, False)
+    unlist(conn, viewer)
     out = find(conn, viewer, "hid-")
     assert handles(out) == ["hid-other"]
     assert "(you)" not in out
@@ -132,7 +138,7 @@ def test_an_unlisted_account_is_not_shown_but_can_still_be_shared_with(
     conn, make_account
 ):
     owner, quiet = group(make_account, "own-a", "own-quiet")
-    people.set_listed(conn, quiet, False)
+    unlist(conn, quiet)
     assert handles(find(conn, owner, "own-")) == ["own-a"]
     assert find(conn, owner, "own-").splitlines()[0] == 'people matching "own-": 1'
     hub = mk_hub(conn, owner, "Team")
@@ -157,7 +163,7 @@ def test_the_system_account_is_never_listed(conn, make_account):
     system = accounts.ensure_system_account(conn)
     assert system.handle not in handles(find(conn, viewer))
     assert handles(find(conn, viewer, system.handle)) == []
-    conn.execute("UPDATE account SET listed = true WHERE id = %s", (system.id,))
+    unlist(conn, system, "yes")  # even a system account that says yes
     assert system.handle not in handles(find(conn, viewer))
 
 
@@ -251,23 +257,40 @@ def test_other_kinds_are_not_affected(conn, make_account):
     )
 
 
-# --- storage (moves to the settings of RETICULA5 when they land) ------------------
+# --- the setting (reticula_mcp.settings) ---------------------------------------
 
 
-def test_an_account_created_before_set_listed_is_listed(conn, make_account):
+def test_a_new_account_is_listed_until_it_says_no(conn, make_account):
     z = make_account(handle="fresh-one")
-    assert people.is_listed(conn, z)
-    row = conn.execute("SELECT listed FROM account WHERE id = %s", (z.id,)).fetchone()
-    assert row["listed"] is True
+    assert settings.listed(conn, z)
     assert handles(find(conn, z, "fresh-one")) == ["fresh-one"]
 
 
-def test_the_column_defaults_to_true_for_a_row_that_does_not_name_it(conn):
-    row = conn.execute(
-        "SELECT column_default, is_nullable FROM information_schema.columns"
-        " WHERE table_name = 'account' AND column_name = 'listed'"
-    ).fetchone()
-    assert row == {"column_default": "true", "is_nullable": "NO"}
+def test_listed_yes_puts_an_account_back(conn, make_account):
+    z, other = group(make_account, "back-z", "back-o")
+    unlist(conn, z)
+    assert handles(find(conn, other, "back-")) == ["back-o"]
+    unlist(conn, z, "yes")
+    assert handles(find(conn, other, "back-")) == ["back-o", "back-z"]
+
+
+def test_an_unlisted_account_is_left_out_of_the_count_and_the_limit(conn, make_account):
+    accounts_ = group(make_account, "cnt-a", "cnt-b", "cnt-c")
+    unlist(conn, accounts_[0])
+    out = find(conn, accounts_[1], "cnt-", limit=1)
+    assert out.splitlines()[0] == 'people matching "cnt-": 2'
+    assert handles(out) == ["cnt-b"]
+    assert "1 more;" in out
+
+
+def test_profile_lists_the_setting_with_its_wording(conn, make_account):
+    z = make_account()
+    with connection.during({"connection": "grant:people"}):
+        out = content.profile(conn, z)
+    assert (
+        '- listed: yes (this account): search(kind="person") shows this'
+        " account's handle to other people on this instance"
+    ) in out.splitlines()
 
 
 def test_the_same_handle_alone_keeps_its_answer(conn, make_account):
@@ -275,20 +298,6 @@ def test_the_same_handle_alone_keeps_its_answer(conn, make_account):
     assert content.profile(conn, z, handle="same-h") == (
         "Handle is already @same-h. Nothing changed."
     )
-
-
-def test_setting_listed_moves_updated_at_only_for_that_account(conn, make_account):
-    z, other = group(make_account, "upd-z", "upd-o")
-    conn.execute("UPDATE account SET updated_at = '2020-01-01'")
-    people.set_listed(conn, z, False)
-    rows = {
-        r["handle"]: r["updated_at"]
-        for r in conn.execute(
-            "SELECT handle::text AS handle, updated_at FROM account"
-            " WHERE handle IN ('upd-z', 'upd-o')"
-        ).fetchall()
-    }
-    assert rows["upd-z"].year > 2020 and rows["upd-o"].year == 2020
 
 
 # --- share ---------------------------------------------------------------------

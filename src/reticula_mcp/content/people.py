@@ -1,13 +1,16 @@
-"""The directory of people: ``search(kind="person")`` and ``profile(listed=...)``.
+"""The directory of people: ``search(kind="person")``.
 
-An account is listed unless its owner took it out (``account.listed``). A line
-names the handle, whether the account is verified and the day it joined. It
-never shows an e-mail address, a person ID or anything else about the account.
-Someone who is not listed can still be shared with by their exact handle.
+An account is listed unless its owner took it out with
+``edit(ref="settings", text="listed: no")`` (the setting lives in
+:mod:`reticula_mcp.settings`). A line names the handle, whether the account is
+verified and the day it joined. It never shows an e-mail address, a person ID
+or anything else about the account. Someone who is not listed can still be
+shared with by their exact handle.
 """
 
 from __future__ import annotations
 
+from reticula_mcp import settings
 from reticula_mcp.accounts import Account
 from reticula_mcp.db.pool import Conn
 from reticula_mcp.search.render import quote
@@ -19,22 +22,6 @@ NEXT = (
     'next: share(hub=<hub>, person="@handle", mode="add" or "read")'
     " shares a hub with one of them"
 )
-
-
-def is_listed(conn: Conn, viewer: Account) -> bool:
-    """Whether the viewer's account is in the directory of people."""
-    row = conn.execute(
-        "SELECT listed FROM account WHERE id = %s", (viewer.id,)
-    ).fetchone()
-    return bool(row["listed"]) if row else True
-
-
-def set_listed(conn: Conn, viewer: Account, listed: bool) -> None:
-    """Put the viewer's account in the directory, or take it out."""
-    conn.execute(
-        "UPDATE account SET listed = %s, updated_at = now() WHERE id = %s",
-        (listed, viewer.id),
-    )
 
 
 def _like_pattern(part: str) -> str:
@@ -53,7 +40,8 @@ def list_people(conn: Conn, viewer: Account, query: str, limit: int) -> str:
         "limit": limit,
     }
     where = (
-        "listed AND status = ANY(%(statuses)s) AND handle::text ILIKE %(pattern)s"
+        f"NOT ({settings.unlisted_sql('account.id')})"
+        " AND status = ANY(%(statuses)s) AND handle::text ILIKE %(pattern)s"
         " ESCAPE '\\'"
     )
     total = conn.execute(
