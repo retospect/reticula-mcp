@@ -248,7 +248,11 @@ def test_no_error_text_carries_key_bytes(conn: Any) -> None:
     acct = accounts.create_account(conn, "ana@example.com", PASSWORD, "ana")
     stored = _stored(conn, acct.id)["k1"]
     raw = keystore.decrypt(acct.id, "k1", stored)
-    for bad in (stored[:-1] + b"\x00", b"\x01" + stored[1:5] + b"\x00" * 60):
+    # the last byte flipped (setting it to 0 left it unchanged 1 time in 256)
+    for bad in (
+        stored[:-1] + bytes([stored[-1] ^ 1]),
+        b"\x01" + stored[1:5] + b"\x00" * 60,
+    ):
         with pytest.raises(ReticulaError) as err:
             keystore.decrypt(acct.id, "k1", bad)
         text = err.value.render()

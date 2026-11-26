@@ -284,7 +284,10 @@ def _key_command(settings: Settings, args: Any) -> int:
         f" {counts.already} were done already"
     )
     if args.key_command == "rotate":
-        print(f"now set RETICULA_KEY_FILE={args.new_file} and start the server")
+        print(
+            "now start the server with the new file as RETICULA_KEY_FILE"
+            f" ({args.new_file}, or moved to where RETICULA_KEY_FILE points)"
+        )
     return 0
 
 
