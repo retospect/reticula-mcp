@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 
+from reticula_mcp import handle_words
 from reticula_mcp.accounts import Account
 from reticula_mcp.db.pool import Conn
 from reticula_mcp.errors import BAD_INPUT, ReticulaError
@@ -359,9 +360,14 @@ _REF_SPLIT = re.compile(r"[\s,]+")
 
 def split_refs(ref: str) -> list[str]:
     """The refs in ``ref``, separated by spaces or commas, each once, in order.
-    No ref has a space or a comma in it (an address, an id suffix, a page)."""
+    An address, an id suffix or a page has no space or comma in it. A word
+    handle has spaces ("gentle beacon"): a part between commas that is one
+    is one ref, so several handles go between commas."""
     seen: list[str] = []
-    for one in _REF_SPLIT.split(ref.strip()):
-        if one and one not in seen:
-            seen.append(one)
+    for piece in ref.split(","):
+        piece = " ".join(piece.split())
+        ones = [piece] if handle_words.looks_spoken(piece) else _REF_SPLIT.split(piece)
+        for one in ones:
+            if one and one not in seen:
+                seen.append(one)
     return seen
