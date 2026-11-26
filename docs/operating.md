@@ -539,6 +539,13 @@ It defines the SQL function `public_nodes()`, which the page `/hubs` reads. No t
 
 0.4.0 also serves public pages on the same port as the connector: `/`, `/slides`, `/hubs`, `/connect`, `/vision`, `/privacy`, `/results` and `/robots.txt`. They need no setting. `/connect` shows the connector address built from `RETICULA_PUBLIC_URL`. A proxy in front of the server that forwards only `/mcp` and the sign-in pages leaves the public pages unreachable, and that is a valid way to run it. `/hubs` lists nothing until an owner runs `share(hub=..., person="public", mode="read")`.
 
+This upgrade was rehearsed the same way, on a copy of a running 0.3.0 instance: 3 accounts, 80 notes, 22 migrations. Under 0.3.0 from PyPI, two accounts made in the copy connected through the sign-in page and a third got a token from `reticula-mcp token`. Then 0.3.0 was stopped and the release candidate of 0.4.0 started on the same database.
+
+- It was healthy 6.1 seconds after `docker compose up`, with `applied 0354_public_nodes.sql` as the only applied line.
+- Without a new sign-in, the minted token and the access token of a connection answered `start`. The refresh grant with the refresh token from 0.3.0 returned a new pair, and its access token answered `start`.
+- `/`, `/hubs`, `/connect`, `/results` and `/slides` answered with status 200 and a `Content-Security-Policy` header. `/hubs` said `No hub is public on this server yet`.
+- After `share(hub=..., person="public", mode="read")` on a hub of one of those accounts, `/hubs` listed that hub by its title and short id, and nothing else of it: no address and no text. `/hubs` keeps a page for 60 seconds, so the change showed within a minute. After `mode="none"` the list was empty again.
+
 Migrations only move forward and each file runs in its own transaction. A migration file that has already been applied is never edited; changes arrive as new files. If the server reports that an applied file has changed, you are running mismatched code and database: do not continue.
 
 The version-zero note format may still change. Read the release notes before you upgrade across a format change.
