@@ -968,7 +968,7 @@ printf '%s\n%s\n' "$PASSWORD" "$PASSWORD" | docker compose exec -T app reticula-
 
 Without a terminal and without that input the command ends with `[error:BadInput] password must be 10-1024 characters`.
 
-Mint a token for a client that cannot do the sign-in flow. A token here is a bearer token: a secret string the client sends with every request in the header `Authorization: Bearer <token>`, and whoever holds it acts as the account. It is printed once and stored only as a hash. Omit `--ttl-days` for a token without an expiry.
+Mint a token for a client that cannot do the sign-in flow. A token here is a bearer token: a secret string the client sends with every request in the header `Authorization: Bearer <token>`, and whoever holds it acts as the account. It is printed once and stored only as a hash. It expires after 90 days; `--ttl-days N` sets another number of days, and `--no-expiry` makes one that never expires.
 
 ```
 docker compose exec app reticula-mcp token --email someone@example.com --label laptop --ttl-days 90
@@ -1001,12 +1001,23 @@ docker compose exec app reticula-mcp connections revoke --email someone@example.
 
 A revoked token or connection is refused on its next call. To rotate an operator token, mint a new one with a new label, switch the client to it, then revoke the old one.
 
-To lock an account out completely, set its status. Disabled accounts cannot sign in and their tokens stop working. This is also how to retire the accounts that the smoke test leaves behind.
+To lock an account out completely, disable it. A disabled account cannot sign in, and every connection, token and web sign-in of it is revoked. This is also how to retire the accounts that the smoke test leaves behind.
 
 ```
-docker compose exec -T db psql -U reticula -d reticula -c \
-  "UPDATE account SET status = 'disabled' WHERE email = 'someone@example.com'"
+docker compose exec app reticula-mcp account disable --email someone@example.com
 ```
+
+To give an account a new password, for example after the person lost theirs, set it. The command asks for the new password twice (at least 10 characters, and not one of the 10,000 most common ones) and revokes every connection, token and web sign-in of the account, so the person signs in again everywhere.
+
+```
+docker compose exec app reticula-mcp account passwd --email someone@example.com
+```
+
+### The account page
+
+People manage their own account on the web, at `/account` of the public address, signed in with their e-mail address and password. The page lists the connected assistants and the tokens made with `reticula-mcp token`, each revoked after a confirm step, sets whether the account is listed in the directory, exports everything as one zip file, and deletes the account. A web sign-in lasts 12 hours at most and ends after 30 minutes without use; "keep me signed in" makes both 30 days. Export and revoke ask for the password again after 10 minutes, and deletion always asks for it, with the handle typed. Failed web sign-ins count against the same limits as the sign-in page of the connector.
+
+Deleting an account erases, at once and in one request, every note, hub and link of the account (also those in other people's hubs), revokes every connection, token and web sign-in, and erases the e-mail address, the password and the private keys. The handle stays taken. Each note is deleted with its own signed record: measured on 2026-11-26 at about 8 ms per note (200 and 1,000 notes, on the test database of this repository, which runs without writing to disk at every commit), so an account of 5,000 notes takes about 40 seconds, longer on a slower disk. The page answers when it is done.
 
 ## Close sign-ups
 

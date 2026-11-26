@@ -80,6 +80,72 @@ def _valid(form_value: str, expected: str | None) -> bool:
     )
 
 
+#: One set of slots for every page that checks or makes a password hash: the
+#: connector's sign-in page and the account pages (auth/account_web.py).
+hash_slots = threading.BoundedSemaphore(HASH_SLOTS)
+
+
+def email_delay(db: Database, email: str) -> float:
+    """Seconds to wait before a sign-in for ``email`` is checked: 0 up to the
+    ceiling of failures from all addresses together, then doubling. Shared by
+    every page that takes a password."""
+    key = email.strip().lower()[: config.MAX_EMAIL_LENGTH]
+    with db.connection() as conn:
+        failures = throttle.email_failures(conn, key, config.EMAIL_CEILING_WINDOW)
+    over = failures - config.EMAIL_CEILING
+    if over <= 0:
+        return 0.0
+    return float(min(2 ** min(over, 10), config.EMAIL_DELAY_MAX))
+
+
+def check_password(
+    conn: Any, email: str, password: str, bucket: str
+) -> accounts.Account | str:
+    """The account for a right e-mail and password, or "throttled" or
+    "bad_credentials". Every page that takes a password calls this, so the
+    counters are the same rows: failed attempts per (e-mail, address bucket)
+    and per bucket, and the cross-bucket ceiling of email_delay.
+
+    The attempt is recorded BEFORE the argon2 check, under advisory locks on
+    both keys, and committed, so parallel guesses see each other
+    (check-then-verify-then-record let 24 parallel requests through a limit
+    of 6). A success takes its own record back. The caller holds a hash slot.
+    """
+    email_key = f"{email.lower()[: config.MAX_EMAIL_LENGTH]}|{bucket}"
+    provisional = throttle.acquire_many(
+        conn,
+        [
+            (
+                throttle.SIGNIN_EMAIL,
+                email_key,
+                config.FAILURES_PER_EMAIL,
+                config.FAILURE_WINDOW,
+            ),
+            (
+                throttle.SIGNIN_IP,
+                bucket,
+                config.FAILURES_PER_IP,
+                config.FAILURE_WINDOW,
+            ),
+        ],
+    )
+    conn.commit()
+    if provisional is None:
+        return "throttled"
+    account = None
+    if email and password and len(password) <= config.MAX_PASSWORD_LENGTH:
+        account = accounts.authenticate(conn, email, password)
+    if account is None:
+        throttle.purge(conn)
+        return "bad_credentials"
+    throttle.forget(conn, provisional)
+    conn.execute(
+        "DELETE FROM auth_event WHERE kind = %s AND subject = %s",
+        (throttle.SIGNIN_EMAIL, email_key),
+    )
+    return account
+
+
 def routes(settings: Settings, db: Database, provider: ReticulaProvider) -> list[Route]:
     secure_cookie = settings.base_url.startswith("https://")
     signup_limit, signup_window = parse_rate(settings.signup_rate)
@@ -142,19 +208,6 @@ def routes(settings: Settings, db: Database, provider: ReticulaProvider) -> list
 
     # --- POST ----------------------------------------------------------------
 
-    def delay_for(email: str) -> float:
-        """Seconds to wait before a sign-in for ``email`` is checked: 0 up to
-        the ceiling of failures from all addresses together, then doubling."""
-        key = email.strip().lower()[: config.MAX_EMAIL_LENGTH]
-        with db.connection() as conn:
-            failures = throttle.email_failures(conn, key, config.EMAIL_CEILING_WINDOW)
-        over = failures - config.EMAIL_CEILING
-        if over <= 0:
-            return 0.0
-        return float(min(2 ** min(over, 10), config.EMAIL_DELAY_MAX))
-
-    hash_slots = threading.BoundedSemaphore(HASH_SLOTS)
-
     def post_sync(form: dict[str, str], cookie: str | None, bucket: str) -> Response:
         with hash_slots:
             return _post(form, cookie, bucket)
@@ -203,46 +256,13 @@ def routes(settings: Settings, db: Database, provider: ReticulaProvider) -> list
         password: str,
         fail: Any,
     ) -> Response:
-        # The counter is per (e-mail, address): someone elsewhere cannot lock
-        # the owner out by guessing. The attempt is recorded BEFORE the argon2
-        # check, under advisory locks on both keys, and committed, so parallel
-        # guesses see each other (check-then-verify-then-record let 24 parallel
-        # requests through a limit of 6). A success takes its own record back.
-        # The pooled connection is held during the argon2 check exactly as
-        # accounts.authenticate needs it; the locks are not (transaction ends here).
-        # At most HASH_SLOTS requests are here at once (post_sync).
-        email_key = f"{email.lower()[: config.MAX_EMAIL_LENGTH]}|{bucket}"
-        provisional = throttle.acquire_many(
-            conn,
-            [
-                (
-                    throttle.SIGNIN_EMAIL,
-                    email_key,
-                    config.FAILURES_PER_EMAIL,
-                    config.FAILURE_WINDOW,
-                ),
-                (
-                    throttle.SIGNIN_IP,
-                    bucket,
-                    config.FAILURES_PER_IP,
-                    config.FAILURE_WINDOW,
-                ),
-            ],
-        )
-        conn.commit()
-        if provisional is None:
+        # the counters and the check are shared with the account pages
+        found = check_password(conn, email, password, bucket)
+        if found == "throttled":
             return fail("throttled", 429)
-        account = None
-        if email and password and len(password) <= config.MAX_PASSWORD_LENGTH:
-            account = accounts.authenticate(conn, email, password)
-        if account is None:
-            throttle.purge(conn)
+        if isinstance(found, str):
             return fail("bad_credentials", 401)
-        throttle.forget(conn, provisional)
-        conn.execute(
-            "DELETE FROM auth_event WHERE kind = %s AND subject = %s",
-            (throttle.SIGNIN_EMAIL, email_key),
-        )
+        account = found
         try:
             with conn.transaction():
                 url = provider.finish_authorization(conn, handle, pending, account.id)
@@ -356,7 +376,7 @@ def routes(settings: Settings, db: Database, provider: ReticulaProvider) -> list
         cookie = request.cookies.get(cookie_name(form.get("req", "")))
         bucket = caller_bucket(request, settings)
         if form.get("mode") != "signup" and form.get("email"):
-            delay = await anyio.to_thread.run_sync(delay_for, form["email"])
+            delay = await anyio.to_thread.run_sync(email_delay, db, form["email"])
             if delay:
                 await _wait(delay)
 
