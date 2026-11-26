@@ -46,6 +46,9 @@ class Settings:
     write_rate: str = "600/hour"  # put, edit, link, share and delete, per account
     # Peers whose X-Forwarded-For is believed (IPs or CIDRs); empty = trust nobody.
     trusted_proxies: tuple[str, ...] = ()
+    # RETICULA_TRUSTED_PROXIES=none: the operator says that no peer is to be
+    # trusted. ``trusted_proxies`` is then empty, as when nothing is set.
+    trusted_proxies_none: bool = False
     # Hosts an assistant's connector returns to that the sign-in page does not warn about.
     known_clients: tuple[str, ...] = ("claude.ai", "claude.com")
     embed_model: str | None = None  # model name for the fastembed embedder
@@ -64,6 +67,12 @@ class Settings:
             value = e.get(f"RETICULA_{name}", "").strip()
             return value or default
 
+        proxies = tuple(
+            part.strip()
+            for part in (get("TRUSTED_PROXIES") or "").split(",")
+            if part.strip()
+        )
+        proxies_none = len(proxies) == 1 and proxies[0].lower() == "none"
         settings = cls(
             database_url=get("DATABASE_URL"),
             public_url=(get("PUBLIC_URL") or "").rstrip("/") or None,
@@ -74,11 +83,8 @@ class Settings:
             signup_rate=get("SIGNUP_RATE", "5/hour") or "5/hour",
             register_rate=get("REGISTER_RATE", "20/hour") or "20/hour",
             write_rate=get("WRITE_RATE", "600/hour") or "600/hour",
-            trusted_proxies=tuple(
-                part.strip()
-                for part in (get("TRUSTED_PROXIES") or "").split(",")
-                if part.strip()
-            ),
+            trusted_proxies=() if proxies_none else proxies,
+            trusted_proxies_none=proxies_none,
             known_clients=tuple(
                 part.strip().lower()
                 for part in (get("KNOWN_CLIENTS", "claude.ai,claude.com") or "").split(
@@ -106,7 +112,19 @@ class Settings:
         parse_rate(self.register_rate)
         parse_rate(self.write_rate)
         self._check_base_url()
+        if self.trusted_proxies_none and self.trusted_proxies:
+            raise ReticulaError(
+                BAD_INPUT,
+                "RETICULA_TRUSTED_PROXIES: none must stand alone, not beside addresses",
+            )
         for proxy in self.trusted_proxies:
+            if proxy.lower() == "none":
+                raise ReticulaError(
+                    BAD_INPUT,
+                    "RETICULA_TRUSTED_PROXIES: none must stand alone, not in a list"
+                    " with addresses",
+                    hint="use none by itself, or list only addresses",
+                )
             try:
                 ipaddress.ip_network(proxy, strict=False)
             except ValueError as exc:

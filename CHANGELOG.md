@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `reticula-mcp serve` refuses to start when `RETICULA_PUBLIC_URL` is `https` (or another address that is reached through a proxy) and `RETICULA_TRUSTED_PROXIES` is empty. The error names the URL and says to set the proxy's address; `RETICULA_TRUSTED_PROXIES=none` starts the server as before, with a short warning that every client shares one rate-limit bucket. `migrate`, `token` and `account` are not affected.
+- `/healthz` answers from a database check that is at most 2 seconds old, whether it succeeded or failed, so repeated requests do not each take a database connection. The answer itself is unchanged.
 - Request log: a path that holds a space, a quote or a backslash after decoding is written in double quotes, like `agent=`. Other paths are written as before.
 - `compose.yaml`: Docker keeps each container's log to 5 files of 10 MB, and the server container may use at most 2 GB of memory (`RETICULA_APP_MEMORY` in `.env` sets another limit) and 512 processes. `compose.tailscale.yaml` and `compose.dev.yaml` get the same log limits. No migration.
 - The `cryptography` package is required at 46.0.7 or newer (it was 45 or newer).

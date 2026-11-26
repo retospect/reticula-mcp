@@ -106,10 +106,12 @@ def _time_on_other_lines() -> None:
 def _serve(settings: Settings, auto_migrate: bool) -> int:
     import uvicorn
 
+    from reticula_mcp.auth import refuse_unset_proxy_trust
     from reticula_mcp.db import connect
     from reticula_mcp.db.migrate import pending
     from reticula_mcp.server import build_app
 
+    refuse_unset_proxy_trust(settings)  # before anything is migrated or listened on
     if auto_migrate:
         _migrate(settings)
     with connect(settings.require_database_url()) as conn:

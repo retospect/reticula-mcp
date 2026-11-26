@@ -14,6 +14,7 @@ and render ``[error:<Code>] ...`` on :class:`ReticulaError`.
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from typing import Annotated, Any
@@ -46,6 +47,15 @@ from reticula_mcp.web import pages as web_pages
 log = logging.getLogger("reticula_mcp")
 
 MCP_PATH = "/mcp"
+
+# /healthz answers from the last database ping for this long, good or bad, so
+# repeated requests do not each take a connection.
+HEALTH_CACHE_SECONDS = 2.0
+
+
+def _now() -> float:
+    return time.monotonic()
+
 
 INSTRUCTIONS = (
     "Reticula is a shared memory graph: small notes you keep for the person you work"
@@ -187,9 +197,18 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
 
         return await anyio.to_thread.run_sync(work)
 
+    health: dict[str, Any] = {"at": None, "ok": False}
+    health_lock = anyio.Lock()
+
     @mcp.custom_route("/healthz", methods=["GET"])
     async def healthz(request: Request) -> Response:
-        ok = await anyio.to_thread.run_sync(db.ping)
+        # One event loop runs this; the lock keeps requests that arrive during
+        # a ping from each starting another.
+        async with health_lock:
+            if health["at"] is None or _now() - health["at"] >= HEALTH_CACHE_SECONDS:
+                health["ok"] = await anyio.to_thread.run_sync(db.ping)
+                health["at"] = _now()
+            ok = health["ok"]
         return JSONResponse(
             {"status": "ok" if ok else "unavailable", "version": __version__},
             status_code=200 if ok else 503,
