@@ -32,12 +32,19 @@ services:
     # Only the server reaches the database: the network has no route out and
     # no other service of the stack joins it.
     networks: [database]
+    # The superuser is reticula_admin, for the operator only. On an empty data
+    # directory db-init/10-owner-role.sh makes the role reticula, which the
+    # server connects as: it owns the database and has no superuser rights.
+    # These settings act only on an empty data directory; an install from
+    # before keeps its roles until the steps in docs/operating.md, Upgrade.
     environment:
-      POSTGRES_USER: reticula
-      POSTGRES_PASSWORD: ${RETICULA_DB_PASSWORD:?set RETICULA_DB_PASSWORD in .env}
-      POSTGRES_DB: reticula
+      POSTGRES_USER: reticula_admin
+      POSTGRES_PASSWORD: ${RETICULA_DB_ADMIN_PASSWORD:?set RETICULA_DB_ADMIN_PASSWORD in .env}
+      POSTGRES_DB: postgres
+      RETICULA_DB_PASSWORD: ${RETICULA_DB_PASSWORD:?set RETICULA_DB_PASSWORD in .env}
     volumes:
       - reticula-db:/var/lib/postgresql/data
+      - ./db-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U reticula -d reticula"]
       interval: 5s

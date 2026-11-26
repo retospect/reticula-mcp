@@ -20,6 +20,7 @@ TEST_ONLY = {"RETICULA_TEST_DATABASE_URL"}
 # Read by deploy/compose.yaml, not by the server.
 COMPOSE_ONLY = {
     "RETICULA_DB_PASSWORD",
+    "RETICULA_DB_ADMIN_PASSWORD",
     "RETICULA_VERSION",
     "RETICULA_SUBNET",
     "RETICULA_DB_WAIT",
