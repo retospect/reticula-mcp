@@ -69,21 +69,29 @@ def _numbers_in_text(html: str) -> set[str]:
     return {m.replace(",", "") for m in re.findall(r"\d[\d,]*(?:\.\d+)?", text)}
 
 
-def _numbers_in(value: Any) -> set[str]:
+def _numbers_in(value: Any, key: str = "") -> set[str]:
+    """The numbers of the file; a right-answer share also as the whole percent
+    the page prints it as, and nothing else besides."""
     found: set[str] = set()
     if isinstance(value, dict):
-        for v in value.values():
-            found |= _numbers_in(v)
+        for k, v in value.items():
+            found |= _numbers_in(v, k)
     elif isinstance(value, list):
         for v in value:
-            found |= _numbers_in(v)
+            found |= _numbers_in(v, key)
     elif isinstance(value, bool):
         pass
     elif isinstance(value, (int, float)):
         found.add(str(value))
+        if key == "right_share":
+            found.add(str(round(value * 100)))
     elif isinstance(value, str):
         found |= set(re.findall(r"\d+(?:\.\d+)?", value))
     return found
+
+
+def _text(html: str) -> str:
+    return re.sub(r"\s+", " ", unescape(re.sub(r"<[^>]+>", " ", html)))
 
 
 STUB = '{"status": "not measured yet", "notes": "synthetic", "cells": []}'
@@ -133,3 +141,27 @@ def test_a_file_not_marked_measured_shows_no_number() -> None:
     data = _fill()
     data["status"] = "not measured yet"
     assert "Not measured yet." in results.body(data)
+
+
+INTERNAL = ("arm", "arms", "cell", "cells", "scenario", "right_share", "fits")
+
+
+def test_shares_are_whole_percents_and_no_internal_word_is_shown() -> None:
+    data = _fill()
+    data["setting"] = (
+        "Every conversation ran with the system prompt of a chat application;"
+        " with Reticula, the person's standing line was added to it."
+    )
+    text = _text(results.body(data))
+    first = data["cells"][0]
+    assert f"{round(first['right_share'] * 100)}% ({first['runs']} runs)" in text
+    assert not re.search(r"\b0\.\d", text), "a share printed as a fraction"
+    for word in INTERNAL:
+        assert not re.search(rf"\b{word}\b", text), word
+    assert data["setting"] in text
+
+
+def test_the_shipped_file_shows_no_internal_word() -> None:
+    text = _text(results.body(results.load()))
+    for word in INTERNAL:
+        assert not re.search(rf"\b{word}\b", text), word

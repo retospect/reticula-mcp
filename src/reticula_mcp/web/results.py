@@ -3,7 +3,8 @@ RETICULA4 writes from its benchmark (arms: Reticula, all notes pasted, no
 memory; memory sizes; models).
 
 Every number on the page is a value of the file, printed as it is there
-(integers with thousands separators). The charts have no numeric axis: each
+(integers with thousands separators), or a right-answer share of the file as
+a whole percent. The charts have no numeric axis: each
 point carries its own value, and a cell that does not fit is a label, not a
 point. With the stub (status "not measured yet") the page says so and shows
 no number.
@@ -41,6 +42,13 @@ def _num(value: Any) -> str:
     if isinstance(value, int):
         return f"{value:,}"
     return e(value)
+
+
+def _percent(share: Any) -> str:
+    """A right-answer share of the file (0 to 1) as a whole percent."""
+    if isinstance(share, bool) or not isinstance(share, (int, float)):
+        return ""
+    return f"{round(share * 100)}%"
 
 
 def _cell(
@@ -148,7 +156,7 @@ def _table(data: dict[str, Any]) -> str:
                     cells.append("<td>does not fit</td>")
                 else:
                     cells.append(
-                        f"<td>{_num(c.get('right_share', ''))}"
+                        f"<td>{_percent(c.get('right_share'))}"
                         f' <span class="small">({_num(c.get("runs", ""))} runs)</span></td>'
                     )
             rows.append(
@@ -177,8 +185,8 @@ def body(data: dict[str, Any] | None = None) -> str:
     )
     about = [
         f"Measured on commit <code>{e(data.get('commit', ''))}</code> on"
-        f" {e(data.get('date', ''))}. The number of runs of each cell is in the"
-        " table.",
+        f" {e(data.get('date', ''))}. The number of runs behind each share is in"
+        " brackets in the table.",
         "Each point is the median over runs of the tokens the model read (in)"
         " and wrote (out) for one question.",
     ]
@@ -187,7 +195,8 @@ def body(data: dict[str, Any] | None = None) -> str:
     if data.get("scoring"):
         about.append(e(data["scoring"]))
     if data.get("setting"):
-        about.append(f"Setting: {e(data['setting'])}.")
+        # a sentence of the file, printed as it is written there
+        about.append(e(data["setting"]))
     return (
         intro
         + charts

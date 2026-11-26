@@ -4,7 +4,7 @@
   "status": "measured",
   "notes": "synthetic",
   "scoring": "An answer is right when it states the fact the notes hold (a fixed pattern per question, such as \"17\" or \"Thursday\"); for the question with no answer in memory, when it says it does not know and gives no number.",
-  "setting": "chat application system prompt; arm reticula adds the standing line",
+  "setting": "Every conversation ran with the system prompt of a chat application; with Reticula, the person's standing line was added to it.",
   "models": [
     "claude-haiku-5-5",
     "claude-sonnet-5-5"
