@@ -1,13 +1,1729 @@
 {
-  "status": "not measured yet",
-  "commit": "",
-  "date": "",
-  "setting": "",
+  "commit": "560d4fa",
+  "date": "2026-11-26",
+  "status": "measured",
   "notes": "synthetic",
-  "scoring": "",
-  "models": [],
-  "sizes": [],
-  "arms": [],
-  "questions": [],
-  "cells": []
+  "scoring": "An answer is right when it states the fact the notes hold (a fixed pattern per question, such as \"17\" or \"Thursday\"); for the question with no answer in memory, when it says it does not know and gives no number.",
+  "setting": "chat application system prompt; arm reticula adds the standing line",
+  "models": [
+    "claude-haiku-5-5",
+    "claude-sonnet-5-5"
+  ],
+  "sizes": [
+    66,
+    1000,
+    10000
+  ],
+  "arms": [
+    {
+      "id": "reticula",
+      "label": "Reticula connector, standing line"
+    },
+    {
+      "id": "pasted",
+      "label": "All notes pasted into the prompt"
+    },
+    {
+      "id": "none",
+      "label": "No memory"
+    }
+  ],
+  "questions": [
+    {
+      "id": "q1",
+      "kind": "exact",
+      "text": "What number does my garden plot have?"
+    },
+    {
+      "id": "q2",
+      "kind": "exact",
+      "text": "When is choir practice?"
+    },
+    {
+      "id": "q3",
+      "kind": "exact",
+      "text": "How wide is the rear tyre of my bike?"
+    },
+    {
+      "id": "q4",
+      "kind": "meaning",
+      "text": "According to my notes, what do the tall glowing towers on the coast do in winter?"
+    },
+    {
+      "id": "q5",
+      "kind": "meaning",
+      "text": "What colour are dromedaries, according to my notes?"
+    },
+    {
+      "id": "q6",
+      "kind": "meaning",
+      "text": "When will I be allowed to give blood again?"
+    },
+    {
+      "id": "q7",
+      "kind": "shared",
+      "text": "On which day is the liquid nitrogen delivered to the lab?"
+    },
+    {
+      "id": "q8",
+      "kind": "shared",
+      "text": "How often does the lab freezer get defrosted?"
+    },
+    {
+      "id": "q9",
+      "kind": "exact",
+      "text": "What am I giving my sister for her birthday, and what is the budget?"
+    },
+    {
+      "id": "q10",
+      "kind": "none",
+      "text": "What is my passport number?"
+    }
+  ],
+  "cells": [
+    {
+      "arm": "reticula",
+      "size": 66,
+      "model": "claude-haiku-5-5",
+      "fits": true,
+      "runs": 120,
+      "right_share": 1.0,
+      "median": {
+        "input_tokens": 12723,
+        "output_tokens": 251,
+        "tool_calls": 2,
+        "reticula_reply_tokens": 1789,
+        "cost_usd": 0.0005
+      },
+      "per_question": [
+        {
+          "id": "q1",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 12563,
+            "output_tokens": 121,
+            "tool_calls": 2,
+            "reticula_reply_tokens": 1642,
+            "cost_usd": 0.0002
+          }
+        },
+        {
+          "id": "q2",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 12648,
+            "output_tokens": 123,
+            "tool_calls": 2,
+            "reticula_reply_tokens": 1733,
+            "cost_usd": 0.0002
+          }
+        },
+        {
+          "id": "q3",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 12643,
+            "output_tokens": 194,
+            "tool_calls": 2,
+            "reticula_reply_tokens": 1734,
+            "cost_usd": 0.0006
+          }
+        },
+        {
+          "id": "q4",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 12631,
+            "output_tokens": 301,
+            "tool_calls": 2,
+            "reticula_reply_tokens": 1680,
+            "cost_usd": 0.0003
+          }
+        },
+        {
+          "id": "q5",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 12662,
+            "output_tokens": 372,
+            "tool_calls": 2,
+            "reticula_reply_tokens": 1729,
+            "cost_usd": 0.0003
+          }
+        },
+        {
+          "id": "q6",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 20177,
+            "output_tokens": 439,
+            "tool_calls": 3,
+            "reticula_reply_tokens": 2103,
+            "cost_usd": 0.0008
+          }
+        },
+        {
+          "id": "q7",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 12751,
+            "output_tokens": 165,
+            "tool_calls": 2,
+            "reticula_reply_tokens": 1808,
+            "cost_usd": 0.0002
+          }
+        },
+        {
+          "id": "q8",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 12770,
+            "output_tokens": 494,
+            "tool_calls": 2,
+            "reticula_reply_tokens": 1839,
+            "cost_usd": 0.0004
+          }
+        },
+        {
+          "id": "q9",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 12732,
+            "output_tokens": 171,
+            "tool_calls": 2,
+            "reticula_reply_tokens": 1789,
+            "cost_usd": 0.0004
+          }
+        },
+        {
+          "id": "q10",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 12734,
+            "output_tokens": 271,
+            "tool_calls": 2,
+            "reticula_reply_tokens": 1840,
+            "cost_usd": 0.0006
+          }
+        }
+      ]
+    },
+    {
+      "arm": "reticula",
+      "size": 66,
+      "model": "claude-sonnet-5-5",
+      "fits": true,
+      "runs": 120,
+      "right_share": 1.0,
+      "median": {
+        "input_tokens": 12645,
+        "output_tokens": 164,
+        "tool_calls": 2,
+        "reticula_reply_tokens": 1755,
+        "cost_usd": 0.0032
+      },
+      "per_question": [
+        {
+          "id": "q1",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 12498,
+            "output_tokens": 112,
+            "tool_calls": 2,
+            "reticula_reply_tokens": 1620,
+            "cost_usd": 0.0024
+          }
+        },
+        {
+          "id": "q2",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 12490,
+            "output_tokens": 120,
+            "tool_calls": 2,
+            "reticula_reply_tokens": 1618,
+            "cost_usd": 0.0025
+          }
+        },
+        {
+          "id": "q3",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 12516,
+            "output_tokens": 118,
+            "tool_calls": 2,
+            "reticula_reply_tokens": 1628,
+            "cost_usd": 0.0025
+          }
+        },
+        {
+          "id": "q4",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 12572,
+            "output_tokens": 177,
+            "tool_calls": 2,
+            "reticula_reply_tokens": 1664,
+            "cost_usd": 0.0031
+          }
+        },
+        {
+          "id": "q5",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 12645,
+            "output_tokens": 232,
+            "tool_calls": 2,
+            "reticula_reply_tokens": 1755,
+            "cost_usd": 0.0036
+          }
+        },
+        {
+          "id": "q6",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 19885,
+            "output_tokens": 245,
+            "tool_calls": 3,
+            "reticula_reply_tokens": 1901,
+            "cost_usd": 0.0047
+          }
+        },
+        {
+          "id": "q7",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 12607,
+            "output_tokens": 161,
+            "tool_calls": 2,
+            "reticula_reply_tokens": 1707,
+            "cost_usd": 0.0029
+          }
+        },
+        {
+          "id": "q8",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 12655,
+            "output_tokens": 176,
+            "tool_calls": 2,
+            "reticula_reply_tokens": 1767,
+            "cost_usd": 0.0031
+          }
+        },
+        {
+          "id": "q9",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 12668,
+            "output_tokens": 126,
+            "tool_calls": 2,
+            "reticula_reply_tokens": 1768,
+            "cost_usd": 0.0025
+          }
+        },
+        {
+          "id": "q10",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 12655,
+            "output_tokens": 196,
+            "tool_calls": 2,
+            "reticula_reply_tokens": 1783,
+            "cost_usd": 0.0033
+          }
+        }
+      ]
+    },
+    {
+      "arm": "reticula",
+      "size": 1000,
+      "model": "claude-haiku-5-5",
+      "fits": true,
+      "runs": 120,
+      "right_share": 1.0,
+      "median": {
+        "input_tokens": 12964,
+        "output_tokens": 223,
+        "tool_calls": 2,
+        "reticula_reply_tokens": 2009,
+        "cost_usd": 0.0006
+      },
+      "per_question": [
+        {
+          "id": "q1",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 12634,
+            "output_tokens": 143,
+            "tool_calls": 2,
+            "reticula_reply_tokens": 1731,
+            "cost_usd": 0.0005
+          }
+        },
+        {
+          "id": "q2",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 12964,
+            "output_tokens": 169,
+            "tool_calls": 2,
+            "reticula_reply_tokens": 2049,
+            "cost_usd": 0.0006
+          }
+        },
+        {
+          "id": "q3",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 12993,
+            "output_tokens": 199,
+            "tool_calls": 2,
+            "reticula_reply_tokens": 2083,
+            "cost_usd": 0.0006
+          }
+        },
+        {
+          "id": "q4",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 12629,
+            "output_tokens": 345,
+            "tool_calls": 2,
+            "reticula_reply_tokens": 1679,
+            "cost_usd": 0.0006
+          }
+        },
+        {
+          "id": "q5",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 20821,
+            "output_tokens": 409,
+            "tool_calls": 3,
+            "reticula_reply_tokens": 2381,
+            "cost_usd": 0.0009
+          }
+        },
+        {
+          "id": "q6",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 20110,
+            "output_tokens": 401,
+            "tool_calls": 3,
+            "reticula_reply_tokens": 2054,
+            "cost_usd": 0.0008
+          }
+        },
+        {
+          "id": "q7",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 12751,
+            "output_tokens": 169,
+            "tool_calls": 2,
+            "reticula_reply_tokens": 1808,
+            "cost_usd": 0.0002
+          }
+        },
+        {
+          "id": "q8",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 13041,
+            "output_tokens": 302,
+            "tool_calls": 2,
+            "reticula_reply_tokens": 2110,
+            "cost_usd": 0.0007
+          }
+        },
+        {
+          "id": "q9",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 12740,
+            "output_tokens": 160,
+            "tool_calls": 2,
+            "reticula_reply_tokens": 1797,
+            "cost_usd": 0.0004
+          }
+        },
+        {
+          "id": "q10",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 12622,
+            "output_tokens": 254,
+            "tool_calls": 2,
+            "reticula_reply_tokens": 1729,
+            "cost_usd": 0.0006
+          }
+        }
+      ]
+    },
+    {
+      "arm": "reticula",
+      "size": 1000,
+      "model": "claude-sonnet-5-5",
+      "fits": true,
+      "runs": 120,
+      "right_share": 1.0,
+      "median": {
+        "input_tokens": 12680,
+        "output_tokens": 163,
+        "tool_calls": 2,
+        "reticula_reply_tokens": 1780,
+        "cost_usd": 0.0039
+      },
+      "per_question": [
+        {
+          "id": "q1",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 12549,
+            "output_tokens": 99,
+            "tool_calls": 2,
+            "reticula_reply_tokens": 1671,
+            "cost_usd": 0.0023
+          }
+        },
+        {
+          "id": "q2",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 12492,
+            "output_tokens": 120,
+            "tool_calls": 2,
+            "reticula_reply_tokens": 1620,
+            "cost_usd": 0.0025
+          }
+        },
+        {
+          "id": "q3",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 12896,
+            "output_tokens": 118,
+            "tool_calls": 2,
+            "reticula_reply_tokens": 2008,
+            "cost_usd": 0.0104
+          }
+        },
+        {
+          "id": "q4",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 12576,
+            "output_tokens": 177,
+            "tool_calls": 2,
+            "reticula_reply_tokens": 1668,
+            "cost_usd": 0.0031
+          }
+        },
+        {
+          "id": "q5",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 20586,
+            "output_tokens": 246,
+            "tool_calls": 3,
+            "reticula_reply_tokens": 2196,
+            "cost_usd": 0.0053
+          }
+        },
+        {
+          "id": "q6",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 19887,
+            "output_tokens": 254,
+            "tool_calls": 3,
+            "reticula_reply_tokens": 1901,
+            "cost_usd": 0.0047
+          }
+        },
+        {
+          "id": "q7",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 12680,
+            "output_tokens": 162,
+            "tool_calls": 2,
+            "reticula_reply_tokens": 1780,
+            "cost_usd": 0.0029
+          }
+        },
+        {
+          "id": "q8",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 12654,
+            "output_tokens": 179,
+            "tool_calls": 2,
+            "reticula_reply_tokens": 1766,
+            "cost_usd": 0.0101
+          }
+        },
+        {
+          "id": "q9",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 12680,
+            "output_tokens": 126,
+            "tool_calls": 2,
+            "reticula_reply_tokens": 1780,
+            "cost_usd": 0.0025
+          }
+        },
+        {
+          "id": "q10",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 12547,
+            "output_tokens": 181,
+            "tool_calls": 2,
+            "reticula_reply_tokens": 1675,
+            "cost_usd": 0.0031
+          }
+        }
+      ]
+    },
+    {
+      "arm": "pasted",
+      "size": 66,
+      "model": "claude-haiku-5-5",
+      "fits": true,
+      "runs": 120,
+      "right_share": 1.0,
+      "median": {
+        "input_tokens": 2512,
+        "output_tokens": 127,
+        "tool_calls": 0,
+        "reticula_reply_tokens": 0,
+        "cost_usd": 0.0001
+      },
+      "per_question": [
+        {
+          "id": "q1",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 2507,
+            "output_tokens": 72,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0001
+          }
+        },
+        {
+          "id": "q2",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 2504,
+            "output_tokens": 20,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0
+          }
+        },
+        {
+          "id": "q3",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 2512,
+            "output_tokens": 93,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0001
+          }
+        },
+        {
+          "id": "q4",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 2522,
+            "output_tokens": 206,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0001
+          }
+        },
+        {
+          "id": "q5",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 2513,
+            "output_tokens": 185,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0001
+          }
+        },
+        {
+          "id": "q6",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 2510,
+            "output_tokens": 144,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0001
+          }
+        },
+        {
+          "id": "q7",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 2518,
+            "output_tokens": 50,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0001
+          }
+        },
+        {
+          "id": "q8",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 2512,
+            "output_tokens": 184,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0001
+          }
+        },
+        {
+          "id": "q9",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 2518,
+            "output_tokens": 134,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0001
+          }
+        },
+        {
+          "id": "q10",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 2504,
+            "output_tokens": 120,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0001
+          }
+        }
+      ]
+    },
+    {
+      "arm": "pasted",
+      "size": 66,
+      "model": "claude-sonnet-5-5",
+      "fits": true,
+      "runs": 120,
+      "right_share": 1.0,
+      "median": {
+        "input_tokens": 2491,
+        "output_tokens": 48,
+        "tool_calls": 0,
+        "reticula_reply_tokens": 0,
+        "cost_usd": 0.0008
+      },
+      "per_question": [
+        {
+          "id": "q1",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 2486,
+            "output_tokens": 15,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0004
+          }
+        },
+        {
+          "id": "q2",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 2483,
+            "output_tokens": 20,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0005
+          }
+        },
+        {
+          "id": "q3",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 2491,
+            "output_tokens": 21,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0005
+          }
+        },
+        {
+          "id": "q4",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 2501,
+            "output_tokens": 141,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0017
+          }
+        },
+        {
+          "id": "q5",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 2492,
+            "output_tokens": 193,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0022
+          }
+        },
+        {
+          "id": "q6",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 2489,
+            "output_tokens": 39,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0006
+          }
+        },
+        {
+          "id": "q7",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 2497,
+            "output_tokens": 53,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0008
+          }
+        },
+        {
+          "id": "q8",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 2491,
+            "output_tokens": 57,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0008
+          }
+        },
+        {
+          "id": "q9",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 2497,
+            "output_tokens": 37,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0006
+          }
+        },
+        {
+          "id": "q10",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 2483,
+            "output_tokens": 103,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0013
+          }
+        }
+      ]
+    },
+    {
+      "arm": "pasted",
+      "size": 1000,
+      "model": "claude-haiku-5-5",
+      "fits": true,
+      "runs": 120,
+      "right_share": 1.0,
+      "median": {
+        "input_tokens": 26209,
+        "output_tokens": 120,
+        "tool_calls": 0,
+        "reticula_reply_tokens": 0,
+        "cost_usd": 0.0003
+      },
+      "per_question": [
+        {
+          "id": "q1",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 26204,
+            "output_tokens": 15,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0003
+          }
+        },
+        {
+          "id": "q2",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 26201,
+            "output_tokens": 81,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0003
+          }
+        },
+        {
+          "id": "q3",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 26209,
+            "output_tokens": 77,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0003
+          }
+        },
+        {
+          "id": "q4",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 26219,
+            "output_tokens": 255,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0004
+          }
+        },
+        {
+          "id": "q5",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 26210,
+            "output_tokens": 222,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0004
+          }
+        },
+        {
+          "id": "q6",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 26207,
+            "output_tokens": 182,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0004
+          }
+        },
+        {
+          "id": "q7",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 26215,
+            "output_tokens": 63,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0003
+          }
+        },
+        {
+          "id": "q8",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 26209,
+            "output_tokens": 177,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0004
+          }
+        },
+        {
+          "id": "q9",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 26215,
+            "output_tokens": 115,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0003
+          }
+        },
+        {
+          "id": "q10",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 26201,
+            "output_tokens": 125,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0003
+          }
+        }
+      ]
+    },
+    {
+      "arm": "pasted",
+      "size": 1000,
+      "model": "claude-sonnet-5-5",
+      "fits": true,
+      "runs": 120,
+      "right_share": 1.0,
+      "median": {
+        "input_tokens": 26188,
+        "output_tokens": 53,
+        "tool_calls": 0,
+        "reticula_reply_tokens": 0,
+        "cost_usd": 0.0032
+      },
+      "per_question": [
+        {
+          "id": "q1",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 26183,
+            "output_tokens": 13,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0028
+          }
+        },
+        {
+          "id": "q2",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 26180,
+            "output_tokens": 20,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0028
+          }
+        },
+        {
+          "id": "q3",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 26188,
+            "output_tokens": 27,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0029
+          }
+        },
+        {
+          "id": "q4",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 26198,
+            "output_tokens": 167,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0043
+          }
+        },
+        {
+          "id": "q5",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 26189,
+            "output_tokens": 195,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0046
+          }
+        },
+        {
+          "id": "q6",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 26186,
+            "output_tokens": 18,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0028
+          }
+        },
+        {
+          "id": "q7",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 26194,
+            "output_tokens": 53,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0032
+          }
+        },
+        {
+          "id": "q8",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 26188,
+            "output_tokens": 56,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0032
+          }
+        },
+        {
+          "id": "q9",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 26194,
+            "output_tokens": 37,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.003
+          }
+        },
+        {
+          "id": "q10",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 26180,
+            "output_tokens": 113,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0038
+          }
+        }
+      ]
+    },
+    {
+      "arm": "none",
+      "size": 66,
+      "model": "claude-haiku-5-5",
+      "fits": true,
+      "runs": 120,
+      "right_share": 0.108,
+      "median": {
+        "input_tokens": 684,
+        "output_tokens": 271,
+        "tool_calls": 0,
+        "reticula_reply_tokens": 0,
+        "cost_usd": 0.0001
+      },
+      "per_question": [
+        {
+          "id": "q1",
+          "runs": 12,
+          "right_share": 0.0,
+          "median": {
+            "input_tokens": 679,
+            "output_tokens": 207,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0001
+          }
+        },
+        {
+          "id": "q2",
+          "runs": 12,
+          "right_share": 0.0,
+          "median": {
+            "input_tokens": 676,
+            "output_tokens": 252,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0001
+          }
+        },
+        {
+          "id": "q3",
+          "runs": 12,
+          "right_share": 0.083,
+          "median": {
+            "input_tokens": 684,
+            "output_tokens": 374,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0002
+          }
+        },
+        {
+          "id": "q4",
+          "runs": 12,
+          "right_share": 0.0,
+          "median": {
+            "input_tokens": 694,
+            "output_tokens": 226,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0001
+          }
+        },
+        {
+          "id": "q5",
+          "runs": 12,
+          "right_share": 0.0,
+          "median": {
+            "input_tokens": 685,
+            "output_tokens": 263,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0001
+          }
+        },
+        {
+          "id": "q6",
+          "runs": 12,
+          "right_share": 0.0,
+          "median": {
+            "input_tokens": 682,
+            "output_tokens": 612,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0003
+          }
+        },
+        {
+          "id": "q7",
+          "runs": 12,
+          "right_share": 0.0,
+          "median": {
+            "input_tokens": 690,
+            "output_tokens": 317,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0002
+          }
+        },
+        {
+          "id": "q8",
+          "runs": 12,
+          "right_share": 0.0,
+          "median": {
+            "input_tokens": 684,
+            "output_tokens": 533,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0003
+          }
+        },
+        {
+          "id": "q9",
+          "runs": 12,
+          "right_share": 0.0,
+          "median": {
+            "input_tokens": 690,
+            "output_tokens": 269,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0001
+          }
+        },
+        {
+          "id": "q10",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 676,
+            "output_tokens": 249,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0001
+          }
+        }
+      ]
+    },
+    {
+      "arm": "none",
+      "size": 66,
+      "model": "claude-sonnet-5-5",
+      "fits": true,
+      "runs": 120,
+      "right_share": 0.167,
+      "median": {
+        "input_tokens": 663,
+        "output_tokens": 275,
+        "tool_calls": 0,
+        "reticula_reply_tokens": 0,
+        "cost_usd": 0.003
+      },
+      "per_question": [
+        {
+          "id": "q1",
+          "runs": 12,
+          "right_share": 0.0,
+          "median": {
+            "input_tokens": 658,
+            "output_tokens": 228,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0023
+          }
+        },
+        {
+          "id": "q2",
+          "runs": 12,
+          "right_share": 0.0,
+          "median": {
+            "input_tokens": 655,
+            "output_tokens": 243,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0026
+          }
+        },
+        {
+          "id": "q3",
+          "runs": 12,
+          "right_share": 0.667,
+          "median": {
+            "input_tokens": 663,
+            "output_tokens": 428,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0045
+          }
+        },
+        {
+          "id": "q4",
+          "runs": 12,
+          "right_share": 0.0,
+          "median": {
+            "input_tokens": 673,
+            "output_tokens": 218,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0023
+          }
+        },
+        {
+          "id": "q5",
+          "runs": 12,
+          "right_share": 0.0,
+          "median": {
+            "input_tokens": 664,
+            "output_tokens": 246,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0026
+          }
+        },
+        {
+          "id": "q6",
+          "runs": 12,
+          "right_share": 0.0,
+          "median": {
+            "input_tokens": 661,
+            "output_tokens": 580,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0059
+          }
+        },
+        {
+          "id": "q7",
+          "runs": 12,
+          "right_share": 0.0,
+          "median": {
+            "input_tokens": 669,
+            "output_tokens": 316,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0033
+          }
+        },
+        {
+          "id": "q8",
+          "runs": 12,
+          "right_share": 0.0,
+          "median": {
+            "input_tokens": 663,
+            "output_tokens": 506,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0054
+          }
+        },
+        {
+          "id": "q9",
+          "runs": 12,
+          "right_share": 0.0,
+          "median": {
+            "input_tokens": 669,
+            "output_tokens": 285,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.003
+          }
+        },
+        {
+          "id": "q10",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 655,
+            "output_tokens": 257,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0026
+          }
+        }
+      ]
+    },
+    {
+      "arm": "none",
+      "size": 1000,
+      "model": "claude-haiku-5-5",
+      "fits": true,
+      "runs": 120,
+      "right_share": 0.117,
+      "median": {
+        "input_tokens": 684,
+        "output_tokens": 264,
+        "tool_calls": 0,
+        "reticula_reply_tokens": 0,
+        "cost_usd": 0.0001
+      },
+      "per_question": [
+        {
+          "id": "q1",
+          "runs": 12,
+          "right_share": 0.0,
+          "median": {
+            "input_tokens": 679,
+            "output_tokens": 206,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0001
+          }
+        },
+        {
+          "id": "q2",
+          "runs": 12,
+          "right_share": 0.0,
+          "median": {
+            "input_tokens": 676,
+            "output_tokens": 226,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0001
+          }
+        },
+        {
+          "id": "q3",
+          "runs": 12,
+          "right_share": 0.083,
+          "median": {
+            "input_tokens": 684,
+            "output_tokens": 374,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0002
+          }
+        },
+        {
+          "id": "q4",
+          "runs": 12,
+          "right_share": 0.0,
+          "median": {
+            "input_tokens": 694,
+            "output_tokens": 236,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0001
+          }
+        },
+        {
+          "id": "q5",
+          "runs": 12,
+          "right_share": 0.0,
+          "median": {
+            "input_tokens": 685,
+            "output_tokens": 253,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0001
+          }
+        },
+        {
+          "id": "q6",
+          "runs": 12,
+          "right_share": 0.0,
+          "median": {
+            "input_tokens": 682,
+            "output_tokens": 623,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0003
+          }
+        },
+        {
+          "id": "q7",
+          "runs": 12,
+          "right_share": 0.083,
+          "median": {
+            "input_tokens": 690,
+            "output_tokens": 306,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0002
+          }
+        },
+        {
+          "id": "q8",
+          "runs": 12,
+          "right_share": 0.0,
+          "median": {
+            "input_tokens": 684,
+            "output_tokens": 519,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0003
+          }
+        },
+        {
+          "id": "q9",
+          "runs": 12,
+          "right_share": 0.0,
+          "median": {
+            "input_tokens": 690,
+            "output_tokens": 227,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0001
+          }
+        },
+        {
+          "id": "q10",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 676,
+            "output_tokens": 239,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0001
+          }
+        }
+      ]
+    },
+    {
+      "arm": "none",
+      "size": 1000,
+      "model": "claude-sonnet-5-5",
+      "fits": true,
+      "runs": 120,
+      "right_share": 0.142,
+      "median": {
+        "input_tokens": 663,
+        "output_tokens": 270,
+        "tool_calls": 0,
+        "reticula_reply_tokens": 0,
+        "cost_usd": 0.0028
+      },
+      "per_question": [
+        {
+          "id": "q1",
+          "runs": 12,
+          "right_share": 0.0,
+          "median": {
+            "input_tokens": 658,
+            "output_tokens": 216,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0022
+          }
+        },
+        {
+          "id": "q2",
+          "runs": 12,
+          "right_share": 0.0,
+          "median": {
+            "input_tokens": 655,
+            "output_tokens": 221,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0023
+          }
+        },
+        {
+          "id": "q3",
+          "runs": 12,
+          "right_share": 0.417,
+          "median": {
+            "input_tokens": 663,
+            "output_tokens": 411,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0042
+          }
+        },
+        {
+          "id": "q4",
+          "runs": 12,
+          "right_share": 0.0,
+          "median": {
+            "input_tokens": 673,
+            "output_tokens": 229,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0024
+          }
+        },
+        {
+          "id": "q5",
+          "runs": 12,
+          "right_share": 0.0,
+          "median": {
+            "input_tokens": 664,
+            "output_tokens": 259,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0027
+          }
+        },
+        {
+          "id": "q6",
+          "runs": 12,
+          "right_share": 0.0,
+          "median": {
+            "input_tokens": 661,
+            "output_tokens": 618,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0062
+          }
+        },
+        {
+          "id": "q7",
+          "runs": 12,
+          "right_share": 0.0,
+          "median": {
+            "input_tokens": 669,
+            "output_tokens": 309,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0032
+          }
+        },
+        {
+          "id": "q8",
+          "runs": 12,
+          "right_share": 0.0,
+          "median": {
+            "input_tokens": 663,
+            "output_tokens": 570,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0058
+          }
+        },
+        {
+          "id": "q9",
+          "runs": 12,
+          "right_share": 0.0,
+          "median": {
+            "input_tokens": 669,
+            "output_tokens": 250,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0026
+          }
+        },
+        {
+          "id": "q10",
+          "runs": 12,
+          "right_share": 1.0,
+          "median": {
+            "input_tokens": 655,
+            "output_tokens": 250,
+            "tool_calls": 0,
+            "reticula_reply_tokens": 0,
+            "cost_usd": 0.0026
+          }
+        }
+      ]
+    }
+  ]
 }
