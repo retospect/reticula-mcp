@@ -6,6 +6,7 @@
 - Request log: a path that holds a space, a quote or a backslash after decoding is written in double quotes, like `agent=`. Other paths are written as before.
 - `compose.yaml`: Docker keeps each container's log to 5 files of 10 MB, and the server container may use at most 2 GB of memory (`RETICULA_APP_MEMORY` in `.env` sets another limit) and 512 processes. `compose.tailscale.yaml` and `compose.dev.yaml` get the same log limits. No migration.
 - The `cryptography` package is required at 46.0.7 or newer (it was 45 or newer).
+- Quoted text: runs of three or more `<` or `>` inside a quoted note show as `‹` or `›`, so only the server writes marker lines, and the begin line says that only an end line with the same 16 hex ends the block.
 
 ## 0.4.0 (2026-11-26)
 
