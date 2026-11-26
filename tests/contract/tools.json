@@ -15,17 +15,6 @@
      }
     ],
     "default": null
-   },
-   "word_handles": {
-    "anyOf": [
-     {
-      "type": "string"
-     },
-     {
-      "type": "null"
-     }
-    ],
-    "default": null
    }
   },
   "required": []

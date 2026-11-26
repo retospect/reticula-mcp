@@ -1,8 +1,9 @@
 """Word handles in replies, for a connection that switched them on.
 
-Off by default, so that no reply pays for them. ``profile(word_handles="on")``
-switches them on for the connection the call came through (connection.py;
-table ``connection_setting``, migration 0352). While on, the short id at the
+Off by default, so that no reply pays for them.
+``edit(ref="settings", text="word handles: on")`` switches them on for the
+connection the call came through (settings.py, connection.py; table
+``connection_setting``, migration 0352). While on, the short id at the
 start of a line gains the note's words (``4f9c21aa gentle beacon note ...``).
 
 How many words: two, unless another note this reader may read has the same
@@ -25,7 +26,6 @@ from dataclasses import dataclass, field
 from reticula_mcp import connection, handle_words
 from reticula_mcp.accounts import Account
 from reticula_mcp.db.pool import Conn
-from reticula_mcp.errors import BAD_INPUT, ReticulaError
 from reticula_mcp.permissions import readable_nodes_sql
 
 SETTING = "word_handles"
@@ -42,7 +42,8 @@ _ACTIVE: ContextVar[_Call | None] = ContextVar("reticula_word_handles", default=
 
 
 def is_on(conn: Conn) -> bool:
-    """Whether the connection of this call has word handles on."""
+    """Whether the connection of this call has word handles on (settings.py:
+    edit(ref="settings", text="word handles: on"))."""
     key = connection.current()
     if key is None:
         return False
@@ -51,33 +52,6 @@ def is_on(conn: Conn) -> bool:
         (key, SETTING),
     ).fetchone()
     return bool(row and row["value"] == "on")
-
-
-def switch(conn: Conn, viewer: Account, value: str) -> str:
-    """``profile(word_handles=...)``: on or off for this connection."""
-    wanted = value.strip().lower()
-    if wanted not in ("on", "off"):
-        raise ReticulaError(BAD_INPUT, 'word_handles is "on" or "off"')
-    key = connection.current()
-    if key is None:
-        raise ReticulaError(
-            BAD_INPUT,
-            "word handles are switched per connection, and this call has none",
-        )
-    conn.execute(
-        "INSERT INTO connection_setting (connection, account_id, name, value)"
-        " VALUES (%s, %s, %s, %s) ON CONFLICT (connection, name)"
-        " DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
-        (key, viewer.id, SETTING, wanted),
-    )
-    if wanted == "on":
-        return (
-            "Word handles are on for this connection: a note's id at the start of"
-            ' a line is followed by its words ("4f9c21aa gentle beacon"), and the'
-            ' words work wherever an id does. profile(word_handles="off") turns'
-            " them off."
-        )
-    return "Word handles are off for this connection."
 
 
 @contextmanager

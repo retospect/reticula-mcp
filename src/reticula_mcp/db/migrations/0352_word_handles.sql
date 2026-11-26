@@ -8,11 +8,11 @@
 -- these numbers.
 --
 -- connection_setting: what one connection switched on, such as word handles
--- (profile(word_handles="on")). A connection is 'grant:<grant id>' or
--- 'token:<token row id>'.
+-- (edit(ref="settings", text="word handles: on"), settings.py). A connection
+-- is 'grant:<grant id>' or 'token:<token row id>'.
 --
--- A new function, a new index and a new table: no existing table, column or
--- row changes.
+-- A new function, a new index and two new tables: no existing table, column
+-- or row changes.
 CREATE OR REPLACE FUNCTION handle_number(address text) RETURNS integer
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     SELECT CASE WHEN right(address, 7) ~ '^[0-9a-fA-F]{7}$'
@@ -20,6 +20,16 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
 $$;
 
 CREATE INDEX IF NOT EXISTS node_handle_idx ON node (handle_number(address));
+
+-- account_setting: what one account set for itself, such as whether it is
+-- listed in the directory (settings.py).
+CREATE TABLE IF NOT EXISTS account_setting (
+    account_id  bigint      NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+    name        text        NOT NULL,
+    value       text        NOT NULL,
+    updated_at  timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (account_id, name)
+);
 
 CREATE TABLE IF NOT EXISTS connection_setting (
     connection  text        NOT NULL,

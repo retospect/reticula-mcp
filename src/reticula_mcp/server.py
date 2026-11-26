@@ -213,14 +213,6 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
                 " Omit to just show the profile."
             ),
         ] = None,
-        # Draft text, for the trial. `word_handles` stays the last parameter.
-        word_handles: Annotated[
-            str | None,
-            Field(
-                description='"on": each note\'s id is followed by words to say aloud,'
-                ' for this connection. "off" turns them off.'
-            ),
-        ] = None,
         *,
         ctx: Context,
     ) -> str:
@@ -229,9 +221,7 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
         Pass `handle` to change it; your person ID and all your notes keep their
         addresses. Handles are unique on this instance.
         """
-        return await run(
-            ctx, content_handlers.profile, handle=handle, word_handles=word_handles
-        )
+        return await run(ctx, content_handlers.profile, handle=handle)
 
     @mcp.tool(structured_output=False)
     async def search(

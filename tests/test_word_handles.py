@@ -11,9 +11,9 @@ import pytest
 
 from reticula_mcp import connection, handle_words
 from reticula_mcp.accounts import Account
-from reticula_mcp.content.handlers import profile
 from reticula_mcp.db.pool import Conn
 from reticula_mcp.errors import ReticulaError
+from reticula_mcp.graph import handlers as graph
 from reticula_mcp.search import handles
 from reticula_mcp.search.handlers import get, search
 from reticula_mcp.search.render import short_ref
@@ -70,7 +70,8 @@ def ana(make_account: Callable[..., Account]) -> Account:
 
 def on(conn: Conn, viewer: Account, key: str = "grant:g1") -> None:
     with connection.during({"connection": key}):
-        assert "on for this connection" in profile(conn, viewer, word_handles="on")
+        out = graph.edit(conn, viewer, ref="settings", text="word handles: on")
+        assert "- word handles: on (this connection)" in out
 
 
 def spoken(conn: Conn, viewer: Account, call: Callable[[], str], key: str = "grant:g1"):
@@ -117,7 +118,8 @@ def test_switched_on_the_id_gains_two_words_in_get_and_search(
         == ""
     )
     with connection.during({"connection": "grant:g1"}):
-        assert "off" in profile(conn, ana, word_handles="off")
+        out = graph.edit(conn, ana, ref="settings", text="word handles: off")
+        assert "- word handles: off (this connection)" in out
     assert spoken(conn, ana, lambda: get(conn, ana, ref=note)) == get(
         conn, ana, ref=note
     )
@@ -157,10 +159,10 @@ def test_a_note_the_reader_may_not_read_does_not_lengthen_the_words(
 
 def test_the_switch_needs_a_connection_and_on_or_off(conn: Conn, ana: Account) -> None:
     with pytest.raises(ReticulaError) as err:
-        profile(conn, ana, word_handles="on")
+        graph.edit(conn, ana, ref="settings", text="word handles: on")
     assert "per connection" in err.value.message
     with connection.during({"connection": "grant:g1"}), pytest.raises(ReticulaError):
-        profile(conn, ana, word_handles="maybe")
+        graph.edit(conn, ana, ref="settings", text="word handles: maybe")
 
 
 # ------------------------------------------------------------- words as refs
