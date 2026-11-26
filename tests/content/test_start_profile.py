@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from reticula_mcp import accounts, records
+from reticula_mcp import accounts, keystore, records
 from reticula_mcp.content import bootstrap
 from reticula_mcp.content.handlers import profile, short_id, start
 from tests.content.fake_graph import FakeGraph, ensure_shared_visibility
@@ -97,6 +97,7 @@ def test_profile_shows_identity_without_key_material(conn, make_account):
         (me.id,),
     ).fetchone()["private_key"]
     assert bytes(secret).hex() not in out
+    assert keystore.decrypt(me.id, "k1", bytes(secret)).hex() not in out
 
 
 def test_profile_renames_the_handle_and_keeps_ids_and_addresses(conn, make_account):

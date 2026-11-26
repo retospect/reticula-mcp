@@ -116,6 +116,10 @@ def _serve(settings: Settings, auto_migrate: bool) -> int:
         if not auto_migrate:
             _check_schema_age(settings, conn)
         todo = pending(conn)
+        if not todo:
+            from reticula_mcp import keystore
+
+            keystore.check_database(conn)
     if todo:
         raise ReticulaError(
             "BadInput",
@@ -248,6 +252,40 @@ def _account_passwd(settings: Settings, email: str) -> int:
     return 0
 
 
+def _key_init(path: str) -> int:
+    from reticula_mcp import keystore
+
+    try:
+        keystore.init_file(path)
+    except FileExistsError as exc:
+        raise ReticulaError(
+            BAD_INPUT, f"{path} exists: a secret is never overwritten"
+        ) from exc
+    print(f"wrote a new secret to {path} (mode 600); set RETICULA_KEY_FILE={path}")
+    return 0
+
+
+def _key_command(settings: Settings, args: Any) -> int:
+    from reticula_mcp import keystore
+    from reticula_mcp.db import connect
+
+    with connect(settings.require_database_url()) as conn:
+        if args.key_command == "encrypt":
+            counts = keystore.encrypt_all(conn)
+            keystore.check_database(conn)  # nothing plaintext is left
+            verb = "encrypted"
+        else:
+            counts = keystore.rotate_all(conn, keystore.read_secret(args.new_file))
+            verb = "re-encrypted"
+    print(
+        f"{verb} {counts.encrypted} keys of {counts.accounts} accounts;"
+        f" {counts.already} were done already"
+    )
+    if args.key_command == "rotate":
+        print(f"now set RETICULA_KEY_FILE={args.new_file} and start the server")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="reticula-mcp", description=__doc__)
     parser.add_argument("--version", action="version", version=__version__)
@@ -287,6 +325,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="set a new password (prompted) and revoke all connections and tokens",
     )
     passwd.add_argument("--email", required=True)
+    key = sub.add_parser("key", help="the secret that encrypts private keys")
+    key_sub = key.add_subparsers(dest="key_command", required=True)
+    init = key_sub.add_parser(
+        "init", help="write a new secret to a file (never printed)"
+    )
+    init.add_argument("--file", required=True)
+    key_sub.add_parser(
+        "encrypt", help="encrypt every stored private key (server stopped; safe twice)"
+    )
+    rotate = key_sub.add_parser(
+        "rotate", help="re-encrypt every key with a new secret (server stopped)"
+    )
+    rotate.add_argument("--new-file", required=True)
     _register_lane_commands(sub)
     return parser
 
@@ -323,14 +374,28 @@ def main(argv: Sequence[str] | None = None) -> int:
                 env["RETICULA_PORT"] = str(args.port)
         settings = Settings.from_env(env)
         if args.command == "serve":
+            from reticula_mcp import keystore
+
+            keystore.configure(settings.key_file)
             return _serve(settings, args.migrate)
         if args.command == "migrate":
+            from reticula_mcp import keystore
+
+            keystore.configure(settings.key_file)
             return _migrate(settings)
+        if args.command == "key" and args.key_command == "init":
+            return _key_init(args.file)
+        # Every other command may write a key, or sign: the secret first.
+        from reticula_mcp import keystore
+
+        keystore.configure(settings.key_file)
         # Every other command works on the tables as this version knows them.
         _refuse_newer_schema(settings)
         func = getattr(args, "func", None)
         if func is not None:
             return int(func(settings, args))
+        if args.command == "key":
+            return _key_command(settings, args)
         if args.command == "token":
             return _token(
                 settings, args.email, args.label, args.ttl_days, args.no_expiry
