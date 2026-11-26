@@ -288,6 +288,10 @@ def reindex(
         written += embed_nodes(conn, embedder, ids)
         if checkpoint is not None:
             checkpoint()
+    # every live node has its vector now, unless one was written meanwhile:
+    # recorded only when nothing is missing (as the worker does)
+    if not missing_ids(conn, embedder, None, 1):
+        mark_complete(conn, embedder)
     return written
 
 
