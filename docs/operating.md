@@ -633,16 +633,18 @@ The steps above were rehearsed on another copy of a running 0.4.1 instance, agai
 
 Tried and refused: taking the superuser rights from `reticula` in place, with `ALTER ROLE reticula NOSUPERUSER`, ends with `permission denied to alter role` and `The bootstrap superuser must have the SUPERUSER attribute`.
 
-0.5.0 adds four migrations. From 0.4.3, move the clone and run steps 3 and 4 above; the first start applies them. From 0.4.1 or older, take the steps of 0.4.2 above with the files of 0.5.0; the first start then also applies `0355_private_key_form`. There is no need to stop at 0.4.3 on the way.
+0.5.0 adds five migrations. From 0.4.3, move the clone and run steps 3 and 4 above; the first start applies them. From 0.4.1 or older, take the steps of 0.4.2 above with the files of 0.5.0; the first start then also applies `0355_private_key_form`. There is no need to stop at 0.4.3 on the way.
 
 ```
 applied 0304_share_offer.sql
+applied 0305_share_rule.sql
 applied 0356_web_session.sql
 applied 0357_activity.sql
 applied 0358_listed_kept.sql
 ```
 
 - `0304_share_offer` adds the tables `share_offer`, the shares that wait for a yes, and `share_block`, the people a person stopped shares from. Both are built from the signed record log, like `hub_grant`. Grants made before stay as they are.
+- `0305_share_rule` adds the table `share_rule_start`, one row with the id of the last record written before it, and an index on `share_offer`. A grant record up to that id keeps the meaning it was written with, also when the tables are rebuilt from the record log; for every later one, the server decides whether it waits by the rule below. No row changes.
 - `0356_web_session` adds the table `web_session`, the sign-ins of the account page. It stores a digest of each session cookie, never the cookie.
 - `0357_activity` adds the table `activity`, one table per day, with the days ahead made at the start: [The activity log](#the-activity-log).
 - `0358_listed_kept` writes the setting `listed: yes` for every account that never set `listed`, so the directory of people lists the same accounts as before. The system account gets the row too; the directory never lists it. An account that set either value keeps it. No other row changes.
@@ -650,14 +652,15 @@ applied 0358_listed_kept.sql
 What changes for the people who use the server:
 
 - `delete` takes two calls. The first deletes nothing: it names the note, the hubs it is filed in, and the call that deletes it, which the assistant makes once the person said yes.
-- A share between two people who share no hub yet waits until the person it is for accepts it. Until then nothing of the hub reaches them. Their `start` names who shares which hub, with the calls to accept, to refuse, and to refuse and stop further shares from that person. Between two people who already give each other read or add on a hub, shares apply at once, as before.
+- A share waits until the person it is for accepts it. Until then nothing of the hub reaches them. Their `start` names who shares which hub, with the calls to accept, to refuse, and to refuse and stop further shares from that person. A share applies at once only to someone who has said yes to the sharer before and still has that access: they accepted a share of the sharer's, or shared a hub with the sharer themselves. At most 20 shares from one person to another, and 100 for one person, wait at a time.
+- Shares made before the upgrade stay as they are. But a grant the sharer gave before 0.5.0 is not a yes of the other person. So after the upgrade, the first new share between two people waits once, unless the person it is for has shared a hub with the sharer themselves and that share still holds. Once they accept it, later shares apply at once.
 - A new account is not listed in the directory of people until it runs `edit(ref="settings", text="listed: yes")` or sets it on the account page. Anyone can still share with it by its exact handle.
 - Each person has an account page at `/account` of the public address, signed in with their e-mail address and password: [The account page](#the-account-page). It shows the connections and tokens, the directory setting, an export, the deletion of the account and the activity log. A proxy that forwards only `/mcp` and the sign-in pages leaves the page unreachable.
 - Among notes whose title or tag is the query, `search` lists the person's own first.
 
 One setting is new, `RETICULA_ACTIVITY_DAYS`, 30 when not set. `.env` needs no change.
 
-Both ways were rehearsed on 2026-11-26, on copies of a running 0.4.1 instance with 3 accounts. Under 0.4.1, two accounts made in each copy connected through the sign-in page, and a third, made with `reticula-mcp account create`, got a token from `reticula-mcp token`. The server of 0.5.0 was built from the release candidate.
+Both ways were rehearsed on 2026-11-26, on copies of a running 0.4.1 instance with 3 accounts. Under 0.4.1, two accounts made in each copy connected through the sign-in page, and a third, made with `reticula-mcp account create`, got a token from `reticula-mcp token`. The server of 0.5.0 was built from a release candidate without `0305`, so the counts below are one migration short.
 
 - From 0.4.1 to 0.4.3 with the steps of 0.4.2, then on to 0.5.0. The steps of 0.4.2 took the server away for 15.5 seconds, the dump included. The image of 0.5.0 was then built while 0.4.3 ran, and `docker compose up -d --wait` applied the four migrations and was healthy after 12 seconds.
 - From 0.4.1 straight to 0.5.0 with the steps of 0.4.2. The restore took 0.2 seconds, `key encrypt` 0.9 seconds, and the last `up`, with five migrations, 5.7 seconds. The server was away for 14.5 seconds in all, the dump included.
