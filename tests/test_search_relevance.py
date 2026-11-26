@@ -712,12 +712,14 @@ def is_empty(q: Query, keys: list[str] | None) -> bool:
     return keys is None
 
 
-# Paraphrases the real model does not bring into the first three with the
-# constants as measured: its similarity to the right note is below the cutoff
-# that keeps nonsense out (pg-backup 0.56, lit-method 0.64, cert-renew 0.51), or
-# a wrong note is closer (oncall before deploy-freeze). The test below fails
-# when a fifth is lost, and when one of these is found (then shorten the list).
-PARAPHRASE_MISSES = 4
+# Paraphrases the real model (the default, bge-base-en-v1.5 with its query
+# instruction) does not bring into the first three with the constants as
+# measured: "who rehearses getting our data back after a disaster" (pg-backup),
+# "who gets woken up when something breaks" (oncall) and "why did visitors see
+# a scary padlock warning" (cert-renew); every model measured misses these.
+# bge-small missed lit-method as well. The test below fails when a fourth is
+# lost, and when one of these is found (then shorten the list).
+PARAPHRASE_MISSES = 3
 
 
 @pytest.fixture
