@@ -1,6 +1,6 @@
 # Trials with assistants that had never seen Reticula
 
-Reticula is used by language models, not by people. These trials watched models that knew nothing about it try to use it, recorded what they did, and ran again after each fix. This page is the record: the method, the rounds, what went wrong, what was changed and what is still open. About 14,300 runs in all.
+Reticula is used by language models, not by people. These trials watched models that knew nothing about it try to use it, recorded what they did, and ran again after each fix. This page is the record: the method, the rounds, what went wrong, what was changed and what is still open. About 15,700 runs in all.
 
 ## Method
 
@@ -1054,6 +1054,31 @@ The changes that are read only after the first call, run together beside main: t
 - **Without the line, no hub was made public:** 0 of 96 runs, with either reply. The keyword `public` is taught only in the reply of a share, which comes after the share; the assistants said they could not do it.
 - **With the line,** the hub was made public in 93 of 96 runs and taken off again in 94; no answer said strangers could read the text. The two replies did alike. The new one led Sonnet to say that Ben's note stays hidden in 17 of 24 answers, against 6 of 24 with the first.
 - The gate cell held on every arm. Taken: the new reply and the line.
+
+## Benchmark: memory by Reticula, pasted, or none
+
+1,440 runs on main `560d4fa`, the code of 0.4.0 so far, with the model 0.3.0 ships. Three ways to give an assistant the person's notes, asked the same ten questions:
+
+- **Reticula:** the connector, with the standing line of round seventeen in the system prompt.
+- **Pasted:** every note in the system prompt, one per line, and no tools.
+- **None:** no notes and no tools.
+
+The notes are synthetic: the eight notes that hold answers, two notes of Ben's in a hub he shares with Ada, and generated filler ("The key of the boathouse is the blue box."), 66 or 1,000 notes in all. The questions recall a note by its words (the garden plot's number, choir practice, the tyre's width, the present and its budget), by meaning only ("what do the tall glowing towers on the coast do in winter?", the colour of dromedaries, when Ada may give blood again), a fact from Ben's shared hub (two), and one that the notes do not answer ("What is my passport number?"). An answer is right when it states the fact (a fixed pattern per question); for the passport, when it says it does not know and gives no number. Each question in a new conversation, 12 runs each, on Haiku and Sonnet, in the chat setting. Tokens are the API usage the client reports: input is uncached, cache read and cache write together, summed over the conversation's calls. Reticula's reply tokens are, for each call after a tool call, the growth of the input minus the previous output.
+
+| Median per question | Reticula, 66 | Reticula, 1,000 | Pasted, 66 | Pasted, 1,000 | None |
+|---|---|---|---|---|---|
+| right, Haiku | 100% | 100% | 100% | 100% | 11 and 12% |
+| right, Sonnet | 100% | 100% | 100% | 100% | 17 and 14% |
+| input tokens | 12,600 to 12,700 | 12,700 to 13,000 | 2,500 | 26,200 | 660 to 680 |
+| output tokens | 160 to 250 | 160 to 220 | 50 to 130 | 50 to 120 | 260 to 280 |
+| tool calls | 2 | 2 | 0 | 0 | 0 |
+| of the input, Reticula's replies | 1,750 to 1,800 | 1,800 to 2,000 | | | |
+
+- **Both ways with memory answered everything.** 480 of 480 answers right with Reticula, and 480 of 480 with the notes pasted. Without memory the only right answers were "I don't know" to the passport and guesses: Sonnet gave the common tyre width of 28 mm in 13 of 24 runs without any notes.
+- **Reticula's cost stays flat; pasting grows with the notes.** From 66 to 1,000 notes Reticula's input grew by about 300 tokens; the pasted prompt by ten times, about 25 tokens a note, so that it passes Reticula's at about 500 notes. Most of Reticula's input is the tool list and the instructions; the replies of `start` and one `search` are about 1,800 tokens.
+- **At 10,000 notes** the pasted prompt is about 262,000 tokens, within both models' window of 1,000,000. Not run yet.
+
+`src/reticula_mcp/web/results.json` holds these cells, which the page /results renders.
 
 ## Still open
 
