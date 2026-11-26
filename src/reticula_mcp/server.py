@@ -30,7 +30,7 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from reticula_mcp import __version__, connection, permissions
+from reticula_mcp import __version__, connection, keystore, permissions
 from reticula_mcp.auth import build_auth, throttle
 from reticula_mcp.config import Settings, parse_rate
 from reticula_mcp.content import handlers as content_handlers
@@ -639,6 +639,11 @@ def build_app(settings: Settings, db: Database | None = None) -> Starlette:
     ``settings`` and closed when the app shuts down.
     """
     owned = db is None
+    # private keys are encrypted with a secret held outside the database
+    if settings.key_file is not None:
+        keystore.configure(settings.key_file)
+    if not keystore.is_configured():
+        keystore.configure(None)  # refuses: no start without the secret
     database = db or Database(settings.require_database_url())
     mcp, wiring = create_mcp(settings, database)
     app = mcp.streamable_http_app()

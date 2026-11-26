@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 import psycopg.errors
 
 from reticula_mcp import format as fmt
+from reticula_mcp import keystore
 from reticula_mcp.errors import BAD_INPUT, CONFLICT, FORBIDDEN, NOT_FOUND, ReticulaError
 
 if TYPE_CHECKING:
@@ -348,5 +349,6 @@ def sign_and_append(
         hub=hub_id,
         audience=audience,
     )
-    signature = fmt.sign(bytes(secret["private_key"]), envelope)
+    private = keystore.decrypt(account.id, key_id, bytes(secret["private_key"]))
+    signature = fmt.sign(private, envelope)
     return append_signed(conn, envelope, signature)

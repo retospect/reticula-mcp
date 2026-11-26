@@ -24,14 +24,30 @@ The commands are written for the Docker Compose files in [`deploy/`](../deploy) 
    chmod 600 .env
    ```
 
-   The file will hold the database password, so only your own user may read it. Set two values in `.env`:
+   The file will hold the database passwords, so only your own user may read it. Set three values in `.env`:
 
-   - `RETICULA_DB_PASSWORD`: generate one with `openssl rand -hex 24`.
+   - `RETICULA_DB_PASSWORD`: the password of the role `reticula`, which the server connects as. Generate one with `openssl rand -hex 24`.
+   - `RETICULA_DB_ADMIN_PASSWORD`: the password of the database superuser `reticula_admin`, which only you use and the server never sees. Generate another one the same way.
    - `RETICULA_VERSION`: the release you cloned, without the `v`. For the tag `v0.2.0` it is `0.2.0`.
 
    Leave `RETICULA_PUBLIC_URL` and `RETICULA_TRUSTED_PROXIES` empty for now.
 
    If port 8787 is taken on your machine, set `RETICULA_PORT` to a free one. It is the port published on `127.0.0.1`. Write it in place of 8787 in every command of this guide. Inside the container the server stays on 8787, and its log names that port.
+
+   Make the key file, the secret that encrypts the private keys of the accounts in the database:
+
+   ```
+   mkdir -p secrets
+   (umask 077; openssl rand -base64 32 > secrets/reticula.key)
+   ```
+
+   With Docker on a Mac (Docker Desktop or colima) that is all: the file has mode 600 and belongs to you. On Linux the server's user in the container must own it:
+
+   ```
+   sudo chown 10001:10001 secrets/reticula.key
+   ```
+
+   Keep a copy of this file now, apart from the backups of the database: [The key file](#the-key-file) says why and what happens without it.
 
 3. Start the database and the server.
 
@@ -557,8 +573,43 @@ This upgrade was rehearsed the same way, on a copy of a running 0.3.0 instance: 
 
 Measured on a copy of a running instance with 80 notes and the default model: a start with an empty model volume stayed under 0.7 GB and 52 processes. `docker compose exec app reticula-mcp reindex --drop` loads the model a second time in the same container and took the container to 1.3 GB, file cache included, and 78 processes. With `RETICULA_APP_MEMORY=1g` the start and that reindex still ran. With `512m` the server started, but the reindex ended after 1 second with status 137 and took the server container down with it, and Docker started it again. Give a larger model more: [Choose a model](#choose-a-model) lists the memory each model needs once loaded, and a reindex needs that twice.
 
-The next release after 0.4.1 adds no migration either. Read before you upgrade to it:
+The next release after 0.4.1 adds one migration, `0355_private_key_form`, a check on the stored form of a private key. It needs a key file, and its server connects to the database as a role without superuser rights. Read before you upgrade to it:
 
+- The private keys of the accounts are encrypted with the key file, and the server does not start while one is stored unencrypted.
+- The database gets a superuser of its own, `reticula_admin`, and `reticula` becomes the owner of the database without superuser rights. On an install from before, `reticula` is the role the database was created with, and PostgreSQL does not let that role lose its rights. So the database is moved into a new volume by a dump and a restore.
+
+The upgrade takes these steps in place of steps 3 and 4 above, after the backup and the move of the clone. Step 1 takes a dump; check it with `pg_restore -f /dev/null` as under [Check a backup](#check-a-backup) before step 2, which deletes the old database.
+
+1. Make the key file, set `RETICULA_DB_ADMIN_PASSWORD` in `.env` (generate it with `openssl rand -hex 24`), build the new image while the old server runs, and take the dump:
+
+   ```
+   mkdir -p secrets
+   (umask 077; openssl rand -base64 32 > secrets/reticula.key)
+   docker compose build app
+   (umask 077; docker compose exec -T db pg_dump -U reticula --format=custom reticula > reticula-before-0.4.2.dump)
+   ```
+
+   On Linux, `sudo chown 10001:10001 secrets/reticula.key` after the second line. Keep a copy of the key file apart from the backups: [The key file](#the-key-file).
+
+2. Stop the stack and remove the database volume:
+
+   ```
+   docker compose down
+   docker volume rm reticula_reticula-db
+   ```
+
+3. Start the new database, restore the dump as the role `reticula`, encrypt the keys and start the server:
+
+   ```
+   docker compose up -d --wait db
+   docker compose exec -T db pg_restore -U reticula --no-owner --no-comments --single-transaction --dbname reticula < reticula-before-0.4.2.dump
+   docker compose run --rm --no-deps app reticula-mcp key encrypt
+   docker compose up -d --wait
+   ```
+
+   `key encrypt` prints how many keys it encrypted and may be run again: it changes only keys that are still unencrypted.
+
+Keep the dump of step 1 until the upgrade is checked. The way back is that dump: move the clone back, and restore it with the steps under [Restore](#restore) of the old release.
 - `reticula-mcp serve` does not start when `RETICULA_PUBLIC_URL` is an `https` address or names a host other than this machine, and `RETICULA_TRUSTED_PROXIES` is empty. Set it to the proxy's address, as under [A tunnel or proxy on the same host](#a-tunnel-or-proxy-on-the-same-host). `RETICULA_TRUSTED_PROXIES=none` starts the server as before, with every client in one rate-limit bucket. The refusal names the URL and what to set:
 
   ```
@@ -569,8 +620,15 @@ The next release after 0.4.1 adds no migration either. Read before you upgrade t
   Other commands, such as `migrate` and `token`, are not refused.
 - In `compose.yaml` the database is on a network of its own that only the server joins, and that has no route out. The server and the database drop every Linux capability they do not need, and neither may gain privileges. The Tailscale container of `compose.tailscale.yaml` drops them all.
 - The server gets the database password as `PGPASSWORD` and no longer inside the URL, so a password with characters such as `@`, `:`, `/` or `#` works.
+- The image installs every dependency of the server from `deploy/requirements.txt`, which names each version and the hash of each file, and then the server itself without its dependencies. The base images of the server, the database and the Tailscale container are named by digest. A build therefore installs the same files each time, and a newer base image arrives only with a release.
 
 Measured on a copy of a running 0.4.0 instance: `docker compose up -d --build --wait` with the new files created the network, recreated both containers and was healthy after 33 seconds, the image build included. The server container then had no capabilities at all, and the database container had the five its start needs (`CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETGID`, `SETUID`). The database could not reach the internet, and the server could, for the model download. A new stack with the database password `p@ss:w/rd?#%&x y` started and applied every migration. The Tailscale container ran without capabilities, printed its sign-in link, reached the server and could not reach the database. Its sign-in and Funnel were not tried.
+
+The steps with the key file were rehearsed on a copy of a running 0.4.1 instance, with two connections made through the sign-in page and a token from `reticula-mcp token` under 0.4.1. The build took 19 seconds while the old server ran. `key encrypt` took 1 second and printed `encrypted 21 keys of 7 accounts; 0 were done already`, and a second run printed `encrypted 0 keys of 8 accounts; 24 were done already`. `docker compose up -d --wait` applied `0355_private_key_form.sql` and was healthy after 17 seconds, with the database container recreated for its new network. The server was away for 19 seconds in all. Without a new sign-in, the minted token and a connection's access token answered `start`, and the refresh token from 0.4.1 returned a new pair. A note written then was saved, and a new account got its keys encrypted. That rehearsal kept the old database; the steps above replace it.
+
+The steps above were rehearsed on another copy of a running 0.4.1 instance, again with connections and a token made under 0.4.1. Step 1's dump took 0.3 seconds, removing the volume 1 second, the new database with its roles 6 seconds, the restore 0.2 seconds, `key encrypt` 1 second, and the last `up` 6 seconds. The server was away for 17 seconds in all. Every table had its rows from before, and the ledger one migration more. The minted token, a connection's access token and its refresh token from 0.4.1 worked without a new sign-in. `reticula` then had no superuser rights, owned the database and every table, and was refused `pg_read_file` and `CREATE ROLE`. The server container had neither database password of the superuser in its environment. A dump, a reindex and a write worked as before. The way back, the dump of step 1 restored into 0.4.1, was healthy after 14 seconds.
+
+Tried and refused: taking the superuser rights from `reticula` in place, with `ALTER ROLE reticula NOSUPERUSER`, ends with `permission denied to alter role` and `The bootstrap superuser must have the SUPERUSER attribute`.
 
 Migrations only move forward and each file runs in its own transaction. A migration file that has already been applied is never edited; changes arrive as new files. If the server reports that an applied file has changed, you are running mismatched code and database: do not continue.
 
@@ -621,6 +679,38 @@ In the drill 0.1.0 from PyPI ran on a database that 0.1.1 from PyPI had migrated
 
 0.1.1 from PyPI started on a database that 0.2.0 had run on, and its check did not refuse: 0.2.0 adds no migration, so the ledger held none that 0.1.1 does not know. With nothing written in between, none of the 112 replies recorded under 0.1.1 before the switch differed afterwards. Notes written under 0.2.0 read back under 0.1.1, tokens minted and refreshed under 0.2.0 worked, and the smoke test of 0.1.1 passed. The two switches back left the server without an answer for 1.3 and 1.9 seconds.
 
+## The key file
+
+Each account has private keys that sign what it writes. The database holds them encrypted with a secret, the key file `deploy/secrets/reticula.key`. The key file is not in the database and not in its dumps. Someone who has a dump but not the key file cannot use the keys in it.
+
+`compose.yaml` mounts the file into the server at `/run/secrets/reticula_key` and sets `RETICULA_KEY_FILE` to that path. Docker keeps the owner and mode the file has on the host. The server refuses to start when the file is missing, when it cannot read it, or when its mode lets the group or others read it. Measured, with the messages the log shows:
+
+| The file | What the server did |
+|---|---|
+| mode 600, yours (Mac) or uid 10001 (Linux) | started |
+| mode 644 | refused: `RETICULA_KEY_FILE '/run/secrets/reticula_key' has mode 0644: its group or others can use it`, and a hint with `chown` and `chmod 600` |
+| missing | `docker compose up` ended with `bind source path does not exist` and the server did not start |
+| another key file | refused: `24 stored private keys were encrypted with another secret` |
+
+With Docker on a Mac a file of mode 400 is shown to the container as unreadable; use 600. Every `reticula-mcp` command needs the key file too. Run them with `docker compose exec app` or `docker compose run --rm --no-deps app`, which mount it.
+
+Keep a copy of the key file apart from the plain database: never beside an unencrypted dump, which would undo what the encryption protects. A password manager, beside the private key of the backups, is one place. An encrypted copy written like `env.age` by `backup.sh` is another, because it opens only with the same private key as the encrypted dumps. Check the copy once with a restore on another machine.
+
+Without the key file, the server does not start on that database, and neither does any `reticula-mcp` command except `key init`. They refuse with `N stored private keys were encrypted with another secret`. A new key file from `key init` does not help: the refusal stays. This release has no way back without the old file. Giving every account new keys is not built, and `RETICULA_KEY_FILE=none` starts the server but refuses the encrypted keys, so it cannot sign either. The key file encrypts only the private keys. Notes, hubs and accounts stay readable in the database and in every dump, and old signatures stay verifiable, because the public keys are stored apart and are not encrypted. A dump holds the keys encrypted with the key file that was in use when the dump was taken, so a restore needs that file. Measured: a dump taken before a rotation restored, and the server refused it with the new key file and started with the old one. Keep an old key file as long as you keep dumps taken with it.
+
+To replace the key file, stop the server, make a new file and let `key rotate` re-encrypt every key with it. The new file is mounted for that one command:
+
+```
+docker compose stop app
+(umask 077; openssl rand -base64 32 > secrets/reticula.key.new)
+docker compose run --rm --no-deps -v ./secrets/reticula.key.new:/run/secrets/reticula_key_new:ro app reticula-mcp key rotate --new-file /run/secrets/reticula_key_new
+mv secrets/reticula.key secrets/reticula.key.old
+mv secrets/reticula.key.new secrets/reticula.key
+docker compose up -d --wait
+```
+
+On Linux, `chown 10001:10001` the new file before the third line. The command ends with `now start the server with the new file as RETICULA_KEY_FILE`; with `compose.yaml` that is what the two `mv` lines do, which move it to `secrets/reticula.key`. Measured: `key rotate` took 1 second for 24 keys, and the server was back 8 seconds after it was stopped, with the tokens from before working.
+
 ## Back up
 
 The whole instance is one PostgreSQL database. Dump it while the server runs. For a backup that is kept, use the encrypted command under [Encrypt the dump](#encrypt-the-dump). A plain dump is for a copy you use at once, for example before a restore:
@@ -631,7 +721,7 @@ The whole instance is one PostgreSQL database. Dump it while the server runs. Fo
 
 `umask 077` makes the file readable by your own user only. The dump contains every note, the password hashes and the private keys of every account, unencrypted. The custom format is compressed, not encrypted: a search of the file for a line of a note finds nothing, and `pg_restore` turns the same file into readable SQL without asking for a key. Store the dump as carefully as the database itself. Keep a copy of `.env` with it: the dump does not contain the settings.
 
-The embedding model is not in the dump. It is downloaded again when needed.
+The embedding model is not in the dump. It is part of the image, which a build makes again.
 
 A dump that stays on the machine is lost with the machine. A plain dump in another place is a second copy of every note and key, readable by whoever keeps it. The rest of this part encrypts the dump while it is written, takes it on a schedule and checks it. It was tested on release 0.1.1 with age 1.1.1 and GnuPG 2.2.40, the versions in Debian 12.
 
@@ -667,6 +757,15 @@ The shell reports the status of the last program of the line, and that is the en
 
 ### On a schedule
 
+The script also signs each file it writes, so that a copy can be checked later for a change on the way or in storage. The signature uses `ssh-keygen`, which comes with OpenSSH. Make the signing key once, on the database machine, in `deploy/`:
+
+```
+(umask 077; ssh-keygen -q -t ed25519 -N '' -C reticula-backup -f backup-signing.key)
+printf 'reticula-backup %s\n' "$(cut -d' ' -f1,2 backup-signing.key.pub)" > allowed_signers
+```
+
+The first line writes the private key `backup-signing.key`, which stays on this machine and which git ignores, and its public half. The second writes `allowed_signers`, the file that checks a signature. Copy `allowed_signers` to your own computer, beside the private key of `age`. The signature tells you that a file comes from this machine unchanged. It cannot tell you more: whoever controls this machine can sign too.
+
 Save this as `backup.sh` next to `compose.yaml` and `.env`, put your public key in the line `recipient=`, and run `chmod +x backup.sh`:
 
 ```
@@ -676,6 +775,7 @@ umask 077
 cd "$(dirname "$0")"
 
 recipient=age1...
+signing_key=backup-signing.key
 dir=backups
 keep_days=14
 
@@ -685,13 +785,16 @@ trap 'rm -f "$out.part"' EXIT
 docker compose exec -T db pg_dump -U reticula --format=custom reticula \
   | age -r "$recipient" > "$out.part"
 mv "$out.part" "$out"
+ssh-keygen -Y sign -q -f "$signing_key" -n reticula-backup "$out"
 age -r "$recipient" < .env > "$dir/env.age"
-find "$dir" -name 'reticula-*.dump.age' -mtime +"$keep_days" -delete
+rm -f "$dir/env.age.sig"
+ssh-keygen -Y sign -q -f "$signing_key" -n reticula-backup "$dir/env.age"
+find "$dir" -name 'reticula-*.dump.age*' -mtime +"$keep_days" -delete
 ```
 
-Each run writes one encrypted dump into `backups/`, replaces the encrypted copy of `.env` beside it, and removes dumps older than 14 days. A dump is written under a name that ends in `.part` and gets its own name when it is complete, so a file named `.dump.age` is a whole dump. `set -o pipefail` makes a failed dump fail the script. `umask 077` makes every file it writes readable by your own user only; that line was added after the tests below.
+Each run writes one encrypted dump into `backups/` with its signature in a file ending in `.sig`, replaces the encrypted copy of `.env` and its signature, and removes dumps and signatures older than 14 days. `ssh-keygen` does not overwrite a signature file: it stops and asks. That is why the old signature of `env.age` is removed first. Two runs of this script against a throwaway stack wrote three files and three signatures and nothing into the log, and every signature checked as under [Check a backup](#check-a-backup). A dump is written under a name that ends in `.part` and gets its own name when it is complete, so a file named `.dump.age` is a whole dump. `set -o pipefail` makes a failed dump fail the script. `umask 077` makes every file it writes readable by your own user only; that line was added after the tests below.
 
-`backup.sh`, `backup.log` and `backups/` are your own files in the clone. `git` does not track them, and moving the clone to another release, as in step 2 of "Upgrade", left them where they were.
+`backup.sh`, `backup.log`, `backups/`, `backup-signing.key` and `allowed_signers` are your own files in the clone. `git` does not track them, and moving the clone to another release, as in step 2 of "Upgrade", left them where they were.
 
 For `gpg`, write `gpg --batch --trust-model always --encrypt --recipient "$recipient"` in place of `age -r "$recipient"` in both lines, set `recipient` to the address of the key, and let the names end in `.gpg`. Import the public key as the user whose crontab runs the script.
 
@@ -730,7 +833,24 @@ That line was not part of the test. The other machine gets encrypted files and n
 
 ### Check a backup
 
-Check a file before you depend on it. Decrypting it to nowhere reads all of it. That needs the private key, so do it on your own computer with a copy of the file:
+Check the signature first, on your own computer, with `allowed_signers` from the database machine:
+
+```
+ssh-keygen -Y verify -f allowed_signers -I reticula-backup -n reticula-backup -s reticula-20261125-023000.dump.age.sig < reticula-20261125-023000.dump.age
+```
+
+Status 0 and `Good "reticula-backup" signature` say that the file is the one the database machine signed. Measured with OpenSSH 10.3 and with 9.2, the version of Debian 12:
+
+| The file | Status and message |
+|---|---|
+| as written | 0, `Good "reticula-backup" signature for reticula-backup` |
+| one byte changed | 255, `Signature verification failed: incorrect signature` |
+| cut short | 255, `Signature verification failed: incorrect signature` |
+| signed with another key | 255, `Could not verify signature.` |
+| signed for another purpose (`-n`) | 255, `Couldn't verify signature: namespace does not match` |
+| without its `.sig` file | 255, `Couldn't read signature file: No such file or directory` |
+
+Do not decrypt or restore a file whose signature does not check. Then check the file itself. Decrypting it to nowhere reads all of it. That needs the private key, so do it on your own computer with a copy of the file:
 
 ```
 age --decrypt -i reticula-backup-key.txt < reticula-20261125-023000.dump.age > /dev/null
@@ -750,11 +870,11 @@ The full check is a restore on another machine, with the steps of the next part.
 
 ## Restore
 
-Restore into an empty database. The steps below replace the data of an existing stack. Everything written after the dump was taken is lost. On a new machine, start at step 2 with the same `.env`. The script under "Back up" keeps an encrypted copy of it: `age --decrypt -i reticula-backup-key.txt < env.age > .env` writes it back.
+Restore into an empty database. The steps below replace the data of an existing stack. Everything written after the dump was taken is lost. On a new machine, start at step 2 with the same `.env`. The script under "Back up" keeps an encrypted copy of it: `age --decrypt -i reticula-backup-key.txt < env.age > .env` writes it back. A dump from a release with a key file also needs `secrets/reticula.key` as it was when the dump was taken; without it the server does not start on the restored data ([The key file](#the-key-file)).
 
 The volume name in step 1 starts with the project name, which the compose file fixes to `reticula`. For a copy that was started under another project name, the volume is `<name>_reticula-db`, and every command below needs the same `-p <name>` or `COMPOSE_PROJECT_NAME`. Without it the commands act on the stack called `reticula`.
 
-1. Stop the stack and remove the database volume. This deletes the current data. If any of it may still be needed, take a plain dump of it first, while the stack runs, as under Back up, and keep it until the restore is checked.
+1. Check the signature of the dump as under [Check a backup](#check-a-backup), if it has one, and go on only with status 0. Stop the stack and remove the database volume. This deletes the current data. If any of it may still be needed, take a plain dump of it first, while the stack runs, as under Back up, and keep it until the restore is checked.
 
    ```
    (umask 077; docker compose exec -T db pg_dump -U reticula --format=custom reticula > reticula-before-restore.dump)
@@ -768,26 +888,29 @@ The volume name in step 1 starts with the project name, which the compose file f
    docker compose up -d --wait db
    ```
 
-3. Restore the dump. `--single-transaction` makes the restore all or nothing: it stops at the first error, and the database is then as empty as before.
+3. Restore the dump, as the role `reticula`. `--single-transaction` makes the restore all or nothing: it stops at the first error, and the database is then as empty as before. `--no-comments` leaves out the comments of the extensions, which only their owner `reticula_admin` may set; without it the restore stops at once with `must be owner of extension citext`.
 
    ```
-   docker compose exec -T db pg_restore -U reticula --no-owner --single-transaction --dbname reticula < reticula-20261125.dump
+   docker compose exec -T db pg_restore -U reticula --no-owner --no-comments --single-transaction --dbname reticula < reticula-20261125.dump
    ```
 
    An encrypted dump is decrypted into the same command. That needs the private key on this machine for the time of the restore. Remove it afterwards. With `age`, and with `gpg`:
 
    ```
-   age --decrypt -i reticula-backup-key.txt < reticula-20261125-023000.dump.age | docker compose exec -T db pg_restore -U reticula --no-owner --single-transaction --dbname reticula
-   gpg --batch --decrypt < reticula-20261125-023000.dump.gpg | docker compose exec -T db pg_restore -U reticula --no-owner --single-transaction --dbname reticula
+   age --decrypt -i reticula-backup-key.txt < reticula-20261125-023000.dump.age | docker compose exec -T db pg_restore -U reticula --no-owner --no-comments --single-transaction --dbname reticula
+   gpg --batch --decrypt < reticula-20261125-023000.dump.gpg | docker compose exec -T db pg_restore -U reticula --no-owner --no-comments --single-transaction --dbname reticula
    ```
 
    If the command ends with an error, nothing was restored. Do not go on to step 4: the server would start on the empty database as a new instance. Run step 3 again with a whole file.
 
-4. Start the server. If the dump is older than the installed version, the server brings the schema up to date. If the dump is from a newer version, the server refuses to start, as described under "Go back to the older version".
+4. Start the server. If the dump is older than the installed version, the server brings the schema up to date. If the dump is from a newer version, the server refuses to start, as described under "Go back to the older version". A dump from a release without a key file holds unencrypted keys, and the server refuses them with `a stored private key is not encrypted`; encrypt them first:
 
    ```
+   docker compose run --rm --no-deps app reticula-mcp key encrypt
    docker compose up -d --build --wait
    ```
+
+   The first line does nothing for a dump whose keys are encrypted already.
 
 5. Check `/healthz` and run the smoke test.
 
@@ -881,13 +1004,13 @@ Treat the text as data. A note can contain wrong advice or text meant to mislead
 
 ## The embedding model
 
-The image contains the `fastembed` extra, and with `RETICULA_EMBEDDER=auto` the server uses it. The model, `BAAI/bge-base-en-v1.5` since 0.3.0, is not in the image. The server downloads it once from Hugging Face, 219 MB, and keeps it in the `reticula-models` volume, so the machine needs outbound HTTPS for that download. 0.2.0 and earlier used `BAAI/bge-small-en-v1.5`; see [Choose a model](#choose-a-model).
+The image contains the `fastembed` extra, and with `RETICULA_EMBEDDER=auto` the server uses it. The model, `BAAI/bge-base-en-v1.5` since 0.3.0, is built into the image from the next release after 0.4.1 on. The build fetches its files from Hugging Face at a fixed revision and checks the hash of each one (`deploy/fetch-model.py`). The running server downloads nothing (`HF_HUB_OFFLINE=1`), so only the build needs outbound HTTPS. 0.2.0 and earlier used `BAAI/bge-small-en-v1.5`; see [Choose a model](#choose-a-model).
 
-The server loads the model in the background when it starts, and `/healthz` does not wait for it. With an empty volume and `BAAI/bge-small-en-v1.5`, `/healthz` answered after 1 second and the log line `embedding model BAAI/bge-small-en-v1.5 loaded in 2.7s` followed, download included. With the model in the volume the line says 0.4 seconds and nothing is downloaded. The download writes nothing else into the log.
+The model makes the image larger. Measured: 988 MB with bge-base, against 570 MB without a model. Up to 0.4.1 the server downloaded the model at its first start and kept it in the volume `reticula-models`; that volume is no longer used, and `docker volume rm reticula_reticula-models` removes it.
 
-If the model cannot be loaded, for example without outbound HTTPS, the log has errors from `fastembed` and the warning `embedding model ... did not load; search answers from keywords and the load is retried later`. The server keeps running.
+The server loads the model in the background when it starts, and `/healthz` does not wait for it. With `BAAI/bge-small-en-v1.5`, `/healthz` answered after 1 second and the log line `embedding model BAAI/bge-small-en-v1.5 loaded in 2.7s` followed, download included; with the model in place the line says 0.4 seconds.
 
-The volume must be writable by uid 10001. The named volume of `compose.yaml` is. A directory mounted from the host in its place has to be given to that user first.
+If the model cannot be loaded, the log has errors from `fastembed` and the warning `embedding model ... did not load; search answers from keywords and the load is retried later`. The server keeps running.
 
 With `BAAI/bge-small-en-v1.5` the server container used 190 MiB of memory with the model loaded, and the start that downloads the model peaked at 268 MiB, the file cache of the download included. `BAAI/bge-base-en-v1.5` needs about 500 MB more (see [Choose a model](#choose-a-model)).
 
@@ -923,7 +1046,9 @@ Every model reads the first 512 tokens of a note, about 2,300 characters of Engl
 
 ### Change the model
 
-`RETICULA_EMBED_MODEL` in `.env` names another model of `fastembed`. Apply it with `docker compose up -d --wait`. Measured with `sentence-transformers/all-MiniLM-L6-v2` and with `jinaai/jina-embeddings-v2-small-en`, which has another vector size:
+`RETICULA_EMBED_MODEL` in `.env` names another model. The image is built with it, so apply it with `docker compose up -d --build --wait`. The image can carry only the models whose files `deploy/fetch-model.py` lists with their hashes: `BAAI/bge-small-en-v1.5`, `BAAI/bge-base-en-v1.5`, `mixedbread-ai/mxbai-embed-large-v1` and `sentence-transformers/all-MiniLM-L6-v2`. Any other name ends the build with an error that names those four. Measured, each embedding offline in the built image: bge-small and MiniLM gave 384 numbers and an image of 699 and 745 MB, bge-base 768 and 988 MB, mxbai 1024 and 2.71 GB. The build of the mxbai image took 59 seconds with its 1.34 GB of files.
+
+The following was measured up to 0.4.1, when the server downloaded a model at its start, with `sentence-transformers/all-MiniLM-L6-v2` and with `jinaai/jina-embeddings-v2-small-en`, which has another vector size:
 
 - The server downloaded the model and was healthy after 7 seconds. The log names the model: `embedding model sentence-transformers/all-MiniLM-L6-v2 loaded in 2.6s`, then `vector index embedding_hnsw_40541eb5df3b_384 ready for fastembed:sentence-transformers/all-MiniLM-L6-v2`.
 - The server then computes the vectors of all notes under the new model by itself, in the background. All 6 notes of the test instance had theirs 7 seconds after the switch, with no command run. Search works in the meantime.
@@ -931,7 +1056,7 @@ Every model reads the first 512 tokens of a note, about 2,300 characters of Engl
 - The vectors and the index of the old model stay in the database, and its files stay in the volume. A switch back before they are removed needs no reindex: they were used again at once.
 - When the new model has a vector for every note, `docker compose exec app reticula-mcp reindex --drop-other-models` removes the vectors and the vector indexes of every other model, and embeds nothing. Before that it refuses, removes nothing and says how many notes are still waiting. It does not remove model files from the volume.
 - `docker compose exec app reticula-mcp reindex --drop` empties the index of every model and embeds every note again under the current one.
-- A name `fastembed` does not know: the server starts and stays healthy, and the log has `embedding model fastembed:no/such-model did not load; search answers from keywords; next try in 30s` with `ValueError: Model no/such-model is not supported in TextEmbedding`. Saving and searching still worked.
+- A name `fastembed` does not know: the server starts and stays healthy, and the log has `embedding model fastembed:no/such-model did not load; search answers from keywords; next try in 30s` with `ValueError: Model no/such-model is not supported in TextEmbedding`. Saving and searching still worked. With the model in the image such a name now ends the build instead.
 
 ## What the container does
 
@@ -948,9 +1073,11 @@ Every model reads the first 512 tokens of a note, about 2,300 characters of Engl
 |---|---|
 | All notes, hubs, grants, accounts, keys, tokens | the PostgreSQL database, in the volume `reticula_reticula-db` |
 | Search index (embeddings) | a table in the same database, rebuildable with `reindex` |
-| Embedding model | the volume `reticula_reticula-models`, downloaded again when missing |
-| Settings and the database password | `deploy/.env`, which git ignores |
-| Backups written by `backup.sh` | `deploy/backups/`, encrypted. The key that opens them is not on this machine |
+| Embedding model | in the image, under `/opt/reticula/models`; up to 0.4.1 the volume `reticula_reticula-models` |
+| Settings and the two database passwords | `deploy/.env`, which git ignores. The server container gets only the password of `reticula` |
+| Backups written by `backup.sh` | `deploy/backups/`, encrypted and signed. The key that opens them is not on this machine |
+| The key that signs the backups | `deploy/backup-signing.key`; the file that checks the signatures, `allowed_signers`, also on your own computer |
+| The key file that encrypts the accounts' private keys | `deploy/secrets/reticula.key`, which git ignores. Its copy belongs elsewhere, not beside the backups |
 | The identity of the Tailscale node of `compose.tailscale.yaml` | Docker volume `reticula_reticula-tailscale` |
 | Shipped instruction texts | inside the installed package; copied into the database when migrations run |
 
@@ -967,6 +1094,6 @@ reticula-mcp serve
 
 `migrate` is safe to run any number of times. Besides applying schema files, it creates the system account (handle `reticula`, no password, cannot sign in) and loads the shipped instructions. The instructions are written as notes by the system account, in a hub that every account can read. It also creates the debug hub. A second run changes nothing. A new version of a shipped note is written only when its text changed in the release you installed.
 
-The other commands on this page are the same without the `docker compose exec app` prefix. Back up with `pg_dump --format=custom "$RETICULA_DATABASE_URL"`, and restore with `pg_restore --no-owner --single-transaction` into an empty database before the first `migrate`.
+The other commands on this page are the same without the `docker compose exec app` prefix. Back up with `pg_dump --format=custom "$RETICULA_DATABASE_URL"`, and restore with `pg_restore --no-owner --no-comments --single-transaction` into an empty database before the first `migrate`; the forms of these commands without Docker were not run.
 
 A tunnel or proxy on the same host reaches a server that runs as a host process from `127.0.0.1`. That is then the value for `RETICULA_TRUSTED_PROXIES`.

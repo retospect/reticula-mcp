@@ -20,7 +20,7 @@ jobs:
     timeout-minutes: 20
     services:
       postgres:
-        image: pgvector/pgvector:pg17
+        image: pgvector/pgvector:pg17@sha256:b513c48566e4777cd3370451400000c78eda6a08131d68f4c31d4a76f27bd8fd
         env:
           POSTGRES_PASSWORD: postgres
         ports: ["5432:5432"]
@@ -39,6 +39,11 @@ jobs:
         with:
           version: "0.13.10"
       - run: uv sync --locked
+      - name: deploy/requirements.txt is the export of uv.lock the image installs
+        run: |
+          uv export --frozen --no-dev --no-emit-project --extra fastembed \
+            --format requirements-txt -o deploy/requirements.txt
+          git diff --exit-code deploy/requirements.txt
       - name: No known vulnerability in the locked dependencies
         run: |
           uv export --frozen --no-dev --no-emit-project --all-extras \

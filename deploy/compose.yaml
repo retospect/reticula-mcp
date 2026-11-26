@@ -21,7 +21,7 @@ x-logging: &logging
 
 services:
   db:
-    image: pgvector/pgvector:pg17
+    image: pgvector/pgvector:pg17@sha256:b513c48566e4777cd3370451400000c78eda6a08131d68f4c31d4a76f27bd8fd
     restart: unless-stopped
     logging: *logging
     # The image starts as root, sets the owner of the data directory and
@@ -32,12 +32,19 @@ services:
     # Only the server reaches the database: the network has no route out and
     # no other service of the stack joins it.
     networks: [database]
+    # The superuser is reticula_admin, for the operator only. On an empty data
+    # directory db-init/10-owner-role.sh makes the role reticula, which the
+    # server connects as: it owns the database and has no superuser rights.
+    # These settings act only on an empty data directory; an install from
+    # before keeps its roles until the steps in docs/operating.md, Upgrade.
     environment:
-      POSTGRES_USER: reticula
-      POSTGRES_PASSWORD: ${RETICULA_DB_PASSWORD:?set RETICULA_DB_PASSWORD in .env}
-      POSTGRES_DB: reticula
+      POSTGRES_USER: reticula_admin
+      POSTGRES_PASSWORD: ${RETICULA_DB_ADMIN_PASSWORD:?set RETICULA_DB_ADMIN_PASSWORD in .env}
+      POSTGRES_DB: postgres
+      RETICULA_DB_PASSWORD: ${RETICULA_DB_PASSWORD:?set RETICULA_DB_PASSWORD in .env}
     volumes:
       - reticula-db:/var/lib/postgresql/data
+      - ./db-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U reticula -d reticula"]
       interval: 5s
@@ -49,6 +56,10 @@ services:
       context: .
       args:
         RETICULA_VERSION: ${RETICULA_VERSION:?set RETICULA_VERSION in .env}
+        # The embedding model is built into the image, so the image holds the
+        # model the server is told to use. Another model needs a new build:
+        # docker compose up -d --build.
+        RETICULA_EMBED_MODEL: ${RETICULA_EMBED_MODEL:-BAAI/bge-base-en-v1.5}
     restart: unless-stopped
     logging: *logging
     # The server with the default model uses about 0.6 GB; a `reindex` run in
@@ -83,11 +94,13 @@ services:
       RETICULA_TRUSTED_PROXIES: ${RETICULA_TRUSTED_PROXIES:-}
       RETICULA_KNOWN_CLIENTS: ${RETICULA_KNOWN_CLIENTS:-claude.ai,claude.com}
       RETICULA_ALLOW_NEWER_SCHEMA: ${RETICULA_ALLOW_NEWER_SCHEMA:-}
+      # The secret that encrypts the accounts' private keys in the database.
+      # It is not in the database or its dumps; docs/operating.md, "The key
+      # file", says how to make it and keep a copy.
+      RETICULA_KEY_FILE: /run/secrets/reticula_key
+    secrets: [reticula_key]
     ports:
       - "127.0.0.1:${RETICULA_PORT:-8787}:8787"
-    volumes:
-      # The embedding model is downloaded at the first start and kept here.
-      - reticula-models:/home/reticula/.cache
     healthcheck:
       test: ["CMD", "reticula-healthcheck"]
       interval: 10s
@@ -109,4 +122,10 @@ networks:
 
 volumes:
   reticula-db:
-  reticula-models:
+
+# Mounted into the server at /run/secrets/reticula_key with the owner and mode
+# the file has on this machine: on Linux it must belong to uid 10001 with mode
+# 600; with Docker on a Mac, to your own user with mode 600.
+secrets:
+  reticula_key:
+    file: ./secrets/reticula.key

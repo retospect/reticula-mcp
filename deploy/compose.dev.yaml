@@ -28,7 +28,7 @@ x-logging: &logging
 
 services:
   db:
-    image: pgvector/pgvector:pg17
+    image: pgvector/pgvector:pg17@sha256:b513c48566e4777cd3370451400000c78eda6a08131d68f4c31d4a76f27bd8fd
     restart: unless-stopped
     logging: *logging
     environment:
@@ -57,6 +57,9 @@ services:
         condition: service_healthy
     environment:
       RETICULA_DATABASE_URL: postgresql://reticula:reticula-dev@db:5432/reticula
+      # A development stack keeps private keys unencrypted and says so at
+      # every start; compose.yaml mounts a key file instead.
+      RETICULA_KEY_FILE: none
       # The server listens on 0.0.0.0 inside the container, so it cannot guess
       # the address clients use. Always say it.
       RETICULA_PUBLIC_URL: ${RETICULA_DEV_PUBLIC_URL:-http://127.0.0.1:${RETICULA_DEV_PORT:-8788}}
@@ -71,8 +74,6 @@ services:
       RETICULA_KNOWN_CLIENTS: ${RETICULA_DEV_KNOWN_CLIENTS:-claude.ai,claude.com}
     ports:
       - "127.0.0.1:${RETICULA_DEV_PORT:-8788}:8787"
-    volumes:
-      - models:/home/reticula/.cache
     networks: [default]
     healthcheck:
       test: ["CMD", "reticula-healthcheck"]
@@ -86,7 +87,7 @@ services:
   # can name it.
   proxy:
     profiles: [proxy]
-    image: caddy:2-alpine
+    image: caddy:2-alpine@sha256:003a97808e781aa9f7e75cc2f43d34d461099031faf5e20faefb9f61126836f0
     restart: unless-stopped
     logging: *logging
     depends_on:
@@ -113,4 +114,3 @@ networks:
 
 volumes:
   db:
-  models:

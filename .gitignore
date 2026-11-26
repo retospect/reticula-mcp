@@ -17,6 +17,14 @@ htmlcov/
 *.pem
 *.key
 instance/
+# the key file of compose.yaml and anything else kept beside it
+deploy/secrets/
+# the files of backup.sh (docs/operating.md, On a schedule)
+deploy/backups/
+deploy/backup.sh
+deploy/backup.log
+deploy/backup-signing.key.pub
+deploy/allowed_signers
 
 # local agent settings
 .claude/
