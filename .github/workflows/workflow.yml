@@ -2,26 +2,64 @@ name: Publish to PyPI
 
 # Fires on a version tag. PyPI trusts this exact file name ("workflow.yml")
 # and the "pypi" environment through trusted publishing, so no token is stored.
+#
+# Three jobs, each waiting for the one before: the checks of check.yml on the
+# tagged commit, a build of the wheel and the sdist that is checked and kept
+# as an artifact, and the publish, which only downloads that artifact and is
+# the only job that may ask for the PyPI token. Actions are pinned by commit;
+# the comment names the release.
+#
+# workflow_dispatch runs the checks and the build on a branch, as a dry run;
+# the publish job runs for a v* tag only.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  publish:
+  checks:
+    uses: ./.github/workflows/check.yml
+
+  build:
+    needs: checks
     runs-on: ubuntu-latest
-    environment: pypi
     permissions:
       contents: read
-      id-token: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: "0.13.10"
       - name: Check the tag matches the package version
+        if: startsWith(github.ref, 'refs/tags/v')
         run: |
           version="$(uv run --no-project python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")"
           test "v${version}" = "${GITHUB_REF_NAME}" || { echo "tag ${GITHUB_REF_NAME} does not match version ${version}"; exit 1; }
       - run: uv build
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - name: The wheel is complete and its command runs
+        run: scripts/check-wheel
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
