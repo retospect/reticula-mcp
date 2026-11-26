@@ -241,8 +241,7 @@ def create_mcp(settings: Settings, db: Database) -> tuple[FastMCP, AuthWiring]:
         kind: Annotated[
             str | None,
             Field(
-                description="Only this kind: note, hub, paper, instruction or debug;"
-                " person lists the people on this instance by handle."
+                description="Only this kind: note, hub, paper, instruction or debug."
             ),
         ] = None,
         limit: Annotated[int, Field(description="Maximum results (default 10).")] = 10,
