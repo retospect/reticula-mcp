@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The front page shows "Sign up with an agent" as a button near the top, with one sentence on how signing up works: through the assistant you connect, not a form.
 - Hardening of the web pages and the sign-in page: `/hubs` renders any nesting without recursion, shows at most 8 levels below a public hub and at most 2,000 entries, is kept on the server for 10 seconds instead of 60 and sent with `Cache-Control: no-cache`, and answers 503 for a minute when it cannot be rendered; no path is redirected to its form with or without a trailing slash; opening a sign-in page again reuses its form token instead of replacing it, and a page open in another browser says so; at most 4 sign-ins check or set a password at once, and those waiting hold no database connection.
 - Request log: a path that holds a space, a quote or a backslash after decoding is written in double quotes, like `agent=`. Other paths are written as before.
 - `compose.yaml`: Docker keeps each container's log to 5 files of 10 MB, and the server container may use at most 2 GB of memory (`RETICULA_APP_MEMORY` in `.env` sets another limit) and 512 processes. `compose.tailscale.yaml` and `compose.dev.yaml` get the same log limits. No migration.
