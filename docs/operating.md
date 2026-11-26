@@ -495,6 +495,38 @@ Notes written before the upgrade read back. Of 112 recorded replies of `start`, 
 
 A second drill went from 0.1.1 to 0.2.0, both installed from PyPI. The server logged no `applied` line and the ledger stayed at 14 migrations. Building the image of 0.2.0 took 20 seconds with no step taken from Docker's build cache. The command of step 3 took 7 seconds with the first steps of the image taken from the cache, and `/healthz` was without an answer for 1.4 and 1.3 seconds in two such switches. Every table had the row counts from before. Tokens issued under 0.1.1 worked, a refresh token among them, and the smoke test of 0.2.0 passed. Of the 112 replies 83 were the same. The other 29 are searches with one result: their first line says `1 result` where 0.1.1 says `1 results`.
 
+0.3.0 adds eight migrations to those of 0.2.0:
+
+```
+applied 0204_readable_hubs.sql
+applied 0205_current_among.sql
+applied 0302_embedding_backlog.sql
+applied 0303_backlog_current_model.sql
+applied 0350_recent_events.sql
+applied 0351_onboarding.sql
+applied 0352_word_handles.sql
+applied 0353_readable_if_live.sql
+```
+
+- `0204`, `0205`, `0303` and `0353` add or redefine SQL functions. No table, index or row changes.
+- `0302_embedding_backlog` adds two tables: `embedding_backlog`, the notes that still wait for a vector, and `embedding_complete`, the model the server last finished embedding.
+- `0350_recent_events` adds three indexes, for `search(since=...)`.
+- `0351_onboarding` adds the table `onboarding_shown`, one row for each connection that `start` has pointed to the instruction on using Reticula as memory.
+- `0352_word_handles` adds the tables `account_setting` and `connection_setting`, which `edit(ref="settings", ...)` writes, and one function and one index.
+
+0.3.0 also changes the default model from `BAAI/bge-small-en-v1.5` to `BAAI/bge-base-en-v1.5`, in `compose.yaml` and `.env.example`. A `.env` that sets `RETICULA_EMBED_MODEL` keeps its model. Otherwise the first start of 0.3.0 downloads bge-base and computes a vector of it for every note. [Change the model](#change-the-model) says what happens during such a switch.
+
+This upgrade was rehearsed on a copy of a running 0.2.0 instance, restored from a dump into a throwaway stack: 3 accounts and 63 notes with bge-small vectors, 14 migrations in the ledger. The server was built from the release commit.
+
+- `reticula-mcp migrate` applied the eight files above, in 1 second including the start of its container. The ledger then held 22 migrations. The same run added the new shipped instructions: the copy had 7 instruction notes afterwards, against 4 before.
+- At the start `/healthz` answered after 1.3 seconds and the container was healthy after 5.8. The log had `embedding model BAAI/bge-base-en-v1.5 loaded in 4.4s`, the download included. The model takes 209 MB in the volume.
+- Every one of the 66 notes had a bge-base vector 19.5 seconds after the container started, with no command run. The backlog was then empty.
+- The server container used 515 MiB of memory while it embedded and 618 MiB afterwards. With bge-small it used 190 MiB in an earlier measurement, under [The embedding model](#the-embedding-model).
+- The 63 bge-small vectors were still there. `docker compose exec app reticula-mcp reindex --drop-other-models` removed them in 0.5 seconds and answered `removed 63 vectors and 1 vector indexes of other models; fastembed:BAAI/bge-base-en-v1.5 is kept`. The database was 11 MB afterwards.
+- With an account and two tokens made in the copy, through MCP: the first `start` of each token pointed to the instruction on using Reticula as memory, and no later `start` through the same token did. Two notes written then were found at once by their words and by their meaning, the meaning search sharing no word with the note. `get` of a hub and `search(query="", since="7d")` answered.
+
+Not tried in the rehearsal: tokens issued before the upgrade, the smoke test, and the way back to 0.2.0.
+
 Migrations only move forward and each file runs in its own transaction. A migration file that has already been applied is never edited; changes arrive as new files. If the server reports that an applied file has changed, you are running mismatched code and database: do not continue.
 
 The version-zero note format may still change. Read the release notes before you upgrade across a format change.
