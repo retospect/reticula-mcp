@@ -1,12 +1,14 @@
 # What the image build may read. The `source` target needs these paths from
-# the repository root; the `release` target reads only requirements.txt from
-# its context, this directory.
+# the repository root; the `release` target reads only requirements.txt and
+# fetch-model.py from its context, this directory.
 *
 !pyproject.toml
 !README.md
 !LICENSE
 !src
 !deploy/requirements.txt
+!deploy/fetch-model.py
 !requirements.txt
+!fetch-model.py
 **/__pycache__
 **/*.py[cod]

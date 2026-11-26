@@ -49,6 +49,10 @@ services:
       context: .
       args:
         RETICULA_VERSION: ${RETICULA_VERSION:?set RETICULA_VERSION in .env}
+        # The embedding model is built into the image, so the image holds the
+        # model the server is told to use. Another model needs a new build:
+        # docker compose up -d --build.
+        RETICULA_EMBED_MODEL: ${RETICULA_EMBED_MODEL:-BAAI/bge-base-en-v1.5}
     restart: unless-stopped
     logging: *logging
     # The server with the default model uses about 0.6 GB; a `reindex` run in
@@ -90,9 +94,6 @@ services:
     secrets: [reticula_key]
     ports:
       - "127.0.0.1:${RETICULA_PORT:-8787}:8787"
-    volumes:
-      # The embedding model is downloaded at the first start and kept here.
-      - reticula-models:/home/reticula/.cache
     healthcheck:
       test: ["CMD", "reticula-healthcheck"]
       interval: 10s
@@ -114,7 +115,6 @@ networks:
 
 volumes:
   reticula-db:
-  reticula-models:
 
 # Mounted into the server at /run/secrets/reticula_key with the owner and mode
 # the file has on this machine: on Linux it must belong to uid 10001 with mode

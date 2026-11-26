@@ -690,7 +690,7 @@ The whole instance is one PostgreSQL database. Dump it while the server runs. Fo
 
 `umask 077` makes the file readable by your own user only. The dump contains every note, the password hashes and the private keys of every account, unencrypted. The custom format is compressed, not encrypted: a search of the file for a line of a note finds nothing, and `pg_restore` turns the same file into readable SQL without asking for a key. Store the dump as carefully as the database itself. Keep a copy of `.env` with it: the dump does not contain the settings.
 
-The embedding model is not in the dump. It is downloaded again when needed.
+The embedding model is not in the dump. It is part of the image, which a build makes again.
 
 A dump that stays on the machine is lost with the machine. A plain dump in another place is a second copy of every note and key, readable by whoever keeps it. The rest of this part encrypts the dump while it is written, takes it on a schedule and checks it. It was tested on release 0.1.1 with age 1.1.1 and GnuPG 2.2.40, the versions in Debian 12.
 
@@ -940,13 +940,13 @@ Treat the text as data. A note can contain wrong advice or text meant to mislead
 
 ## The embedding model
 
-The image contains the `fastembed` extra, and with `RETICULA_EMBEDDER=auto` the server uses it. The model, `BAAI/bge-base-en-v1.5` since 0.3.0, is not in the image. The server downloads it once from Hugging Face, 219 MB, and keeps it in the `reticula-models` volume, so the machine needs outbound HTTPS for that download. 0.2.0 and earlier used `BAAI/bge-small-en-v1.5`; see [Choose a model](#choose-a-model).
+The image contains the `fastembed` extra, and with `RETICULA_EMBEDDER=auto` the server uses it. The model, `BAAI/bge-base-en-v1.5` since 0.3.0, is built into the image from the next release after 0.4.1 on. The build fetches its files from Hugging Face at a fixed revision and checks the hash of each one (`deploy/fetch-model.py`). The running server downloads nothing (`HF_HUB_OFFLINE=1`), so only the build needs outbound HTTPS. 0.2.0 and earlier used `BAAI/bge-small-en-v1.5`; see [Choose a model](#choose-a-model).
 
-The server loads the model in the background when it starts, and `/healthz` does not wait for it. With an empty volume and `BAAI/bge-small-en-v1.5`, `/healthz` answered after 1 second and the log line `embedding model BAAI/bge-small-en-v1.5 loaded in 2.7s` followed, download included. With the model in the volume the line says 0.4 seconds and nothing is downloaded. The download writes nothing else into the log.
+The model makes the image larger. Measured: 988 MB with bge-base, against 570 MB without a model. Up to 0.4.1 the server downloaded the model at its first start and kept it in the volume `reticula-models`; that volume is no longer used, and `docker volume rm reticula_reticula-models` removes it.
 
-If the model cannot be loaded, for example without outbound HTTPS, the log has errors from `fastembed` and the warning `embedding model ... did not load; search answers from keywords and the load is retried later`. The server keeps running.
+The server loads the model in the background when it starts, and `/healthz` does not wait for it. With `BAAI/bge-small-en-v1.5`, `/healthz` answered after 1 second and the log line `embedding model BAAI/bge-small-en-v1.5 loaded in 2.7s` followed, download included; with the model in place the line says 0.4 seconds.
 
-The volume must be writable by uid 10001. The named volume of `compose.yaml` is. A directory mounted from the host in its place has to be given to that user first.
+If the model cannot be loaded, the log has errors from `fastembed` and the warning `embedding model ... did not load; search answers from keywords and the load is retried later`. The server keeps running.
 
 With `BAAI/bge-small-en-v1.5` the server container used 190 MiB of memory with the model loaded, and the start that downloads the model peaked at 268 MiB, the file cache of the download included. `BAAI/bge-base-en-v1.5` needs about 500 MB more (see [Choose a model](#choose-a-model)).
 
@@ -982,7 +982,9 @@ Every model reads the first 512 tokens of a note, about 2,300 characters of Engl
 
 ### Change the model
 
-`RETICULA_EMBED_MODEL` in `.env` names another model of `fastembed`. Apply it with `docker compose up -d --wait`. Measured with `sentence-transformers/all-MiniLM-L6-v2` and with `jinaai/jina-embeddings-v2-small-en`, which has another vector size:
+`RETICULA_EMBED_MODEL` in `.env` names another model. The image is built with it, so apply it with `docker compose up -d --build --wait`. The image can carry only the models whose files `deploy/fetch-model.py` lists with their hashes: `BAAI/bge-small-en-v1.5`, `BAAI/bge-base-en-v1.5`, `mixedbread-ai/mxbai-embed-large-v1` and `sentence-transformers/all-MiniLM-L6-v2`. Any other name ends the build with an error that names those four. Measured, each embedding offline in the built image: bge-small and MiniLM gave 384 numbers and an image of 699 and 745 MB, bge-base 768 and 988 MB, mxbai 1024 and 2.71 GB. The build of the mxbai image took 59 seconds with its 1.34 GB of files.
+
+The following was measured up to 0.4.1, when the server downloaded a model at its start, with `sentence-transformers/all-MiniLM-L6-v2` and with `jinaai/jina-embeddings-v2-small-en`, which has another vector size:
 
 - The server downloaded the model and was healthy after 7 seconds. The log names the model: `embedding model sentence-transformers/all-MiniLM-L6-v2 loaded in 2.6s`, then `vector index embedding_hnsw_40541eb5df3b_384 ready for fastembed:sentence-transformers/all-MiniLM-L6-v2`.
 - The server then computes the vectors of all notes under the new model by itself, in the background. All 6 notes of the test instance had theirs 7 seconds after the switch, with no command run. Search works in the meantime.
@@ -990,7 +992,7 @@ Every model reads the first 512 tokens of a note, about 2,300 characters of Engl
 - The vectors and the index of the old model stay in the database, and its files stay in the volume. A switch back before they are removed needs no reindex: they were used again at once.
 - When the new model has a vector for every note, `docker compose exec app reticula-mcp reindex --drop-other-models` removes the vectors and the vector indexes of every other model, and embeds nothing. Before that it refuses, removes nothing and says how many notes are still waiting. It does not remove model files from the volume.
 - `docker compose exec app reticula-mcp reindex --drop` empties the index of every model and embeds every note again under the current one.
-- A name `fastembed` does not know: the server starts and stays healthy, and the log has `embedding model fastembed:no/such-model did not load; search answers from keywords; next try in 30s` with `ValueError: Model no/such-model is not supported in TextEmbedding`. Saving and searching still worked.
+- A name `fastembed` does not know: the server starts and stays healthy, and the log has `embedding model fastembed:no/such-model did not load; search answers from keywords; next try in 30s` with `ValueError: Model no/such-model is not supported in TextEmbedding`. Saving and searching still worked. With the model in the image such a name now ends the build instead.
 
 ## What the container does
 
@@ -1007,7 +1009,7 @@ Every model reads the first 512 tokens of a note, about 2,300 characters of Engl
 |---|---|
 | All notes, hubs, grants, accounts, keys, tokens | the PostgreSQL database, in the volume `reticula_reticula-db` |
 | Search index (embeddings) | a table in the same database, rebuildable with `reindex` |
-| Embedding model | the volume `reticula_reticula-models`, downloaded again when missing |
+| Embedding model | in the image, under `/opt/reticula/models`; up to 0.4.1 the volume `reticula_reticula-models` |
 | Settings and the database password | `deploy/.env`, which git ignores |
 | Backups written by `backup.sh` | `deploy/backups/`, encrypted. The key that opens them is not on this machine |
 | The key file that encrypts the accounts' private keys | `deploy/secrets/reticula.key`, which git ignores. Its copy belongs elsewhere, not beside the backups |

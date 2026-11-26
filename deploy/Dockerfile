@@ -11,20 +11,14 @@
 
 FROM python:3.13-slim@sha256:7249d5587b78209a006dc4a3b5340678f84ea729239193aa559962cd8c1fce50 AS runtime
 
-# The model cache directory exists in the image and belongs to the service
-# user. A named volume mounted there inherits that owner on first use;
-# without it docker creates the mount point for root and the model download
-# fails. fastembed keeps its models under the system temp directory unless
-# FASTEMBED_CACHE_PATH says otherwise, so point it at the volume.
+# The service user owns its home directory. The embedding model is not here:
+# it is built into the image under /opt/reticula/models (the `model` stages
+# below), owned by root, and the server never downloads anything.
 RUN useradd --create-home --uid 10001 reticula \
-    && install -d -o reticula -g reticula \
-        /home/reticula/.cache /home/reticula/.cache/fastembed
-ENV FASTEMBED_CACHE_PATH=/home/reticula/.cache/fastembed \
-    PYTHONUNBUFFERED=1
+    && install -d -o reticula -g reticula /home/reticula/.cache
+ENV PYTHONUNBUFFERED=1
 
-# The model download otherwise writes progress bars and a notice about
-# unauthenticated requests into the container log. A download that fails is
-# still logged: by fastembed as errors and by the server as a warning.
+# Quiet logs: no progress bars, and nothing but errors from huggingface_hub.
 ENV TQDM_DISABLE=1 \
     HF_HUB_VERBOSITY=error
 
@@ -99,24 +93,57 @@ RUN python -m build --wheel --outdir /dist .
 # Both targets install the dependencies from requirements.txt, an export of
 # uv.lock with a hash for every file, and then the package itself without its
 # dependencies; `pip check` fails the build if the two do not fit.
-FROM runtime AS source
+#
+# The embedding model is part of the image. A `model` stage fetches it at a
+# pinned revision and checks every file against a pinned sha256
+# (fetch-model.py), using huggingface_hub from the dependencies. It depends on
+# the requirements and the script, not on the package, so a change of the code
+# does not fetch the model again. Each context has its own paths, so each
+# target has its own stages; they differ only in those paths.
+# RETICULA_EMBED_MODEL must be one of the models fetch-model.py lists; compose
+# passes the value the server is told to use. The final images set
+# FASTEMBED_CACHE_PATH to the model directory and HF_HUB_OFFLINE=1, so the
+# server finds the model there and never looks for one on the network.
+
+
+FROM runtime AS deps-source
 COPY deploy/requirements.txt /tmp/requirements.txt
-RUN --mount=type=bind,from=wheel,source=/dist,target=/dist \
-    pip install --no-cache-dir --require-hashes -r /tmp/requirements.txt \
-    && pip install --no-cache-dir --no-deps "$(ls /dist/*.whl)" \
-    && pip check \
+RUN pip install --no-cache-dir --require-hashes -r /tmp/requirements.txt \
     && rm /tmp/requirements.txt
+
+FROM deps-source AS model-source
+ARG RETICULA_EMBED_MODEL=BAAI/bge-base-en-v1.5
+COPY deploy/fetch-model.py /tmp/fetch-model.py
+RUN python /tmp/fetch-model.py "$RETICULA_EMBED_MODEL" /opt/reticula/models
+
+FROM deps-source AS source
+COPY --from=model-source --chown=root:root /opt/reticula/models /opt/reticula/models
+RUN --mount=type=bind,from=wheel,source=/dist,target=/dist \
+    pip install --no-cache-dir --no-deps "$(ls /dist/*.whl)" \
+    && pip check
+ENV FASTEMBED_CACHE_PATH=/opt/reticula/models \
+    HF_HUB_OFFLINE=1
 USER reticula
 
 
 # --- the release from PyPI (context: this directory). Last, so it is the
 # default target and `docker build deploy/` keeps meaning "the release". -------
-FROM runtime AS release
-ARG RETICULA_VERSION
+FROM runtime AS deps-release
 COPY requirements.txt /tmp/requirements.txt
-RUN test -n "$RETICULA_VERSION" \
-    && pip install --no-cache-dir --require-hashes -r /tmp/requirements.txt \
-    && pip install --no-cache-dir --no-deps "reticula-mcp==${RETICULA_VERSION}" \
-    && pip check \
+RUN pip install --no-cache-dir --require-hashes -r /tmp/requirements.txt \
     && rm /tmp/requirements.txt
+
+FROM deps-release AS model-release
+ARG RETICULA_EMBED_MODEL=BAAI/bge-base-en-v1.5
+COPY fetch-model.py /tmp/fetch-model.py
+RUN python /tmp/fetch-model.py "$RETICULA_EMBED_MODEL" /opt/reticula/models
+
+FROM deps-release AS release
+ARG RETICULA_VERSION
+COPY --from=model-release --chown=root:root /opt/reticula/models /opt/reticula/models
+RUN test -n "$RETICULA_VERSION" \
+    && pip install --no-cache-dir --no-deps "reticula-mcp==${RETICULA_VERSION}" \
+    && pip check
+ENV FASTEMBED_CACHE_PATH=/opt/reticula/models \
+    HF_HUB_OFFLINE=1
 USER reticula
