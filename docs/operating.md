@@ -529,6 +529,16 @@ A second rehearsal on a fresh copy kept the connections made before the upgrade.
 
 Not tried in the rehearsals: the smoke test, and the way back to 0.2.0, which is the restore of the dump from step 1.
 
+0.4.0 adds one migration to those of 0.3.0:
+
+```
+applied 0354_public_nodes.sql
+```
+
+It defines the SQL function `public_nodes()`, which the page `/hubs` reads. No table, index or row changes. The model and the settings are those of 0.3.0.
+
+0.4.0 also serves public pages on the same port as the connector: `/`, `/slides`, `/hubs`, `/connect`, `/vision`, `/privacy`, `/results` and `/robots.txt`. They need no setting. `/connect` shows the connector address built from `RETICULA_PUBLIC_URL`. A proxy in front of the server that forwards only `/mcp` and the sign-in pages leaves the public pages unreachable, and that is a valid way to run it. `/hubs` lists nothing until an owner runs `share(hub=..., person="public", mode="read")`.
+
 Migrations only move forward and each file runs in its own transaction. A migration file that has already been applied is never edited; changes arrive as new files. If the server reports that an applied file has changed, you are running mismatched code and database: do not continue.
 
 The version-zero note format may still change. Read the release notes before you upgrade across a format change.
