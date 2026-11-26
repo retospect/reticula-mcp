@@ -1,6 +1,6 @@
 # Trials with assistants that had never seen Reticula
 
-Reticula is used by language models, not by people. These trials watched models that knew nothing about it try to use it, recorded what they did, and ran again after each fix. This page is the record: the method, the rounds, what went wrong, what was changed and what is still open. About 15,700 runs in all.
+Reticula is used by language models, not by people. These trials watched models that knew nothing about it try to use it, recorded what they did, and ran again after each fix. This page is the record: the method, the rounds, what went wrong, what was changed and what is still open. About 15,800 runs in all.
 
 ## Method
 
@@ -1054,6 +1054,7 @@ The changes that are read only after the first call, run together beside main: t
 - **Without the line, no hub was made public:** 0 of 96 runs, with either reply. The keyword `public` is taught only in the reply of a share, which comes after the share; the assistants said they could not do it.
 - **With the line,** the hub was made public in 93 of 96 runs and taken off again in 94; no answer said strangers could read the text. The two replies did alike. The new one led Sonnet to say that Ben's note stays hidden in 17 of 24 answers, against 6 of 24 with the first.
 - The gate cell held on every arm. Taken: the new reply and the line.
+- **Again on the 0.4.0 release candidate** (main `bfbe377`, 144 runs): made public in 45 of 48 runs, taken off again in 45, no answer saying strangers can read the text, the gate cell 24 of 24. The three that did not make it public said they found no way and changed nothing.
 
 ## Benchmark: memory by Reticula, pasted, or none
 
