@@ -35,7 +35,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
-    "mcp>=1.30,<2",
+    "mcp>=1.30,<3",
     "psycopg[binary,pool]>=3.3.6",
     "pgvector>=0.4",
     "cryptography>=46.0.7",
