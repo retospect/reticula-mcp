@@ -6,6 +6,7 @@
 - `/healthz` answers from a database check that is at most 2 seconds old, whether it succeeded or failed, so repeated requests do not each take a database connection. The answer itself is unchanged.
 - Every check of the repository runs `pip-audit` on the locked dependencies, and Dependabot proposes updates of the Python packages, the GitHub Actions and the base images.
 - `compose.yaml`: the database is on a network of its own that only the server joins and that has no route out; the server and the database drop the Linux capabilities they do not need and may not gain privileges, and so does the Tailscale container of `compose.tailscale.yaml`. The server gets the database password as `PGPASSWORD`, so a password with characters such as `@`, `:` or `/` works. No migration.
+- The image installs its dependencies from `deploy/requirements.txt`, an export of `uv.lock` with a hash for every file, and the server package without dependencies; `pip check` ends the build if they do not fit. The base images (Python, pgvector, Tailscale, and Caddy in the development stack) are named by digest. The check of the repository fails when `deploy/requirements.txt` is not the export of the lock.
 
 ## 0.4.1 (2026-11-26)
 

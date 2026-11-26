@@ -9,7 +9,7 @@
 # Both targets share the runtime stage, so user, paths, entry point and health
 # probe are identical. Only the origin of the package differs.
 
-FROM python:3.13-slim AS runtime
+FROM python:3.13-slim@sha256:7249d5587b78209a006dc4a3b5340678f84ea729239193aa559962cd8c1fce50 AS runtime
 
 # The model cache directory exists in the image and belongs to the service
 # user. A named volume mounted there inherits that owner on first use;
@@ -88,7 +88,7 @@ CMD ["reticula-mcp", "serve", "--migrate"]
 
 
 # --- a wheel from the working tree (context: repository root) ----------------
-FROM python:3.13-slim AS wheel
+FROM python:3.13-slim@sha256:7249d5587b78209a006dc4a3b5340678f84ea729239193aa559962cd8c1fce50 AS wheel
 RUN pip install --no-cache-dir build==1.6.1
 WORKDIR /src
 COPY pyproject.toml README.md LICENSE ./
@@ -96,9 +96,16 @@ COPY src ./src
 RUN python -m build --wheel --outdir /dist .
 
 
+# Both targets install the dependencies from requirements.txt, an export of
+# uv.lock with a hash for every file, and then the package itself without its
+# dependencies; `pip check` fails the build if the two do not fit.
 FROM runtime AS source
+COPY deploy/requirements.txt /tmp/requirements.txt
 RUN --mount=type=bind,from=wheel,source=/dist,target=/dist \
-    pip install --no-cache-dir "$(ls /dist/*.whl)[fastembed]"
+    pip install --no-cache-dir --require-hashes -r /tmp/requirements.txt \
+    && pip install --no-cache-dir --no-deps "$(ls /dist/*.whl)" \
+    && pip check \
+    && rm /tmp/requirements.txt
 USER reticula
 
 
@@ -106,6 +113,10 @@ USER reticula
 # default target and `docker build deploy/` keeps meaning "the release". -------
 FROM runtime AS release
 ARG RETICULA_VERSION
+COPY requirements.txt /tmp/requirements.txt
 RUN test -n "$RETICULA_VERSION" \
-    && pip install --no-cache-dir "reticula-mcp[fastembed]==${RETICULA_VERSION}"
+    && pip install --no-cache-dir --require-hashes -r /tmp/requirements.txt \
+    && pip install --no-cache-dir --no-deps "reticula-mcp==${RETICULA_VERSION}" \
+    && pip check \
+    && rm /tmp/requirements.txt
 USER reticula

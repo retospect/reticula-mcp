@@ -21,7 +21,7 @@ x-logging: &logging
 
 services:
   db:
-    image: pgvector/pgvector:pg17
+    image: pgvector/pgvector:pg17@sha256:b513c48566e4777cd3370451400000c78eda6a08131d68f4c31d4a76f27bd8fd
     restart: unless-stopped
     logging: *logging
     # The image starts as root, sets the owner of the data directory and
