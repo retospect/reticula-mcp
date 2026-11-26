@@ -41,6 +41,7 @@ from reticula_mcp.seams import AuthWiring
 from reticula_mcp.search import handlers as search_handlers
 from reticula_mcp.search import handles
 from reticula_mcp.search import hooks as search_hooks
+from reticula_mcp.web import pages as web_pages
 
 log = logging.getLogger("reticula_mcp")
 
@@ -563,7 +564,7 @@ def build_app(settings: Settings, db: Database | None = None) -> Starlette:
     database = db or Database(settings.require_database_url())
     mcp, wiring = create_mcp(settings, database)
     app = mcp.streamable_http_app()
-    app.router.routes[0:0] = list(wiring.routes)
+    app.router.routes[0:0] = [*wiring.routes, *web_pages.routes(settings, database)]
     for mw in wiring.middleware:
         app.add_middleware(mw.cls, *mw.args, **mw.kwargs)
     # Added last, so outermost: it also sees what the sign-in layer refuses.

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from reticula_mcp import public as public_page
 from reticula_mcp import settings
 from reticula_mcp.accounts import Account, get_account_by_person_id
 from reticula_mcp.db.pool import Conn
@@ -19,6 +20,7 @@ from reticula_mcp.errors import (
     ReticulaError,
 )
 from reticula_mcp.graph import access, api
+from reticula_mcp.graph.materialize import PUBLIC
 from reticula_mcp.permissions import can_read, readable_nodes_sql
 from reticula_mcp.resolve import resolve_person, resolve_ref
 from reticula_mcp.search import index, render
@@ -477,6 +479,8 @@ def _list_access(conn: Conn, viewer: Account, hub: Row) -> str:
         # a grant is printed as it was given; a hub above may give more
         adders = access.adders_from_above(conn, viewer.person_id, hub["id"])
         for r in rows:
+            if r["grantee"] == PUBLIC:
+                continue  # not a person: said below, from public_nodes()
             more = (
                 "; add through a hub above this one" if r["grantee"] in adders else ""
             )
@@ -495,6 +499,11 @@ def _list_access(conn: Conn, viewer: Account, hub: Row) -> str:
             lines.append(
                 "Everyone with access to a hub above this one can read it too."
             )
+        if public_page.on_page(conn, hub["id"]):
+            lines.append(
+                f"{public_page.PAGE} /hubs shows the titles of this hub and of"
+                " the owner's own notes in it, to anyone"
+            )
         lines.append(
             "add: reads the hub and adds notes of their own. read: reads only."
             " Nobody can edit another person's note."
@@ -504,6 +513,61 @@ def _list_access(conn: Conn, viewer: Account, hub: Row) -> str:
         lines.append(f"@{viewer.handle} {mode or 'read'}")
         lines.append("other readers are shown only to people who can add to this hub")
     return "\n".join(lines)
+
+
+def _share_public(conn: Conn, viewer: Account, hub_row: Row, mode: str) -> str:
+    """``share(hub=..., person="public", mode="read")``: the hub on the public
+    page /hubs (migration 0354), for its owner only."""
+    if hub_row["author"] != viewer.person_id:
+        raise ReticulaError(FORBIDDEN, "only the hub's owner can make it public")
+    if mode == "add":
+        raise ReticulaError(
+            BAD_INPUT,
+            "public is read only",
+            hint='share(hub=..., person="public", mode="read")',
+        )
+    if mode == "read" and hub_row["audience"] != "hub":
+        raise ReticulaError(
+            BAD_INPUT,
+            "a private hub cannot be public",
+            hint=f'edit(ref="{hub_row["address"][-8:]}", private=false) first',
+        )
+    api.set_grant(conn, viewer, hub_row["id"], PUBLIC, mode)
+    where = _name(hub_row)
+    ref = hub_row["address"][-8:]
+    if mode == "none":
+        return f"hub {where} is no longer on the public page."
+    subs, notes, private = public_page.opened(conn, hub_row["id"])
+    opened = f"{notes} {'note' if notes == 1 else 'notes'} of yours"
+    if subs:
+        names = ", ".join(
+            render.quote(t, 60) if t else "(untitled hub)" for _, t in subs[:5]
+        )
+        more = f" and {len(subs) - 5} more" if len(subs) > 5 else ""
+        opened += (
+            f" and {len(subs)} of your sub-hubs"
+            if len(subs) != 1
+            else " and 1 of your sub-hubs"
+        ) + f" ({names}{more})"
+    if private == 1:
+        hidden = (
+            " Your private sub-hub shows as 'private hub', without title or id,"
+            " and nothing in it is shown."
+        )
+    elif private:
+        hidden = (
+            f" Your {private} private sub-hubs show as 'private hub', without title"
+            " or id, and nothing in them is shown."
+        )
+    else:
+        hidden = ""
+    return (
+        f"hub {where} is public now, with {opened}: anyone can see, without"
+        " signing in, on this server's page /hubs, their titles and ids. Their"
+        " text is not shown, nor notes by other people, nor private notes."
+        f"{hidden}"
+        f' share(hub="{ref}", person="public", mode="none") takes it off.'
+    )
 
 
 def share(
@@ -521,6 +585,8 @@ def share(
     if mode not in access.MODES:
         raise ReticulaError(BAD_INPUT, "mode must be add, read or none")
     ref = person.strip()
+    if ref.lower() == PUBLIC:  # the public page, not a person: "@public" would be
+        return _share_public(conn, viewer, hub_row, mode)
     targets_self = ref in (f"@{viewer.handle}", viewer.person_id)
     if mode == "none" and targets_self and _is_instructions_hub(conn, hub_row):
         # bootstrap never grants over an existing row, so a `none` written

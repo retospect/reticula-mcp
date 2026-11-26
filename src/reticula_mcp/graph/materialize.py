@@ -40,6 +40,9 @@ Row = dict[str, Any]
 
 # What the rebuild reads: every type that changes graph state.
 STATE_TYPES = ("atom", "member", "grant", "tombstone")
+#: The grantee of a grant that puts a hub on the public page (0354). Never a
+#: person ID, so no account's readable_hubs ever matches it.
+PUBLIC = "public"
 
 
 def node_by_address(conn: Conn, address: str) -> Row | None:
@@ -282,15 +285,23 @@ def _apply_grant(conn: Conn, rec: records.Record, payload: Row) -> None:
     hub = node_by_address(conn, _text(payload.get("hub")))
     grantee = _text(payload.get("to"))
     mode = _text(payload.get("mode"))
-    if hub is None or not fmt.is_person_id(grantee):
+    if hub is None:
         return
-    try:
-        access.authorize_grant(
-            conn, granter=rec.author, hub=hub, grantee=grantee, mode=mode
-        )
-    except ReticulaError as exc:
-        log.info("grant %s not applied: %s", rec.address, exc.message)
+    if grantee == PUBLIC:
+        # the public page: kept only when the hub's author gave read or none
+        if rec.author != hub["author"] or mode not in ("read", "none"):
+            log.info("grant %s not applied: public needs the owner", rec.address)
+            return
+    elif not fmt.is_person_id(grantee):
         return
+    else:
+        try:
+            access.authorize_grant(
+                conn, granter=rec.author, hub=hub, grantee=grantee, mode=mode
+            )
+        except ReticulaError as exc:
+            log.info("grant %s not applied: %s", rec.address, exc.message)
+            return
     conn.execute(
         "INSERT INTO hub_grant (hub_node_id, grantee, grantee_account_id, mode,"
         " granted_by, address, record_id, created_at, updated_at)"
