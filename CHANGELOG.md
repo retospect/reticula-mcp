@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- When no note is close enough in meaning to count as a match, `search` adds the up to 3 notes nearest in meaning under the line `closest in meaning, below the match threshold, may be unrelated:`, apart from the results and also beside a keyword match on something else. Your own notes come first with their text; somebody else's are shown without it. A paraphrase whose note scores a little below the cut is found this way: on the test set it brings 2 of the 3 paraphrases the results miss. A query of nonsense gets such rows too, and no result. It adds about 16 ms to a search that shows them, at 30,000 notes, and nothing to one that does not. Only with an embedding model: `RETICULA_EMBEDDER=hash` compares words and shows none.
+
 ## 0.3.0 (2026-11-26)
 
 - Migrations: 0.3.0 adds 0204, 0205, 0302, 0303, 0350, 0351, 0352 and 0353. They create tables, functions and indexes and change no existing row; 0.2.0 refuses the database afterwards (restore the dump taken before the upgrade to go back). The first start downloads the new default model, bge-base-en-v1.5 (about 210 MB), and the worker embeds every note again in the background; until a note has its new vector it is found by its words only. On a copy of a small live instance that took 20 seconds, and the app used about 620 MB of memory afterwards instead of about 200. Connections made under 0.2.0 keep working (`docs/operating.md`, Upgrade).
