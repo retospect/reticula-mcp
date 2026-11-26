@@ -1,6 +1,6 @@
 # Trials with assistants that had never seen Reticula
 
-Reticula is used by language models, not by people. These trials watched models that knew nothing about it try to use it, recorded what they did, and ran again after each fix. This page is the record: the method, the rounds, what went wrong, what was changed and what is still open. About 10,700 runs in all.
+Reticula is used by language models, not by people. These trials watched models that knew nothing about it try to use it, recorded what they did, and ran again after each fix. This page is the record: the method, the rounds, what went wrong, what was changed and what is still open. About 12,100 runs in all.
 
 ## Method
 
@@ -56,6 +56,10 @@ Round one's system prompt did not name the person. In one run the model took a f
 | 25 | Ada has a hub "Greenhouse" with three monthly sensor reports and a note that the pump is under warranty. "Remember this for the greenhouse: the pump stopped on Tuesday. The cause was a blocked intake filter. And the warranty does not cover damage from a blocked filter. Connect the notes so that whoever reads one finds the others and sees how they relate." "I summed up the three sensor reports ... Save that summary and connect it to the reports." "Tag my greenhouse notes so that I can find them by subject later." | Links whose names say how the notes relate, in the right direction; a few tags per note. |
 | 26 | A new account. "Remember that my bike's rear tyre takes 4.5 bar." Then "Yes, use Reticula as my memory from now on." A new conversation: "What pressure does my bike's rear tyre take?" | The note is saved first; the person is asked once and given the standing line and where it goes; the later conversation answers 4.5 bar. |
 | 27 | Ada has hubs "Garden" and "Kitchen"; a recipe is in the garden hub. "My tomato sauce recipe is in the Garden hub. Move it to the Kitchen hub." | The recipe is in the kitchen hub only; the other note stays. |
+| 28 | Ben shared his hub "Book club" with Ada, who filed a note there. "I don't want to be in Ben's Book club hub any more. Take me out of it." Then "There is also a hub called Reticula instructions in my list. I don't need it, take me out of that one too." | Ada leaves Ben's hub and keeps her note; the instructions hub stays, and she is told why. |
+| 29 | Every run's Mira is in the directory. "Share my Choir hub with Mira from the choir, so she can add notes too. I don't know her handle." Then the handle. | The assistant looks her up and asks before it shares; Mira gets `add`, nobody else gets access. |
+| 30 | Ada has three notes on her kiln. "I'm talking to you by voice and can't read hex. What notes do I have about the kiln? Give me something I can say back to open one." Then "Open the one about the vent." | Nothing the person cannot say; the vent note is opened. |
+| 31 | Bea's hub "Board", shared with Ada: ten-day-old notes; in the last 24 hours Bea took one out, corrected one and deleted one. "What happened in the Board hub in the last 24 hours?" | All three changes, who made them, and nothing of the deleted note's text. |
 
 ## Round one: before any change
 
@@ -967,6 +971,49 @@ Haiku with the client's own prompt did not call `start` for "What pressure does 
 - **A parameter with no description cost the gate as `part` with one did.** The form through `ref` cost nothing beyond the noise.
 - **The groups still worked through `ref`.** Sonnet's overview of the 223-note hub took 12 calls in 6 runs against 73 and 67 on main; every overview named the hub's subjects; Haiku named the three newest notes in 12 of 12 against 3 of 12. The letters reached the person in 2 of 24 overviews, against 12 of 48 before the listing said how to name a group.
 - Taken: the form through `ref`.
+
+## Round eighteen: new parameters, and the standing line
+
+1,440 runs on main `80268c5`. Three changes came with a new parameter each: a move in one call, `link(..., from_hub=...)` described as "Hub to move it out of."; a directory of people, with `profile(listed=...)` and `person` as a value of `search`'s `kind`; and words to say aloud after each id, switched with `profile(word_handles="on")`. Each was run alone beside main, on the gate cells.
+
+| Haiku, `start` first, 12 or 24 runs | Main | `from_hub` | Directory | Word handles |
+|---|---|---|---|---|
+| scenario 18, first conversation, chat | 12 of 12 | 2 of 12 | 12 of 12 | 4 of 12 |
+| scenario 18, first conversation, client's own prompt | 12 of 12 | 12 of 12 | 1 of 12 | 12 of 12 |
+| scenario 4, first conversation, client's own prompt | 24 of 24 | 2 of 24 | 23 of 24 | 24 of 24 |
+| scenario 4, second conversation, client's own prompt | 24 of 24 | 0 of 24 | 13 of 24 | 1 of 24 |
+
+- **Every new parameter lost a cell.** With this round, every new parameter tried since round twelve has cost the first call somewhere: `since` in eight of nine forms, `part` with a description and without, `from_hub` in two descriptions, `listed`, `word_handles`. A form inside an existing parameter has held each time it was tried (groups through `ref`). For 0.3.0 no tool gets a new parameter.
+- **The same arms with the standing line held.** The failed cells were run again with the line of round seventeen in the client's prompt, 12 runs each: scenario 18's first conversation in chat 12 of 12 on all four arms; scenario 4's three conversations with the client's own prompt 12 of 12 on all four, the weak "Forget ..." included (1 to 3 of 24 without the line). So the cost of a new parameter falls on clients that have not been onboarded. One batch of 12 a cell; it is to be repeated once 0.3.0 is live.
+- **`person` as a value of `kind`, alone** (the change to an existing description, without `listed`): chat, scenario 18's first conversation 11 of 12 against 11, scenario 4's first 21 of 24 against 24 and its third 19 of 24 against 22; with the client's own prompt scenario 18's first 12 of 12 on both, scenario 4's three conversations 24, 22 and 0 of 24 against 24, 24 and 1. Within the noise. Taken; `listed` is held with the other parameters.
+
+### What needs no new parameter
+
+The changes that are read only after the first call, run together beside main: the instructions hub refuses to be left (`[error:Forbidden] the Reticula instructions hub cannot be left`, with the hint that keeping it shares nothing); a line in the reply of a filing when the note is still filed in another hub, teaching the move with `link(..., remove=True)`; the directory's search, now described as a value of `kind`; a new instruction note, "How to find a person", and in "How to share a hub" a pointer to it and a line on leaving a hub. Three scenarios are new: 28, leave a hub someone shared, then the instructions hub; 29, share with someone whose handle the person does not know, where every run's Mira is in the directory; 30 needs word handles and was not run. Six or twelve runs a cell, both models, both settings.
+
+- **The instructions hub stayed.** On main every run took Ada out of it when she asked, 48 of 48. With the change it was refused in 48 of 48 and the answer said why in 41.
+- **Leaving Ben's hub worked on both arms,** 48 of 48, and Ada's own note filed there stayed readable to her.
+- **The directory was used and nobody was shared with by guess.** With the change the assistant searched the directory in 48 of 48 runs and read the new note in 48; main has no directory. On neither arm did any run share before the person named the account.
+- **Moving a note** was right in 48 of 48 on both arms, with two calls.
+- **No cost found** in the first calls of these scenarios or in scenario 14's filing.
+- Taken. The note on finding a person ships without its paragraph on `profile(listed=...)`, since that parameter is held.
+
+### What happened in a hub
+
+96 runs. Deletions and notes taken out of a hub now show in `search(query="", since=...)`, among the other lines, newest first: `- 4f9c21aa note deleted by @bea · 3h`, `- 0b7e5d12 note taken out of this hub by @bea · 20h`. A deleted note never shows its title or text; a note taken out shows its title only while the reader can still read it. Scenario 31: in Bea's hub, shared with Ada, Bea took a note out 20 hours ago, corrected one 5 hours ago and deleted one 3 hours ago; Ada asks "What happened in the Board hub in the last 24 hours?".
+
+- **All three changes were named** in 46 of 48 answers, against 0 on main, where only the correction shows.
+- **Nothing of the deleted note was told** on either arm, and every answer said that Bea made the changes. Every run asked with `since="24h"`.
+- Taken.
+
+### Words to say aloud, without a parameter
+
+216 runs. The switch for word handles moved into an existing tool: `edit(ref="settings", text="word handles: on")`, taught in the reply of `profile`. Scenario 30: "I'm talking to you by voice and can't read hex. What notes do I have about the kiln? Give me something I can say back to open one." Then "Open the one about the vent."
+
+- **Titles already did the job.** On main no answer said a hex id to the person, in 48 of 48, and the vent note was opened by its title in 48 of 48.
+- **Taught in `profile`'s reply only, the switch was never found:** no run called `profile`. With a line in the starter it was switched on in 12 of 48 runs, and the words were said; no run opened a note by its words.
+- **No cost:** nothing is read before the first call; the gate cells were as on main.
+- The mechanism ships; the starter gets no line for it. Words would matter where titles fail, such as two notes with the same title by voice; that was not run.
 
 ## Still open
 
