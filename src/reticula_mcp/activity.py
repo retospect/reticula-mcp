@@ -94,7 +94,12 @@ def erase(conn: Conn, account_id: int) -> None:
     caller commits), and stop logging for it: what is already queued, in this
     process, is dropped by the writer. The account is not deleted by this; a
     row from another process is kept out by the writer's join on a disabled
-    account."""
+    account.
+
+    The id is marked before the DELETE and stays marked if the caller's
+    transaction rolls back: this process then logs nothing for the account until
+    it restarts. Accepted (RETICULA1): an account deletion that is rolled back is
+    rare, and the cost is a gap in a log, never a row that should be gone."""
     with _erased_lock:
         _erased.add(account_id)
     conn.execute("DELETE FROM activity WHERE account_id = %s", (account_id,))
@@ -137,18 +142,23 @@ def parse_ref(text: str) -> tuple[str | None, str | None]:
     return None, None
 
 
-def _first_ref(refs: Iterable[str]) -> tuple[str | None, str | None]:
+def _refs(refs: Iterable[str]) -> list[tuple[str | None, str | None]]:
+    """Every argument of ref, hub and to (in that order) that names a note, as
+    parse_ref has it. The writer keeps the first that is the caller's own."""
+    found = []
     for text in refs:
         address, suffix = parse_ref(text)
         if address or suffix:
-            return address, suffix
-    return None, None
+            found.append((address, suffix))
+    return found
 
 
 # One statement for a whole batch. `a` is the caller (an account that is gone,
-# or disabled as a deleted account is, is skipped, not an error); `n` the client name; `r` the short id of the
-# one note the row names, when its author is the caller and exactly one matches.
-# The suffix is looked up as resolve.ends_with_sql does, through the index
+# or disabled as a deleted account is, is skipped, not an error); `n` the client
+# name; `r` the short id of the first argument of ref, hub and to that names
+# exactly one note whose author is the caller. The candidates of every row come
+# in arrays of their own (`c`, with the row's number and their position). A
+# suffix is looked up as resolve.ends_with_sql does, through the index
 # node_address_tail.
 INSERT_SQL = """
 INSERT INTO activity (at, account_id, connection, client, tool, outcome, ref)
@@ -158,10 +168,9 @@ SELECT v.at, v.account_id, v.connection,
 FROM unnest(
         %(at)s::timestamptz[], %(account)s::bigint[], %(connection)s::text[],
         %(short)s::text[], %(client)s::text[], %(token)s::bigint[],
-        %(tool)s::text[], %(outcome)s::text[], %(addr)s::text[],
-        %(tail)s::text[], %(tail_from)s::text[], %(tail_to)s::text[]
-     ) AS v(at, account_id, connection, short, client_id, token_id, tool,
-            outcome, addr, tail, tail_from, tail_to)
+        %(tool)s::text[], %(outcome)s::text[]
+     ) WITH ORDINALITY AS v(at, account_id, connection, short, client_id,
+                            token_id, tool, outcome, rn)
 JOIN account a ON a.id = v.account_id AND a.status <> 'disabled'
 CROSS JOIN LATERAL (
     SELECT left(btrim(regexp_replace(coalesce(
@@ -173,21 +182,31 @@ CROSS JOIN LATERAL (
         END, ''), '[[:cntrl:][:space:]]+', ' ', 'g')), %(name_max)s) AS name
 ) n
 LEFT JOIN LATERAL (
-    SELECT min(right(m.address, 8)) AS short
-    FROM (
-        SELECT x.address FROM node x
-         WHERE v.addr IS NOT NULL AND x.address = v.addr
-           AND x.author = a.person_id
-        UNION ALL
-        SELECT x.address FROM node x
-         WHERE v.tail IS NOT NULL
-           AND reverse(x.address) ~>=~ v.tail_from
-           AND reverse(x.address) ~<~ v.tail_to
-           AND right(x.address, length(v.tail)) = v.tail
-           AND x.author = a.person_id
-        LIMIT 2
-    ) m
-    HAVING count(*) = 1
+    SELECT p.short FROM (
+        SELECT c.pos, min(right(m.address, 8)) AS short
+        FROM unnest(
+                %(c_rn)s::bigint[], %(c_pos)s::int[], %(c_addr)s::text[],
+                %(c_tail)s::text[], %(c_from)s::text[], %(c_to)s::text[]
+             ) AS c(rn, pos, addr, tail, tail_from, tail_to)
+        CROSS JOIN LATERAL (
+            SELECT x.address FROM node x
+             WHERE c.addr IS NOT NULL AND x.address = c.addr
+               AND x.author = a.person_id
+            UNION ALL
+            SELECT x.address FROM node x
+             WHERE c.tail IS NOT NULL
+               AND reverse(x.address) ~>=~ c.tail_from
+               AND reverse(x.address) ~<~ c.tail_to
+               AND right(x.address, length(c.tail)) = c.tail
+               AND x.author = a.person_id
+            LIMIT 2
+        ) m
+        WHERE c.rn = v.rn
+        GROUP BY c.pos
+        HAVING count(*) = 1
+    ) p
+    ORDER BY p.pos
+    LIMIT 1
 ) r ON true
 """
 
@@ -198,16 +217,18 @@ def _arrays(entries: Sequence[Entry]) -> dict[str, Any]:
         name: []
         for name in (
             ("at", "account", "connection", "short", "client", "token")
-            + ("tool", "outcome", "addr", "tail", "tail_from", "tail_to")
+            + ("tool", "outcome")
+            + ("c_rn", "c_pos", "c_addr", "c_tail", "c_from", "c_to")
         )
     }
-    for at, account_id, conn_key, client_id, tool, outcome, refs in entries:
+    for rn, (at, account_id, conn_key, client_id, tool, outcome, refs) in enumerate(
+        entries, start=1
+    ):
         key = _flat(conn_key, 100) if conn_key else None
         client = _flat(client_id, 200) if client_id else None
         token_id = None
         if key and key.startswith("token:") and key[6:].isdigit():
             token_id = int(key[6:])
-        address, suffix = _first_ref(refs)
         cols["at"].append(at)
         cols["account"].append(account_id)
         cols["connection"].append(key)
@@ -216,11 +237,14 @@ def _arrays(entries: Sequence[Entry]) -> dict[str, Any]:
         cols["token"].append(token_id)
         cols["tool"].append(_flat(tool, 60))
         cols["outcome"].append(_flat(outcome, 60))
-        cols["addr"].append(address)
-        cols["tail"].append(suffix)
-        low = suffix[::-1] if suffix else None
-        cols["tail_from"].append(low)
-        cols["tail_to"].append(low[:-1] + chr(ord(low[-1]) + 1) if low else None)
+        for pos, (address, suffix) in enumerate(_refs(refs)):
+            low = suffix[::-1] if suffix else None
+            cols["c_rn"].append(rn)
+            cols["c_pos"].append(pos)
+            cols["c_addr"].append(address)
+            cols["c_tail"].append(suffix)
+            cols["c_from"].append(low)
+            cols["c_to"].append(low[:-1] + chr(ord(low[-1]) + 1) if low else None)
     return {**cols, "name_max": CLIENT_NAME_MAX}
 
 

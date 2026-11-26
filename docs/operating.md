@@ -944,7 +944,7 @@ The server writes the lines about once a second, after the calls, in one stateme
 
 Measured on a test database:
 - About 40 microseconds per call at the median, with the log on against off.
-- One write of 200 lines took 5 ms.
+- One write of 200 lines took 5 to 7 ms, about 27,000 to 40,000 lines a second.
 - 1,000 lines take about 134 KiB on disk, index included, so 30 days of 10,000 calls a day take about 40 MB.
 - Deleting an account's 1,000 lines among 31,000 in 30 daily tables took 3 ms.
 
