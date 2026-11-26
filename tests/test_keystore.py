@@ -253,3 +253,22 @@ def test_no_error_text_carries_key_bytes(conn: Any) -> None:
             keystore.decrypt(acct.id, "k1", bad)
         text = err.value.render()
         assert raw.hex() not in text and stored.hex() not in text
+
+
+def test_the_confirmation_key_is_a_subkey_of_the_secret_and_nothing_else(
+    tmp_path: pathlib.Path,
+) -> None:
+    """For the two-step delete: derived from the secret, the same for the same
+    secret, different for another, never the secret itself."""
+    path = _key_file(tmp_path, "c")
+    secret = keystore.read_secret(path)
+    keystore.configure(path)
+    first = keystore.confirmation_key()
+    keystore.configure(path)
+    assert keystore.confirmation_key() == first and len(first) == 32
+    assert first != secret
+    keystore.configure(_key_file(tmp_path, "c2"))
+    assert keystore.confirmation_key() != first
+    keystore.configure("none")
+    one = keystore.confirmation_key()
+    assert one == keystore.confirmation_key() and one != first
