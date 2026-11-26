@@ -86,12 +86,23 @@ def _numbers_in(value: Any) -> set[str]:
     return found
 
 
+STUB = '{"status": "not measured yet", "notes": "synthetic", "cells": []}'
+
+
 def test_the_stub_says_not_measured_and_shows_no_number() -> None:
-    data = results.load()
-    assert data["status"] == "not measured yet"
+    data = results.load(STUB)
     body = results.body(data)
     assert "Not measured yet." in body
     assert _numbers_in_text(body) == set()
+
+
+def test_the_shipped_file_loads_and_every_number_is_from_it() -> None:
+    """Whatever RETICULA4 has written into web/results.json."""
+    data = results.load()
+    assert data.get("status") in ("measured", "not measured yet")
+    body = results.body(data)
+    extra = _numbers_in_text(body) - _numbers_in(data)
+    assert not extra, sorted(extra)
 
 
 def test_a_sample_file_renders_and_every_number_is_from_the_file() -> None:
