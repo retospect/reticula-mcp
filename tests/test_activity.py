@@ -276,7 +276,8 @@ def test_ref_is_the_short_id_of_the_callers_own_note_and_never_another_persons(
     app.call(b, "get", ref=mine[-8:])  # not readable by Bo
     own = addr(app.call(b, "put", text="delta"))
     app.call(b, "link", ref=own[-8:], to=hub[-8:])  # first named: Bo's own
-    app.call(b, "link", ref=filed[-8:], to=own[-8:])  # first named: Ana's
+    # first named is Ana's; the first of Bo's own is `to`
+    app.call(b, "link", ref=filed[-8:], to=own[-8:])
     app.call(b, "get", ref=own[-8:])
     app.settle()
     bo_rows = [(r["tool"], r["ref"]) for r in app.rows() if r["account_id"] == bo.id]
@@ -287,7 +288,7 @@ def test_ref_is_the_short_id_of_the_callers_own_note_and_never_another_persons(
         ("get", None),
         ("put", None),
         ("link", own[-8:]),
-        ("link", None),
+        ("link", own[-8:]),
         ("get", own[-8:]),
     ]
 
@@ -482,7 +483,11 @@ def test_the_ref_is_looked_up_the_way_resolve_ref_does_and_only_for_the_author(
         (("abc",), None),  # too short
         (("deadbeef",), None),  # names no note
         (("not a ref", short), short),  # the first argument that is a ref
-        ((theirs[-8:], short), None),  # the first that names a node decides
+        ((theirs[-8:], short), short),  # the first that is the caller's own
+        ((theirs[-8:], hub), hub[-8:]),  # link(ref=<theirs>, to=<my hub>)
+        ((short, hub[-8:]), short),  # both own: the first
+        (("deadbeef", theirs, hub[-8:]), hub[-8:]),  # third argument
+        ((theirs[-8:], "deadbeef"), None),  # none of the caller's own
         ((), None),
     ]
     base = datetime.now(UTC)
