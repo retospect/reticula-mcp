@@ -33,6 +33,21 @@ The commands are written for the Docker Compose files in [`deploy/`](../deploy) 
 
    If port 8787 is taken on your machine, set `RETICULA_PORT` to a free one. It is the port published on `127.0.0.1`. Write it in place of 8787 in every command of this guide. Inside the container the server stays on 8787, and its log names that port.
 
+   Make the key file, the secret that encrypts the private keys of the accounts in the database:
+
+   ```
+   mkdir -p secrets
+   (umask 077; openssl rand -base64 32 > secrets/reticula.key)
+   ```
+
+   With Docker on a Mac (Docker Desktop or colima) that is all: the file has mode 600 and belongs to you. On Linux the server's user in the container must own it:
+
+   ```
+   sudo chown 10001:10001 secrets/reticula.key
+   ```
+
+   Keep a copy of this file now, apart from the backups of the database: [The key file](#the-key-file) says why and what happens without it.
+
 3. Start the database and the server.
 
    ```
@@ -554,8 +569,20 @@ This upgrade was rehearsed the same way, on a copy of a running 0.3.0 instance: 
 
 Measured on a copy of a running instance with 80 notes and the default model: a start with an empty model volume stayed under 0.7 GB and 52 processes. `docker compose exec app reticula-mcp reindex --drop` loads the model a second time in the same container and took the container to 1.3 GB, file cache included, and 78 processes. With `RETICULA_APP_MEMORY=1g` the start and that reindex still ran. With `512m` the server started, but the reindex ended after 1 second with status 137 and took the server container down with it, and Docker started it again. Give a larger model more: [Choose a model](#choose-a-model) lists the memory each model needs once loaded, and a reindex needs that twice.
 
-The next release after 0.4.1 adds no migration either. Read before you upgrade to it:
+The next release after 0.4.1 adds one migration, `0355_private_key_form`, a check on the stored form of a private key, and it needs a key file. Read before you upgrade to it:
 
+- The private keys of the accounts are encrypted with the key file, and the server does not start while one is stored unencrypted. The upgrade takes these steps in place of steps 3 and 4 above, after the backup and the move of the clone:
+
+  ```
+  mkdir -p secrets
+  (umask 077; openssl rand -base64 32 > secrets/reticula.key)
+  docker compose build app
+  docker compose stop app
+  docker compose run --rm --no-deps app reticula-mcp key encrypt
+  docker compose up -d --wait
+  ```
+
+  On Linux, `sudo chown 10001:10001 secrets/reticula.key` after the second line. Keep a copy of the key file apart from the backups before you go on: [The key file](#the-key-file). `key encrypt` prints how many keys it encrypted and may be run again: it changes only keys that are still unencrypted.
 - `reticula-mcp serve` does not start when `RETICULA_PUBLIC_URL` is an `https` address or names a host other than this machine, and `RETICULA_TRUSTED_PROXIES` is empty. Set it to the proxy's address, as under [A tunnel or proxy on the same host](#a-tunnel-or-proxy-on-the-same-host). `RETICULA_TRUSTED_PROXIES=none` starts the server as before, with every client in one rate-limit bucket. The refusal names the URL and what to set:
 
   ```
@@ -569,6 +596,8 @@ The next release after 0.4.1 adds no migration either. Read before you upgrade t
 - The image installs every dependency of the server from `deploy/requirements.txt`, which names each version and the hash of each file, and then the server itself without its dependencies. The base images of the server, the database and the Tailscale container are named by digest. A build therefore installs the same files each time, and a newer base image arrives only with a release.
 
 Measured on a copy of a running 0.4.0 instance: `docker compose up -d --build --wait` with the new files created the network, recreated both containers and was healthy after 33 seconds, the image build included. The server container then had no capabilities at all, and the database container had the five its start needs (`CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETGID`, `SETUID`). The database could not reach the internet, and the server could, for the model download. A new stack with the database password `p@ss:w/rd?#%&x y` started and applied every migration. The Tailscale container ran without capabilities, printed its sign-in link, reached the server and could not reach the database. Its sign-in and Funnel were not tried.
+
+The steps with the key file were rehearsed on a copy of a running 0.4.1 instance, with two connections made through the sign-in page and a token from `reticula-mcp token` under 0.4.1. The build took 19 seconds while the old server ran. `key encrypt` took 1 second and printed `encrypted 21 keys of 7 accounts; 0 were done already`, and a second run printed `encrypted 0 keys of 8 accounts; 24 were done already`. `docker compose up -d --wait` applied `0355_private_key_form.sql` and was healthy after 17 seconds, with the database container recreated for its new network. The server was away for 19 seconds in all. Without a new sign-in, the minted token and a connection's access token answered `start`, and the refresh token from 0.4.1 returned a new pair. A note written then was saved, and a new account got its keys encrypted.
 
 Migrations only move forward and each file runs in its own transaction. A migration file that has already been applied is never edited; changes arrive as new files. If the server reports that an applied file has changed, you are running mismatched code and database: do not continue.
 
@@ -618,6 +647,38 @@ That is safe only when the release notes of the newer version say that its migra
 In the drill 0.1.0 from PyPI ran on a database that 0.1.1 from PyPI had migrated, with 0203 and 0301 in the ledger. It gave the same 112 replies as 0.1.0 on its own schema with the same data: the replies were recorded under 0.1.0, the stack went to 0.1.1 and back with nothing written in between, and none of the 112 differed afterwards. Its smoke test passed there. Notes written under 0.1.1 read back under 0.1.0, tokens issued under 0.1.1 worked, and a link written under 0.1.0 on the migrated database was there under 0.1.1 again. The switch back left the server without an answer for 1.5 seconds. That is a measurement for 0.1.0 and these two migrations, not a promise for any other pair of versions.
 
 0.1.1 from PyPI started on a database that 0.2.0 had run on, and its check did not refuse: 0.2.0 adds no migration, so the ledger held none that 0.1.1 does not know. With nothing written in between, none of the 112 replies recorded under 0.1.1 before the switch differed afterwards. Notes written under 0.2.0 read back under 0.1.1, tokens minted and refreshed under 0.2.0 worked, and the smoke test of 0.1.1 passed. The two switches back left the server without an answer for 1.3 and 1.9 seconds.
+
+## The key file
+
+Each account has private keys that sign what it writes. The database holds them encrypted with a secret, the key file `deploy/secrets/reticula.key`. The key file is not in the database and not in its dumps. Someone who has a dump but not the key file cannot use the keys in it.
+
+`compose.yaml` mounts the file into the server at `/run/secrets/reticula_key` and sets `RETICULA_KEY_FILE` to that path. Docker keeps the owner and mode the file has on the host. The server refuses to start when the file is missing, when it cannot read it, or when its mode lets the group or others read it. Measured, with the messages the log shows:
+
+| The file | What the server did |
+|---|---|
+| mode 600, yours (Mac) or uid 10001 (Linux) | started |
+| mode 644 | refused: `RETICULA_KEY_FILE '/run/secrets/reticula_key' has mode 0644: its group or others can use it`, and a hint with `chown` and `chmod 600` |
+| missing | `docker compose up` ended with `bind source path does not exist` and the server did not start |
+| another key file | refused: `24 stored private keys were encrypted with another secret` |
+
+With Docker on a Mac a file of mode 400 is shown to the container as unreadable; use 600. Every `reticula-mcp` command needs the key file too. Run them with `docker compose exec app` or `docker compose run --rm --no-deps app`, which mount it.
+
+Keep a copy of the key file apart from the plain database: never beside an unencrypted dump, which would undo what the encryption protects. A password manager, beside the private key of the backups, is one place. An encrypted copy written like `env.age` by `backup.sh` is another, because it opens only with the same private key as the encrypted dumps. Check the copy once with a restore on another machine.
+
+Without the key file, the server does not start on that database, and neither does any `reticula-mcp` command except `key init`. They refuse with `N stored private keys were encrypted with another secret`. A new key file from `key init` does not help: the refusal stays. This release has no way back without the old file. Giving every account new keys is not built, and `RETICULA_KEY_FILE=none` starts the server but refuses the encrypted keys, so it cannot sign either. The key file encrypts only the private keys. Notes, hubs and accounts stay readable in the database and in every dump, and old signatures stay verifiable, because the public keys are stored apart and are not encrypted. A dump holds the keys encrypted with the key file that was in use when the dump was taken, so a restore needs that file. Measured: a dump taken before a rotation restored, and the server refused it with the new key file and started with the old one. Keep an old key file as long as you keep dumps taken with it.
+
+To replace the key file, stop the server, make a new file and let `key rotate` re-encrypt every key with it. The new file is mounted for that one command:
+
+```
+docker compose stop app
+(umask 077; openssl rand -base64 32 > secrets/reticula.key.new)
+docker compose run --rm --no-deps -v ./secrets/reticula.key.new:/run/secrets/reticula_key_new:ro app reticula-mcp key rotate --new-file /run/secrets/reticula_key_new
+mv secrets/reticula.key secrets/reticula.key.old
+mv secrets/reticula.key.new secrets/reticula.key
+docker compose up -d --wait
+```
+
+On Linux, `chown 10001:10001` the new file before the third line. The command ends with a line about `RETICULA_KEY_FILE`; with `compose.yaml` the two `mv` lines take its place. Measured: `key rotate` took 1 second for 24 keys, and the server was back 8 seconds after it was stopped, with the tokens from before working.
 
 ## Back up
 
@@ -748,7 +809,7 @@ The full check is a restore on another machine, with the steps of the next part.
 
 ## Restore
 
-Restore into an empty database. The steps below replace the data of an existing stack. Everything written after the dump was taken is lost. On a new machine, start at step 2 with the same `.env`. The script under "Back up" keeps an encrypted copy of it: `age --decrypt -i reticula-backup-key.txt < env.age > .env` writes it back.
+Restore into an empty database. The steps below replace the data of an existing stack. Everything written after the dump was taken is lost. On a new machine, start at step 2 with the same `.env`. The script under "Back up" keeps an encrypted copy of it: `age --decrypt -i reticula-backup-key.txt < env.age > .env` writes it back. A dump from a release with a key file also needs `secrets/reticula.key` as it was when the dump was taken; without it the server does not start on the restored data ([The key file](#the-key-file)).
 
 The volume name in step 1 starts with the project name, which the compose file fixes to `reticula`. For a copy that was started under another project name, the volume is `<name>_reticula-db`, and every command below needs the same `-p <name>` or `COMPOSE_PROJECT_NAME`. Without it the commands act on the stack called `reticula`.
 
@@ -949,6 +1010,7 @@ Every model reads the first 512 tokens of a note, about 2,300 characters of Engl
 | Embedding model | the volume `reticula_reticula-models`, downloaded again when missing |
 | Settings and the database password | `deploy/.env`, which git ignores |
 | Backups written by `backup.sh` | `deploy/backups/`, encrypted. The key that opens them is not on this machine |
+| The key file that encrypts the accounts' private keys | `deploy/secrets/reticula.key`, which git ignores. Its copy belongs elsewhere, not beside the backups |
 | The identity of the Tailscale node of `compose.tailscale.yaml` | Docker volume `reticula_reticula-tailscale` |
 | Shipped instruction texts | inside the installed package; copied into the database when migrations run |
 

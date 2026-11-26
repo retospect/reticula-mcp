@@ -17,6 +17,8 @@ htmlcov/
 *.pem
 *.key
 instance/
+# the key file of compose.yaml and anything else kept beside it
+deploy/secrets/
 
 # local agent settings
 .claude/

@@ -83,6 +83,11 @@ services:
       RETICULA_TRUSTED_PROXIES: ${RETICULA_TRUSTED_PROXIES:-}
       RETICULA_KNOWN_CLIENTS: ${RETICULA_KNOWN_CLIENTS:-claude.ai,claude.com}
       RETICULA_ALLOW_NEWER_SCHEMA: ${RETICULA_ALLOW_NEWER_SCHEMA:-}
+      # The secret that encrypts the accounts' private keys in the database.
+      # It is not in the database or its dumps; docs/operating.md, "The key
+      # file", says how to make it and keep a copy.
+      RETICULA_KEY_FILE: /run/secrets/reticula_key
+    secrets: [reticula_key]
     ports:
       - "127.0.0.1:${RETICULA_PORT:-8787}:8787"
     volumes:
@@ -110,3 +115,10 @@ networks:
 volumes:
   reticula-db:
   reticula-models:
+
+# Mounted into the server at /run/secrets/reticula_key with the owner and mode
+# the file has on this machine: on Linux it must belong to uid 10001 with mode
+# 600; with Docker on a Mac, to your own user with mode 600.
+secrets:
+  reticula_key:
+    file: ./secrets/reticula.key

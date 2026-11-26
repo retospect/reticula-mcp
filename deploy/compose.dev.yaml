@@ -57,6 +57,9 @@ services:
         condition: service_healthy
     environment:
       RETICULA_DATABASE_URL: postgresql://reticula:reticula-dev@db:5432/reticula
+      # A development stack keeps private keys unencrypted and says so at
+      # every start; compose.yaml mounts a key file instead.
+      RETICULA_KEY_FILE: none
       # The server listens on 0.0.0.0 inside the container, so it cannot guess
       # the address clients use. Always say it.
       RETICULA_PUBLIC_URL: ${RETICULA_DEV_PUBLIC_URL:-http://127.0.0.1:${RETICULA_DEV_PORT:-8788}}
