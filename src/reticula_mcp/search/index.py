@@ -29,7 +29,7 @@ from pgvector import Vector
 from psycopg import sql
 
 from reticula_mcp.db.pool import Conn
-from reticula_mcp.permissions import readable_nodes_sql
+from reticula_mcp.permissions import readable_among_sql, readable_nodes_sql
 from reticula_mcp.search.embedder import Embedder
 
 log = logging.getLogger("reticula_mcp.search")
@@ -109,7 +109,69 @@ def embed_nodes(
         gone = [i for i in chunk if i not in live]
         if gone:
             conn.execute("DELETE FROM embedding WHERE node_id = ANY(%s)", (gone,))
+        # embedded or gone: either way nothing is left to do for them
+        conn.execute("DELETE FROM embedding_backlog WHERE node_id = ANY(%s)", (chunk,))
     return written
+
+
+def mark_complete(conn: Conn, embedder: Embedder) -> None:
+    """Record that no live node lacks a current vector of ``embedder``'s model
+    (``embedding_complete``, migration 0302). The worker calls it when a full
+    catch-up found nothing; from then on the backlog holds whatever is
+    missing. Only one model is ever recorded."""
+    conn.execute("DELETE FROM embedding_complete WHERE model <> %s", (embedder.model,))
+    conn.execute(
+        "INSERT INTO embedding_complete (model) VALUES (%s)"
+        " ON CONFLICT (model) DO UPDATE SET at = now()",
+        (embedder.model,),
+    )
+
+
+def is_complete(conn: Conn, embedder: Embedder) -> bool:
+    """Has the worker caught up for ``embedder``'s model (see
+    :func:`mark_complete`)?"""
+    row = conn.execute(
+        "SELECT 1 AS x FROM embedding_complete WHERE model = %s", (embedder.model,)
+    ).fetchone()
+    return row is not None
+
+
+def pending_ids(conn: Conn, viewer_id: int, limit: int) -> list[int]:
+    """Up to ``limit`` nodes of the backlog that ``viewer_id`` may read,
+    newest first. Who may read is asked about the backlog's nodes only, and an
+    empty backlog costs one probe of its primary key."""
+    return [
+        r["node_id"]
+        for r in conn.execute(
+            "SELECT b.node_id FROM embedding_backlog b WHERE b.node_id IN ("
+            + readable_among_sql("SELECT b2.node_id FROM embedding_backlog b2")
+            + ") ORDER BY b.node_id DESC LIMIT %(limit)s",
+            {"viewer": viewer_id, "limit": limit},
+        ).fetchall()
+    ]
+
+
+def catch_up_pending(
+    conn: Conn,
+    embedder: Embedder,
+    viewer_id: int,
+    limit: int,
+    *,
+    seconds: float | None = None,
+) -> int:
+    """What a search does before it compares vectors: embed up to ``limit``
+    nodes its viewer may read that have no current vector. When the worker
+    has caught up for this model (:func:`is_complete`) they are in the
+    backlog, and only the backlog is read; otherwise, after a switch of
+    model, they are looked for among all the nodes the viewer may read, as
+    :func:`catch_up` does. The rest is the worker's."""
+    if not is_complete(conn, embedder):
+        return catch_up(conn, embedder, viewer_id, limit, seconds=seconds)
+    ids = pending_ids(conn, viewer_id, limit)
+    if not ids:
+        return 0
+    deadline = None if seconds is None else time.monotonic() + seconds
+    return embed_nodes(conn, embedder, ids, deadline=deadline)
 
 
 def forget_node(conn: Conn, node_id: int) -> None:
