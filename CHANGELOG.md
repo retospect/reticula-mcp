@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.1 (2026-11-26)
 
 - A write that fails now counts against the write limit (`RETICULA_WRITE_RATE`, 600 an hour by default); it did not before. A NUL character or a lone surrogate in any parameter is refused with `BadInput` for every tool before the database is asked; the query of `search` still removes them itself.
 - The front page shows "Sign up with an agent" as a button near the top, with one sentence on how signing up works: through the assistant you connect, not a form.
