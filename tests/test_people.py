@@ -44,6 +44,20 @@ def unlist(conn, who, value: str = "no") -> None:
         handlers.edit(conn, who, ref="settings", text=f"listed: {value}")
 
 
+@pytest.fixture
+def make_account(make_account, conn):
+    """Accounts that said "listed: yes", which a new one is not (0358,
+    settings.py); ``listed=False`` makes one as it is when new."""
+
+    def make(*args, listed: bool = True, **kwargs):
+        account = make_account(*args, **kwargs)
+        if listed:
+            unlist(conn, account, "yes")
+        return account
+
+    return make
+
+
 def group(make_account, *names, **kwargs):
     return [make_account(handle=name, **kwargs) for name in names]
 
@@ -260,10 +274,13 @@ def test_other_kinds_are_not_affected(conn, make_account):
 # --- the setting (reticula_mcp.settings) ---------------------------------------
 
 
-def test_a_new_account_is_listed_until_it_says_no(conn, make_account):
-    z = make_account(handle="fresh-one")
-    assert settings.listed(conn, z)
-    assert handles(find(conn, z, "fresh-one")) == ["fresh-one"]
+def test_a_new_account_is_unlisted_until_it_says_yes(conn, make_account):
+    z = make_account(handle="fresh-one", listed=False)
+    other = make_account(handle="fresh-other")
+    assert not settings.listed(conn, z)
+    assert handles(find(conn, other, "fresh-")) == ["fresh-other"]
+    unlist(conn, z, "yes")
+    assert handles(find(conn, other, "fresh-")) == ["fresh-one", "fresh-other"]
 
 
 def test_listed_yes_puts_an_account_back(conn, make_account):

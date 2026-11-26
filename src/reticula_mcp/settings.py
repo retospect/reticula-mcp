@@ -35,8 +35,13 @@ class Setting:
     name: str  # as written: "word handles"
     key: str  # as stored: "word_handles"
     scope: str  # connection | account
-    values: tuple[str, ...]  # the first is the default
+    values: tuple[str, ...]  # in the order the choices are written
     says: dict[str, str]  # what each value does, for profile's reply
+    default: str | None = None  # when never set; None: the first value
+
+    @property
+    def unset(self) -> str:
+        return self.default or self.values[0]
 
 
 SETTINGS = (
@@ -61,6 +66,8 @@ SETTINGS = (
             "no": 'search(kind="person") leaves this account out; others can still'
             " share with it by its exact handle",
         },
+        # a new account is unlisted; 0304 kept every older account listed
+        default="no",
     ),
 )
 _BY_NAME = {s.name: s for s in SETTINGS}
@@ -91,7 +98,7 @@ def value(conn: Conn, viewer: Account, name: str) -> str:
             if key
             else None
         )
-    return str(row["value"]) if row else setting.values[0]
+    return str(row["value"]) if row else setting.unset
 
 
 def listed(conn: Conn, viewer: Account) -> bool:
@@ -100,13 +107,14 @@ def listed(conn: Conn, viewer: Account) -> bool:
 
 
 def unlisted_sql(account_id_column: str) -> str:
-    """A SQL condition, true for an account that set ``listed: no``, for a
-    query that lists accounts (``WHERE ... AND NOT (<it>)``): the count and
-    the limit of that query then leave such accounts out."""
+    """A SQL condition, true for an account that is not listed (it never set
+    ``listed: yes``; unlisted is the default), for a query that lists accounts
+    (``WHERE ... AND NOT (<it>)``): the count and the limit of that query then
+    leave such accounts out."""
     return (
-        "EXISTS (SELECT 1 FROM account_setting s_l"
+        "NOT EXISTS (SELECT 1 FROM account_setting s_l"
         f" WHERE s_l.account_id = {account_id_column}"
-        " AND s_l.name = 'listed' AND s_l.value = 'no')"
+        " AND s_l.name = 'listed' AND s_l.value = 'yes')"
     )
 
 
