@@ -17,6 +17,7 @@ Pure-format tests need none of this and run without a database.
 from __future__ import annotations
 
 import os
+import tempfile
 import uuid
 from collections.abc import Callable, Iterator
 
@@ -26,7 +27,7 @@ from argon2 import PasswordHasher
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
 
-from reticula_mcp import accounts
+from reticula_mcp import accounts, keystore
 from reticula_mcp.accounts import Account
 from reticula_mcp.db import connect
 from reticula_mcp.db.migrate import migrate
@@ -39,6 +40,14 @@ os.environ.setdefault("RETICULA_EMBEDDER", "hash")
 # Cheap argon2 parameters for the suite (production uses the library defaults).
 accounts.PASSWORD_HASHER = PasswordHasher(time_cost=1, memory_cost=8, parallelism=1)
 PASSWORD = "correct horse battery staple"
+
+# Private keys are encrypted in the whole suite, as in production: one secret
+# for the run, in a file the commands (cli.main) read through RETICULA_KEY_FILE.
+_KEY_DIR = tempfile.mkdtemp(prefix="reticula-key-")
+TEST_KEY_FILE = os.path.join(_KEY_DIR, "reticula.key")
+keystore.init_file(TEST_KEY_FILE)
+os.environ.setdefault("RETICULA_KEY_FILE", TEST_KEY_FILE)
+keystore.configure(os.environ["RETICULA_KEY_FILE"])
 
 
 def _admin_url() -> str:

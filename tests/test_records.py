@@ -6,7 +6,7 @@ import psycopg
 import pytest
 
 from reticula_mcp import format as fmt
-from reticula_mcp import records
+from reticula_mcp import keystore, records
 from reticula_mcp.errors import ReticulaError
 
 
@@ -116,11 +116,15 @@ def test_key_roles(conn, make_account):
 
 def test_unknown_type_and_fields_round_trip_byte_identical(conn, make_account):
     a = make_account()
-    priv = bytes(
-        conn.execute(
-            "SELECT private_key FROM account_key WHERE account_id=%s AND key_id='k1'",
-            (a.id,),
-        ).fetchone()["private_key"]
+    priv = keystore.decrypt(
+        a.id,
+        "k1",
+        bytes(
+            conn.execute(
+                "SELECT private_key FROM account_key WHERE account_id=%s AND key_id='k1'",
+                (a.id,),
+            ).fetchone()["private_key"]
+        ),
     )
     cases = [
         dict(type="x-future", extra={"zeta": [1, {"b": None, "a": "β"}], "alpha": "ünknown"},
@@ -156,11 +160,15 @@ def test_non_canonical_but_valid_envelope_is_stored_as_received(conn, make_accou
     import json
 
     a = make_account()
-    priv = bytes(
-        conn.execute(
-            "SELECT private_key FROM account_key WHERE account_id=%s AND key_id='k1'",
-            (a.id,),
-        ).fetchone()["private_key"]
+    priv = keystore.decrypt(
+        a.id,
+        "k1",
+        bytes(
+            conn.execute(
+                "SELECT private_key FROM account_key WHERE account_id=%s AND key_id='k1'",
+                (a.id,),
+            ).fetchone()["private_key"]
+        ),
     )
     canonical = fmt.build_envelope(
         type="atom", address=fmt.new_address(a.person_id), author=a.person_id, key="k1",
@@ -179,11 +187,15 @@ def test_append_signed_rejects_bad_input(conn, make_account):
         type="atom", address=fmt.new_address(a.person_id), author=a.person_id, key="k1",
         created=fmt.format_created(), payload={"text": "x"},
     )  # fmt: skip
-    bpriv = bytes(
-        conn.execute(
-            "SELECT private_key FROM account_key WHERE account_id=%s AND key_id='k1'",
-            (b.id,),
-        ).fetchone()["private_key"]
+    bpriv = keystore.decrypt(
+        b.id,
+        "k1",
+        bytes(
+            conn.execute(
+                "SELECT private_key FROM account_key WHERE account_id=%s AND key_id='k1'",
+                (b.id,),
+            ).fetchone()["private_key"]
+        ),
     )
     for bad_env, bad_sig in [
         (env, fmt.sign(bpriv, env)),  # signed by the wrong person

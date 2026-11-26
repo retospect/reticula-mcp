@@ -61,6 +61,9 @@ class Settings:
     # Start although the database has migrations this version does not have (a
     # newer version has used it). For an emergency step back only.
     allow_newer_schema: bool = False
+    # The file with the secret that encrypts private keys (keystore.py), or
+    # "none" for development. Unset refuses to start.
+    key_file: str | None = None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
@@ -99,6 +102,7 @@ class Settings:
             embed_model=get("EMBED_MODEL"),
             stateless_http=(get("STATELESS_HTTP", "true") or "true").lower()
             not in ("0", "false", "no", "off"),
+            key_file=get("KEY_FILE"),
             allow_newer_schema=(get("ALLOW_NEWER_SCHEMA", "") or "").lower()
             in ("1", "true", "yes", "on"),
         )

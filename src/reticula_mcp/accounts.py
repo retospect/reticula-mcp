@@ -20,7 +20,7 @@ from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError
 
 from reticula_mcp import format as fmt
-from reticula_mcp import records
+from reticula_mcp import keystore, records
 from reticula_mcp.db.pool import Conn
 from reticula_mcp.errors import BAD_INPUT, CONFLICT, NOT_FOUND, ReticulaError
 
@@ -396,7 +396,15 @@ def _insert_account(
         conn.execute(
             "INSERT INTO account_key (account_id, key_id, use, role, alg, public_key,"
             " private_key) VALUES (%s,%s,%s,%s,%s,%s,%s)",
-            (account.id, key_id, use, role, alg, pub, priv),
+            (
+                account.id,
+                key_id,
+                use,
+                role,
+                alg,
+                pub,
+                keystore.encrypt(account.id, key_id, priv),
+            ),
         )
     _publish_identity(conn, account)
     return account
