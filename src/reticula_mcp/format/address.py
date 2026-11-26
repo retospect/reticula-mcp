@@ -61,15 +61,15 @@ def uuid7(timestamp_ms: int | None = None, random_bytes: bytes | None = None) ->
 
 
 def is_person_id(value: object) -> bool:
-    return isinstance(value, str) and _PERSON_RE.match(value) is not None
+    return isinstance(value, str) and _PERSON_RE.fullmatch(value) is not None
 
 
 def is_hub_id(value: object) -> bool:
-    return isinstance(value, str) and _HUB_RE.match(value) is not None
+    return isinstance(value, str) and _HUB_RE.fullmatch(value) is not None
 
 
 def is_uuid7(value: object) -> bool:
-    return isinstance(value, str) and _UUID7_RE.match(value) is not None
+    return isinstance(value, str) and _UUID7_RE.fullmatch(value) is not None
 
 
 @dataclass(frozen=True)

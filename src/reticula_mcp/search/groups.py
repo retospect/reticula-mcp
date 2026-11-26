@@ -490,7 +490,7 @@ def split_letters(ref: str) -> tuple[str, str | None]:
     """``"9ab6128c:AB"`` -> ``("9ab6128c", "AB")``: a ref and the letters of a
     group after it; ``(ref, None)`` without. An address has colons too
     (``ret:p.../...``), but never one followed by one to four letters only."""
-    found = _LETTERS_RE.match(ref.strip())
+    found = _LETTERS_RE.fullmatch(ref.strip())
     if found is None:
         return ref, None
     return found.group(1), found.group(2)

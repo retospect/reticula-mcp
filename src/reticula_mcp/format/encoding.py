@@ -24,7 +24,7 @@ def b64u_decode(text: str) -> bytes:
     some byte string, so that two different texts never decode to the same
     bytes.
     """
-    if not _B64U_RE.match(text) or len(text) % 4 == 1:
+    if not _B64U_RE.fullmatch(text) or len(text) % 4 == 1:
         raise ValueError("not canonical unpadded base64url")
     data = base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
     if b64u(data) != text:

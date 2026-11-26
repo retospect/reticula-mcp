@@ -3,11 +3,17 @@
 ## Unreleased
 
 - Sign-in and accounts: a connector can register only when it returns to this computer or to a known client's host, unless `RETICULA_REGISTRATION=open`, and the same rule applies when it asks a person to sign in; many failed sign-ins for one e-mail address from many networks make further attempts for it wait, up to 30 seconds, without locking the account; sign-up refuses the 10,000 most common passwords (the SecLists list, MIT License); sign-in pages never opened no longer count against a connector's limit of open sign-ins; `reticula-mcp token` makes tokens that expire after 90 days unless `--no-expiry` is given; `reticula-mcp account disable` and `account passwd` revoke every connection and token of the account; a new handle may not contain "reticula" or "admin".
+
+## 0.4.1 (2026-11-26)
+
+- A write that fails now counts against the write limit (`RETICULA_WRITE_RATE`, 600 an hour by default); it did not before. A NUL character or a lone surrogate in any parameter is refused with `BadInput` for every tool before the database is asked; the query of `search` still removes them itself.
+- The front page shows "Sign up with an agent" as a button near the top, with one sentence on how signing up works: through the assistant you connect, not a form.
 - Hardening of the web pages and the sign-in page: `/hubs` renders any nesting without recursion, shows at most 8 levels below a public hub and at most 2,000 entries, is kept on the server for 10 seconds instead of 60 and sent with `Cache-Control: no-cache`, and answers 503 for a minute when it cannot be rendered; no path is redirected to its form with or without a trailing slash; opening a sign-in page again reuses its form token instead of replacing it, and a page open in another browser says so; at most 4 sign-ins check or set a password at once, and those waiting hold no database connection.
 - Request log: a path that holds a space, a quote or a backslash after decoding is written in double quotes, like `agent=`. Other paths are written as before.
 - `compose.yaml`: Docker keeps each container's log to 5 files of 10 MB, and the server container may use at most 2 GB of memory (`RETICULA_APP_MEMORY` in `.env` sets another limit) and 512 processes. `compose.tailscale.yaml` and `compose.dev.yaml` get the same log limits. No migration.
 - The `cryptography` package is required at 46.0.7 or newer (it was 45 or newer).
 - Quoted text: runs of three or more `<` or `>` inside a quoted note show as `‹` or `›`, so only the server writes marker lines, and the begin line says that only an end line with the same 16 hex ends the block.
+- Limits on what the tools take, checked before anything is looked up: the `ref` of `get` is at most 2,000 characters and one reference at most 200; a `put` replaces at most 20 notes and takes at most 20 tags. A text with a character the database cannot store (NUL, or a lone surrogate) is refused with a clear error instead of failing inside the server. Titles and tags refuse invisible characters (direction overrides, zero-width spaces, private-use characters); the joiners that emoji and several scripts need are kept. Identifiers no longer match with a line break after them. A deleted address answers as deleted only to someone who could have read the note.
 
 ## 0.4.0 (2026-11-26)
 
