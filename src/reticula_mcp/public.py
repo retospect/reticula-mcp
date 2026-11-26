@@ -27,9 +27,7 @@ def on_page(conn: Conn, hub_id: int) -> bool:
     return bool(row and row["on"])
 
 
-def opened(
-    conn: Conn, hub_id: int
-) -> tuple[list[tuple[int, str | None]], int, int]:
+def opened(conn: Conn, hub_id: int) -> tuple[list[tuple[int, str | None]], int, int]:
     """What a public hub puts on the page below it: its sub-hubs (id, title),
     how many notes (counted once each), and how many private sub-hubs show
     as "private hub"."""

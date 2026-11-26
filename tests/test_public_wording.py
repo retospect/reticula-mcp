@@ -160,6 +160,33 @@ def test_an_owners_private_sub_hub_is_only_the_words_private_hub(
     assert "public page" not in line
 
 
+def test_the_share_reply_says_how_much_it_opens(
+    conn: Conn, make_account: Callable[..., Account]
+) -> None:
+    ana = make_account(handle="ana")
+    hub = mk_hub(conn, ana, "Big")
+    mk_note(conn, ana, "x", hub=hub, title="Top note")
+    for i in range(7):
+        s = mk_hub(conn, ana, f"Sub {i}", parent=hub)
+        mk_note(conn, ana, "x", hub=s, title=f"Note {i}")
+    closed = mk_hub(conn, ana, "Closed one", parent=hub)
+    graph.edit(conn, ana, ref=closed, private=True)
+    out = graph.share(conn, ana, hub=hub, person="public", mode="read")
+    assert "is public now, with 8 notes of yours and 7 of your sub-hubs (" in out
+    assert " and 2 more): anyone can see" in out
+    assert out.count('"Sub ') == 5
+    assert "Closed one" not in out
+    assert (
+        "Your private sub-hub shows as 'private hub', without title or id, and"
+        " nothing in it is shown."
+    ) in out
+    single = mk_hub(conn, ana, "Small")
+    mk_note(conn, ana, "x", hub=single, title="Only")
+    small = graph.share(conn, ana, hub=single, person="public", mode="read")
+    assert "is public now, with 1 note of yours: anyone can see" in small
+    assert "private" not in small.split("nor private notes.")[1]
+
+
 def test_only_the_owners_own_correction_takes_a_note_off(
     conn: Conn, make_account: Callable[..., Account]
 ) -> None:

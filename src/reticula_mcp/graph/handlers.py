@@ -537,11 +537,35 @@ def _share_public(conn: Conn, viewer: Account, hub_row: Row, mode: str) -> str:
     ref = hub_row["address"][-8:]
     if mode == "none":
         return f"hub {where} is no longer on the public page."
+    subs, notes, private = public_page.opened(conn, hub_row["id"])
+    opened = f"{notes} {'note' if notes == 1 else 'notes'} of yours"
+    if subs:
+        names = ", ".join(
+            render.quote(t, 60) if t else "(untitled hub)" for _, t in subs[:5]
+        )
+        more = f" and {len(subs) - 5} more" if len(subs) > 5 else ""
+        opened += (
+            f" and {len(subs)} of your sub-hubs"
+            if len(subs) != 1
+            else " and 1 of your sub-hubs"
+        ) + f" ({names}{more})"
+    if private == 1:
+        hidden = (
+            " Your private sub-hub shows as 'private hub', without title or id,"
+            " and nothing in it is shown."
+        )
+    elif private:
+        hidden = (
+            f" Your {private} private sub-hubs show as 'private hub', without title"
+            " or id, and nothing in them is shown."
+        )
+    else:
+        hidden = ""
     return (
-        f"hub {where} is public now: anyone can see, without signing in, on this"
-        " server's page /hubs, the titles and ids of this hub, of your own"
-        " sub-hubs in it and of your own notes in it. Their text is not shown,"
-        " nor notes by other people, nor private notes."
+        f"hub {where} is public now, with {opened}: anyone can see, without"
+        " signing in, on this server's page /hubs, their titles and ids. Their"
+        " text is not shown, nor notes by other people, nor private notes."
+        f"{hidden}"
         f' share(hub="{ref}", person="public", mode="none") takes it off.'
     )
 
