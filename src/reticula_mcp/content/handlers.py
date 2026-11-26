@@ -14,7 +14,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from reticula_mcp import accounts, connection
+from reticula_mcp import accounts, connection, settings
 from reticula_mcp.accounts import Account
 from reticula_mcp.content import bootstrap
 from reticula_mcp.db.pool import Conn
@@ -343,8 +343,14 @@ def _identity_versions(conn: Conn, viewer: Account) -> int:
     return int(row["n"]) if row else 0
 
 
-def profile(conn: Conn, viewer: Account, *, handle: str | None = None) -> str:
-    """Show the account, or rename its handle."""
+def profile(
+    conn: Conn,
+    viewer: Account,
+    *,
+    handle: str | None = None,
+) -> str:
+    """Show the account, or rename its handle. The settings (settings.py) are
+    listed with the call that changes each."""
     if handle is not None:
         old = viewer.handle
         viewer = accounts.set_handle(conn, viewer, handle)
@@ -365,6 +371,8 @@ def profile(conn: Conn, viewer: Account, *, handle: str | None = None) -> str:
         f" ({_identity_versions(conn, viewer)} versions)",
         "keys (public parts are in the identity record; private keys are never shown):",
         *_key_lines(conn, viewer),
+        "settings:",
+        *settings.lines(conn, viewer),
     ]
     hubs = _hub_rows(conn, viewer)
     if hubs:

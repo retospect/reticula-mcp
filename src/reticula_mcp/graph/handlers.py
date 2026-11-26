@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from reticula_mcp import settings
 from reticula_mcp.accounts import Account, get_account_by_person_id
 from reticula_mcp.db.pool import Conn
 from reticula_mcp.errors import (
@@ -231,6 +232,10 @@ def edit(
     private: bool | None = None,
     preset: str | None = None,
 ) -> str:
+    if settings.is_settings_ref(ref):  # no note: the settings (settings.py)
+        return settings.change(
+            conn, viewer, text, title=title, tags=tags, private=private, preset=preset
+        )
     node = resolve_ref(conn, viewer, ref)
     if node["author"] != viewer.person_id:
         raise ReticulaError(
