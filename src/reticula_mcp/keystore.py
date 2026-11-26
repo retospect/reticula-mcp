@@ -19,7 +19,8 @@ another account or key slot does not decrypt. A plaintext key is 32 bytes;
 migration 0355 lets the column hold nothing else.
 
 Only the signing path (records.sign_and_append), account creation
-(accounts._insert_account) and the operator commands (cli) use this module.
+(accounts._insert_account), confirmation codes (accounts.confirmation_code)
+and the operator commands (cli) use this module.
 The cipher key lives in a module-private object; no function returns it.
 
 RETICULA_KEY_FILE=none keeps keys unencrypted, for tests and development
@@ -56,6 +57,10 @@ SEALED_LENGTH = 1 + _KID_LENGTH + _NONCE_LENGTH + PLAIN_LENGTH + 16
 _INFO = b"reticula private keys v1"
 _KID_PREFIX = b"reticula key id v1"
 _AD_PREFIX = b"reticula-key-v1"
+_CONFIRM_INFO = b"reticula delete confirmation v1"
+# With RETICULA_KEY_FILE=none: one random confirmation key per process, so
+# codes made before a restart no longer match after it.
+_PROCESS_CONFIRM = secrets.token_bytes(32)
 
 
 class KeyError_(ReticulaError):
@@ -70,6 +75,7 @@ class KeyError_(ReticulaError):
 class _Sealer:
     kid: bytes
     aead: AESGCM
+    confirm: bytes  # HKDF subkey for confirmation codes (confirmation_key)
 
 
 def _sealer(secret: bytes) -> _Sealer:
@@ -79,7 +85,10 @@ def _sealer(secret: bytes) -> _Sealer:
         secret
     )
     kid = hashlib.sha256(_KID_PREFIX + secret).digest()[:_KID_LENGTH]
-    return _Sealer(kid, AESGCM(key))
+    confirm = HKDF(
+        algorithm=hashes.SHA256(), length=32, salt=None, info=_CONFIRM_INFO
+    ).derive(secret)
+    return _Sealer(kid, AESGCM(key), confirm)
 
 
 # The configured state of this process: None (not configured), the opt-out
@@ -152,6 +161,17 @@ def configure_secret(secret: bytes) -> None:
     """For tests: set up from a secret held in memory."""
     global _state
     _state = _sealer(secret)
+
+
+def confirmation_key() -> bytes:
+    """The key of confirmation codes (accounts.confirmation_code, the
+    two-step delete): an HKDF subkey of the secret, or with
+    RETICULA_KEY_FILE=none one random key per process. Never the cipher key,
+    never the secret."""
+    state = _need()
+    if isinstance(state, _Sealer):
+        return state.confirm
+    return _PROCESS_CONFIRM
 
 
 def is_configured() -> bool:
