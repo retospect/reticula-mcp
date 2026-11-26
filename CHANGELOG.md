@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased
+
 ## 0.3.0 (2026-11-26)
 
 - Migrations: 0.3.0 adds 0204, 0205, 0302, 0303, 0350, 0351, 0352 and 0353. They create tables, functions and indexes and change no existing row; 0.2.0 refuses the database afterwards (restore the dump taken before the upgrade to go back). The first start downloads the new default model, bge-base-en-v1.5 (about 210 MB), and the worker embeds every note again in the background; until a note has its new vector it is found by its words only. On a copy of a small live instance that took 20 seconds, and the app used about 620 MB of memory afterwards instead of about 200. Connections made under 0.2.0 keep working (`docs/operating.md`, Upgrade).
