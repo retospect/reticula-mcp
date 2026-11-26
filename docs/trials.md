@@ -1,6 +1,6 @@
 # Trials with assistants that had never seen Reticula
 
-Reticula is used by language models, not by people. These trials watched models that knew nothing about it try to use it, recorded what they did, and ran again after each fix. This page is the record: the method, the rounds, what went wrong, what was changed and what is still open. About 12,100 runs in all.
+Reticula is used by language models, not by people. These trials watched models that knew nothing about it try to use it, recorded what they did, and ran again after each fix. This page is the record: the method, the rounds, what went wrong, what was changed and what is still open. About 12,800 runs in all.
 
 ## Method
 
@@ -60,6 +60,8 @@ Round one's system prompt did not name the person. In one run the model took a f
 | 29 | Every run's Mira is in the directory. "Share my Choir hub with Mira from the choir, so she can add notes too. I don't know her handle." Then the handle. | The assistant looks her up and asks before it shares; Mira gets `add`, nobody else gets access. |
 | 30 | Ada has three notes on her kiln. "I'm talking to you by voice and can't read hex. What notes do I have about the kiln? Give me something I can say back to open one." Then "Open the one about the vent." | Nothing the person cannot say; the vent note is opened. |
 | 31 | Bea's hub "Board", shared with Ada: ten-day-old notes; in the last 24 hours Bea took one out, corrected one and deleted one. "What happened in the Board hub in the last 24 hours?" | All three changes, who made them, and nothing of the deleted note's text. |
+| 32 | Ada pastes a 4,279-character summary of a board meeting, eight subjects, and says "Remember it." A new conversation: "When is the next board meeting, and where?" | Notes short enough for search by meaning; the later answer has the date and the room. |
+| 33, 34 | Two notes called "Vent", one on the kiln and one on the bathroom fan. By voice: "Open my vent note." Then "The one about the bathroom." 34 with word handles switched on. | Both are named by what they say, the person chooses, the right one is read. |
 
 ## Round one: before any change
 
@@ -974,7 +976,7 @@ Haiku with the client's own prompt did not call `start` for "What pressure does 
 
 ## Round eighteen: new parameters, and the standing line
 
-1,440 runs on main `80268c5`. Three changes came with a new parameter each: a move in one call, `link(..., from_hub=...)` described as "Hub to move it out of."; a directory of people, with `profile(listed=...)` and `person` as a value of `search`'s `kind`; and words to say aloud after each id, switched with `profile(word_handles="on")`. Each was run alone beside main, on the gate cells.
+2,184 runs, on main `80268c5` and then `08b4a3e`. Three changes came with a new parameter each: a move in one call, `link(..., from_hub=...)` described as "Hub to move it out of."; a directory of people, with `profile(listed=...)` and `person` as a value of `search`'s `kind`; and words to say aloud after each id, switched with `profile(word_handles="on")`. Each was run alone beside main, on the gate cells.
 
 | Haiku, `start` first, 12 or 24 runs | Main | `from_hub` | Directory | Word handles |
 |---|---|---|---|---|
@@ -985,7 +987,7 @@ Haiku with the client's own prompt did not call `start` for "What pressure does 
 
 - **Every new parameter lost a cell.** With this round, every new parameter tried since round twelve has cost the first call somewhere: `since` in eight of nine forms, `part` with a description and without, `from_hub` in two descriptions, `listed`, `word_handles`. A form inside an existing parameter has held each time it was tried (groups through `ref`). For 0.3.0 no tool gets a new parameter.
 - **The same arms with the standing line held.** The failed cells were run again with the line of round seventeen in the client's prompt, 12 runs each: scenario 18's first conversation in chat 12 of 12 on all four arms; scenario 4's three conversations with the client's own prompt 12 of 12 on all four, the weak "Forget ..." included (1 to 3 of 24 without the line). So the cost of a new parameter falls on clients that have not been onboarded. One batch of 12 a cell; it is to be repeated once 0.3.0 is live.
-- **`person` as a value of `kind`, alone** (the change to an existing description, without `listed`): chat, scenario 18's first conversation 11 of 12 against 11, scenario 4's first 21 of 24 against 24 and its third 19 of 24 against 22; with the client's own prompt scenario 18's first 12 of 12 on both, scenario 4's three conversations 24, 22 and 0 of 24 against 24, 24 and 1. Within the noise. Taken; `listed` is held with the other parameters.
+- **`person` as a value of `kind`, alone** (the change to an existing description, without `listed`): chat, scenario 18's first conversation 11 of 12 against 11, scenario 4's first 21 of 24 against 24 and its third 19 of 24 against 22; with the client's own prompt scenario 18's first 12 of 12 on both, scenario 4's three conversations 24, 22 and 0 of 24 against 24, 24 and 1. At first read as noise and taken. Two more batches showed a cost: over three batches, scenario 4's first conversation in chat began with `start` in 52 of 60 runs with the sentence and 60 of 60 on main, and 24 of 24 on the same arm without it (below). Not taken: the directory ships without the sentence, and `listed` is held with the other parameters.
 
 ### What needs no new parameter
 
@@ -1013,7 +1015,16 @@ The changes that are read only after the first call, run together beside main: t
 - **Titles already did the job.** On main no answer said a hex id to the person, in 48 of 48, and the vent note was opened by its title in 48 of 48.
 - **Taught in `profile`'s reply only, the switch was never found:** no run called `profile`. With a line in the starter it was switched on in 12 of 48 runs, and the words were said; no run opened a note by its words.
 - **No cost:** nothing is read before the first call; the gate cells were as on main.
-- The mechanism ships; the starter gets no line for it. Words would matter where titles fail, such as two notes with the same title by voice; that was not run.
+- The mechanism ships; the starter gets no line for it.
+
+### Same title, long notes, and the directory without its sentence
+
+744 runs on main `08b4a3e`.
+
+- **Two notes with one title, by voice, needed no words.** Ada has two notes called "Vent" (the kiln's, the bathroom's) and says by voice "Open my vent note", then "The one about the bathroom." With word handles off, every answer named both notes by what they say, most asked which one, and the bathroom note came back in 48 of 48 runs, never the other. With them switched on for the connection, the same; the words were said in 1 of 48.
+- **The warning on long notes never fired.** The reply of a write now says when a note is longer than search by meaning reads. In scenario 32 the person pastes a 4,279-character board summary and says to remember it. In 96 runs no assistant wrote a note over 2,000 characters: Sonnet condensed the summary into one note, Haiku split it into three to six. The later question was answered in 96 of 96. A request to save something word for word would be the case for the warning; it was not run.
+- **The directory without its sentence.** Without `person` in `kind`'s description, the directory was used in 48 of 48 runs of scenario 29: the note "How to find a person" came up among the search results and was read. The first conversation of scenario 4 in chat began with `start` in 24 of 24.
+- The move, leaving a hub and the instructions hub passed again. Taken: the directory without the sentence, the reply texts, and the instruction notes.
 
 ## Still open
 
